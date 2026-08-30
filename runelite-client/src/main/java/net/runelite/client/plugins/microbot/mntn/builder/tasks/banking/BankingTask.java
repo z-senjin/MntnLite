@@ -55,6 +55,10 @@ public class BankingTask implements Task {
             case OPEN:
                 Rs2Bank.openBank();
                 if (Rs2Bank.isOpen()) {
+                    // Cache what's already in there BEFORE we deposit anything, so a query
+                    // like "does the bank have raw shrimp" reflects reality even if this trip
+                    // turns out to be a no-op deposit (e.g. inventory was already empty).
+                    context.bank().refresh();
                     phase = Phase.DEPOSIT;
                 }
                 return TaskStatus.RUNNING;
@@ -71,6 +75,10 @@ public class BankingTask implements Task {
                     // if not, depositAllExcept(false) with no keep-list is the usual equivalent.
                     Rs2Bank.depositAll();
                 }
+                // Refresh again now that the deposit actually changed bank contents - this is
+                // the snapshot that matters most, since it's what every later hasItem()/
+                // getCount() call will see until the next banking trip.
+                context.bank().refresh();
                 phase = Phase.CLOSE;
                 return TaskStatus.RUNNING;
 

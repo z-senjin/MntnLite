@@ -7,8 +7,8 @@ import net.runelite.client.plugins.microbot.mntn.builder.activities.Activity;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.cooking.CookingActivity;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.fishing.FishingActivity;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
+import net.runelite.client.plugins.microbot.mntn.builder.core.AccountProfile;
 import net.runelite.client.plugins.microbot.mntn.builder.core.goals.Goal;
-import net.runelite.client.plugins.microbot.mntn.builder.core.goals.SkillGoal;
 import net.runelite.client.plugins.microbot.mntn.builder.core.planner.AccountPlanner;
 import net.runelite.client.plugins.microbot.mntn.builder.core.planner.Plan;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
@@ -36,7 +36,7 @@ public class MntnBuilderScript extends Script {
     private AccountPlanner planner;
     private Plan currentPlan;
 
-    // Read by mntn.builderOverlay - same pattern as GemCrabKillerOverlay reading
+    // Read by MntnBuilderOverlay - same pattern as GemCrabKillerOverlay reading
     // plugin.gemCrabKillerScript.gemCrabKillerState directly.
     public String debugGoal = "-";
     public String debugRequirement = "-";
@@ -45,17 +45,24 @@ public class MntnBuilderScript extends Script {
     public double debugScore = 0;
 
     public boolean run(MntnBuilderConfig config) {
-        List<Goal> goals = Arrays.asList(
-                new SkillGoal(Skill.FISHING, config.fishingTarget(), 50),
-                new SkillGoal(Skill.COOKING, config.cookingTarget(), 50)
-                // TODO: once Fishing -> Bank works end-to-end, add:
-                //   new SkillGoal(Skill.COOKING, ..., priority)
-                //   new SkillGoal(Skill.ATTACK/STRENGTH/DEFENCE, ..., priority)
-        );
+        // AccountProfile is now the single "what does this account want to become" source -
+        // doc section 4. Config values feed the target levels; priority for each is
+        // randomized by AccountProfile itself (Rs2Random) so this account's goal-weighting
+        // doesn't play out identically to every other account run off the same config.
+        AccountProfile profile = AccountProfile.builder()
+                .skill(Skill.FISHING, config.fishingTarget())
+                .skill(Skill.COOKING, config.cookingTarget())
+                // TODO: once Combat/Woodcutting activities exist, add them here the same way:
+                //   .skill(Skill.ATTACK, config.attackTarget())
+                //   .skill(Skill.STRENGTH, config.strengthTarget())
+                //   .skill(Skill.DEFENCE, config.defenceTarget())
+                .build();
+
+        List<Goal> goals = profile.toGoals();
         List<Activity> activities = Arrays.asList(
                 new FishingActivity(),
                 new CookingActivity()
-                // TODO: new CookingActivity(), new CombatActivity()
+                // TODO: new CombatActivity(), new WoodcuttingActivity()
         );
         planner = new AccountPlanner(goals, activities);
 
