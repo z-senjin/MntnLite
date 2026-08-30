@@ -4,6 +4,7 @@ import net.runelite.api.Skill;
 import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.Script;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.Activity;
+import net.runelite.client.plugins.microbot.mntn.builder.activities.cooking.CookingActivity;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.fishing.FishingActivity;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.core.goals.Goal;
@@ -45,13 +46,15 @@ public class MntnBuilderScript extends Script {
 
     public boolean run(MntnBuilderConfig config) {
         List<Goal> goals = Arrays.asList(
-                new SkillGoal(Skill.FISHING, config.fishingTarget(), 50)
+                new SkillGoal(Skill.FISHING, config.fishingTarget(), 50),
+                new SkillGoal(Skill.COOKING, config.cookingTarget(), 50)
                 // TODO: once Fishing -> Bank works end-to-end, add:
                 //   new SkillGoal(Skill.COOKING, ..., priority)
                 //   new SkillGoal(Skill.ATTACK/STRENGTH/DEFENCE, ..., priority)
         );
         List<Activity> activities = Arrays.asList(
-                new FishingActivity()
+                new FishingActivity(),
+                new CookingActivity()
                 // TODO: new CookingActivity(), new CombatActivity()
         );
         planner = new AccountPlanner(goals, activities);

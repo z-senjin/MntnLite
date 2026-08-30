@@ -6,6 +6,7 @@ import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.util.bank.Rs2Bank;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
 import net.runelite.client.plugins.microbot.util.player.Rs2Player;
+import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
 
 /**
  * Thin read-through wrapper around live Microbot/RuneLite state.
@@ -31,6 +32,14 @@ public class AccountContext {
     public int getBoostedLevel(Skill skill) {
         if (!isLoggedIn()) return 0;
         return Microbot.getClient().getBoostedSkillLevel(skill);
+    }
+
+    public boolean isNear(WorldPoint location, int distance){
+        boolean amINear = Rs2Walker.isNear(location);
+        int distanceTo = Rs2Walker.getDistanceBetween(Rs2Player.getWorldLocation(), location);
+
+        return amINear && distanceTo <= distance;
+
     }
 
     public boolean hasItem(String itemName) {

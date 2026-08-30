@@ -20,4 +20,14 @@ public interface MntnBuilderConfig extends Config {
     default int fishingTarget() {
         return 20;
     }
+
+    @ConfigItem(
+            keyName = "cookingTarget",
+            name = "Cooking target level",
+            description = "The planner will keep fishing until real Cooking level reaches this",
+            position = 1
+    )
+    default int cookingTarget() {
+        return 20;
+    }
 }

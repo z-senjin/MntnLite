@@ -1,5 +1,6 @@
 package net.runelite.client.plugins.microbot.mntn.builder.core.planner;
 
+import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.Activity;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.Strategy;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
@@ -30,25 +31,33 @@ public class AccountPlanner {
         List<Plan> candidates = new ArrayList<>();
 
         for (Goal goal : goals) {
+            Microbot.log("Goal: " + goal.name());
             if (goal.isComplete(context)) {
                 continue;
             }
             for (Requirement requirement : goal.requirements(context)) {
+
+                Microbot.log("Requirement: " + requirement.description());
                 if (requirement.isSatisfied(context)) {
                     continue;
                 }
                 for (ActivityRequest request : requirement.getWaysToSatisfy(context)) {
+                    Microbot.log("ActivityRequest: " + request.type().name());
                     for (Activity activity : activities) {
+                        Microbot.log("Activity: " + activity.type().name());
                         if (!activity.canProvide(request, context)) {
                             continue;
                         }
                         for (Strategy strategy : activity.getStrategies(context, request)) {
+                            Microbot.log("Strategy: " + strategy.name());
                             if (!strategy.canExecute(context)) {
                                 continue;
                             }
                             double score = strategy.score(context)
                                     + requirement.urgency(context)
                                     + goal.priority(context);
+
+                            Microbot.log("Score: " + score);
                             candidates.add(new Plan(goal, requirement, activity, strategy, score));
                         }
                     }
