@@ -28,8 +28,6 @@ public class FishingTask implements Task {
     private enum Phase {
         WALK_TO_SPOT, FISHING, BANKING
     }
-
-    // TODO: replace with an actual F2P fishing area WorldPoint for the chosen Method
     // (e.g. Lumbridge swamp/Al Kharid for net fishing, Catherby for cage fishing, etc).
     private static final WorldPoint FISHING_AREA = new WorldPoint(3242, 3149, 0);
 
@@ -49,7 +47,7 @@ public class FishingTask implements Task {
 
         switch (phase) {
             case WALK_TO_SPOT:
-                return handleWalk();
+                return handleWalk(context);
             case FISHING:
                 return handleFish(context);
             case BANKING:
@@ -59,7 +57,13 @@ public class FishingTask implements Task {
         }
     }
 
-    private TaskStatus handleWalk() {
+    private TaskStatus handleWalk(AccountContext context) {
+
+        if(!context.inventory().hasItem(method.toolItemName)){
+            phase = Phase.BANKING;
+            return TaskStatus.RUNNING;
+        }
+
         Rs2NpcModel spot = Microbot.getRs2NpcCache().query().withId(method.npcId).nearest();
         if (spot != null) {
             phase = Phase.FISHING;
@@ -70,7 +74,7 @@ public class FishingTask implements Task {
     }
 
     private TaskStatus handleFish(AccountContext context) {
-        if (context.isInventoryFull()) {
+        if (context.inventory().isFull() || !context.inventory().hasItem(method.toolItemName)) {
             phase = Phase.BANKING;
             return TaskStatus.RUNNING;
         }
@@ -93,14 +97,56 @@ public class FishingTask implements Task {
     }
 
     private TaskStatus handleBank(AccountContext context) {
+        Microbot.log("Handling banking");
+
+        // Create the banking task only once.
         if (bankingTask == null) {
-            bankingTask = new BankingTask(BankingTask.Mode.DEPOSIT_ALL_EXCEPT, method.toolItemName);
+
+            if (context.inventory().hasItem(method.toolItemName)) {
+                // We have the tool, so deposit everything except it.
+                bankingTask = new BankingTask(
+                        BankingTask.Mode.DEPOSIT_ALL_EXCEPT,
+                        method.toolItemName
+                );
+
+            } else {
+                // We don't have the tool, so withdraw it from the bank.
+                bankingTask = new BankingTask(
+                        BankingTask.Mode.WITHDRAW,
+                        null,
+                        method.toolItemName,
+                        1
+                );
+            }
         }
+
         TaskStatus bankStatus = bankingTask.tick(context);
+
+        Microbot.log("BankStatus: " + bankStatus);
+        Microbot.log("BankTask: " + bankingTask.describe());
+
         if (bankStatus == TaskStatus.COMPLETE) {
+
+            // If we needed a tool, make sure we actually have it.
+            if (!context.inventory().hasItem(method.toolItemName)) {
+                Microbot.log("Banking completed but tool is still missing");
+                bankingTask = null;
+                return TaskStatus.REPLAN;
+            }
+
             bankingTask = null;
             phase = Phase.WALK_TO_SPOT;
+
+            return TaskStatus.RUNNING;
         }
+
+        if (bankStatus == TaskStatus.FAILED
+                || bankStatus == TaskStatus.REPLAN) {
+
+            bankingTask = null;
+            return bankStatus;
+        }
+
         return TaskStatus.RUNNING;
     }
 

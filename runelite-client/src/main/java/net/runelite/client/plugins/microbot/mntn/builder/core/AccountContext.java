@@ -52,8 +52,7 @@ public class AccountContext {
     }
 
     public boolean isNear(WorldPoint location, int distance) {
-        boolean amINear = Rs2Walker.isNear(location);
         int distanceTo = Rs2Walker.getDistanceBetween(Rs2Player.getWorldLocation(), location);
-        return amINear && distanceTo <= distance;
+        return distanceTo <= distance;
     }
 }

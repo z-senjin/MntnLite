@@ -2,17 +2,23 @@ package net.runelite.client.plugins.microbot.mntn.builder.tasks.skilling;
 
 import net.runelite.api.Skill;
 import net.runelite.client.plugins.microbot.Microbot;
-import net.runelite.client.plugins.microbot.api.tileobject.Rs2TileObjectQueryable;
-import net.runelite.client.plugins.microbot.util.bank.enums.BankLocation;
+import net.runelite.client.plugins.microbot.api.tileobject.models.Rs2TileObjectModel;
+import net.runelite.client.plugins.microbot.util.antiban.Rs2Antiban;
+import net.runelite.client.plugins.microbot.util.camera.Rs2Camera;
+import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
+import net.runelite.client.plugins.microbot.util.keyboard.Rs2Keyboard;
+import net.runelite.client.plugins.microbot.util.player.Rs2Player;
 import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.cooking.CookingStrategy;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStatus;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.banking.BankingTask;
+import net.runelite.client.plugins.microbot.util.widget.Rs2Widget;
 
-import static net.runelite.client.plugins.microbot.util.Global.sleep;
-import static net.runelite.client.plugins.microbot.util.Global.sleepUntil;
+import java.awt.event.KeyEvent;
+
+import static net.runelite.client.plugins.microbot.util.Global.*;
 
 /**
  * Generic Cooking Task.
@@ -30,13 +36,14 @@ import static net.runelite.client.plugins.microbot.util.Global.sleepUntil;
  * The Task decides HOW to execute the cooking process.
  */
 public class CookingTask implements Task {
+    
+    private static final int WITHDRAW_QUANTITY = -1;
 
     private enum Phase {
         WALK_TO_COOKING,
         COOKING,
         BANKING
     }
-
 
     private final CookingStrategy.Method method;
 
@@ -76,17 +83,17 @@ public class CookingTask implements Task {
      */
     private TaskStatus handleWalk(AccountContext context) {
 
-        /*
-         * If we're already close enough to the cooking area,
-         * start cooking.
-         *
-         * You may want to replace this with a proper
-         * distance/area check.
-         */
+        if(!context.inventory().hasItem(method.rawItemName)){
+            phase = Phase.BANKING;
+            return TaskStatus.RUNNING;
+        }
+
         if (context.isNear(method.location, 10)) {
             phase = Phase.COOKING;
             return TaskStatus.RUNNING;
         }
+
+        Microbot.log("Not near");
 
         Rs2Walker.walkTo(method.location);
 
@@ -98,32 +105,18 @@ public class CookingTask implements Task {
      */
     private TaskStatus handleCooking(AccountContext context) {
 
-        /*
-         * We don't have raw food.
-         *
-         * This means we need to go to the bank.
-         */
-        if (!context.hasItem(method.rawItemName)) {
-            //TODO
+        Microbot.log("We handling cooking");
+
+        if (!Rs2Inventory.contains(method.rawItemName)) {
+
+            int bankCount = context.bank().getCount(method.rawItemName);
+
+            if (bankCount < WITHDRAW_QUANTITY) {
+                return TaskStatus.REPLAN;
+            }
+
             phase = Phase.BANKING;
             return TaskStatus.RUNNING;
-//            if (context.bank().hasItem(method.rawItemName)) {
-//                phase = Phase.BANKING;
-//                return TaskStatus.RUNNING;
-//            }
-
-            /*
-             * We don't have the raw item anywhere.
-             *
-             * This is important for the future dependency system.
-             *
-             * Eventually this should cause the planner to say:
-             *
-             *     "I need Raw Trout"
-             *
-             * and select Fishing as the provider.
-             */
-//            return TaskStatus.REPLAN;
         }
 
         /*
@@ -132,62 +125,69 @@ public class CookingTask implements Task {
          */
         if (Microbot.getClient().getLocalPlayer() != null) {
 
-            int animation =
-                    Microbot.getClient()
-                            .getLocalPlayer()
-                            .getAnimation();
+            boolean isMovingOrAnimating = Rs2Player.isAnimating() || Rs2Player.isMoving();
 
-            if (animation != -1) {
+            sleep(300, 1000);
+
+            boolean isMovingOrAnimatingAgain = Rs2Player.isAnimating() || Rs2Player.isMoving();
+
+
+            if (isMovingOrAnimating || isMovingOrAnimatingAgain) {
                 return TaskStatus.RUNNING;
             }
         }
 
-        /*
-         * Find a cooking object.
-         *
-         * This is intentionally generic.
-         *
-         * Later you may want the Strategy to provide
-         * the exact GameObject ID.
-         */
-        Rs2TileObjectQueryable cookingObject = new Rs2TileObjectQueryable()
-                .withName(method.cookingObject);
+        Microbot.log("We looking for it");
 
+        Rs2TileObjectModel cookingObject = Microbot.getRs2TileObjectCache().query().withId(method.cookingObject).nearest();
         if (cookingObject == null) {
+            Microbot.log("Cooking object not found!");
             phase = Phase.WALK_TO_COOKING;
             return TaskStatus.RUNNING;
         }
 
-        /*
-         * Start cooking.
-         */
         sleep(100, 300);
+        if (!Rs2Camera.isTileOnScreen(cookingObject.getLocalLocation())) {
+            Rs2Camera.turnTo(cookingObject.getLocalLocation());
 
-        sleepUntil(
-                () -> cookingObject.interact(method.action),
-                2000
-        );
+            sleep(100, 2100);
+        }
+
+        sleepUntil(() -> cookingObject.click(method.action), 3000);
+
+        boolean productionWidgetOpen = Rs2Widget.isProductionWidgetOpen();
+        if (!productionWidgetOpen) {
+            productionWidgetOpen = sleepUntilTrue(Rs2Widget::isProductionWidgetOpen, 200, 12000);
+        }
+
+        sleepUntilTrue(() -> !Rs2Player.isMoving(), 200, 8000);
+
+        if (productionWidgetOpen) {
+            Rs2Keyboard.keyPress(KeyEvent.VK_SPACE);
+            Microbot.status = "Cooking " + method.rawItemName;
+        }
+
+        Rs2Antiban.actionCooldown();
+        Rs2Antiban.takeMicroBreakByChance();
 
         return TaskStatus.RUNNING;
     }
 
     /**
-     * Handle banking.
+     * Handle banking. Unchanged - still your DEPOSIT_ALL_AND_WITHDRAW mode, since we now only
+     * ever enter this phase once handleCooking() has already confirmed the bank has at least
+     * WITHDRAW_QUANTITY of the raw item.
      */
     private TaskStatus handleBank(AccountContext context) {
 
         if (bankingTask == null) {
 
-            /*
-             * Deposit everything except the raw food.
-             *
-             * This keeps our cooking ingredient.
-             */
             bankingTask =
                     new BankingTask(
-                            BankingTask.Mode.DEPOSIT_ALL_EXCEPT,
+                            BankingTask.Mode.DEPOSIT_ALL_AND_WITHDRAW,
+                            null,
                             method.rawItemName,
-                            BankLocation.AL_KHARID
+                            WITHDRAW_QUANTITY
                     );
         }
 
@@ -197,13 +197,6 @@ public class CookingTask implements Task {
         if (bankStatus == TaskStatus.COMPLETE) {
 
             bankingTask = null;
-
-            /*
-             * We now need to withdraw the raw food.
-             *
-             * Your current BankingTask may need a
-             * WITHDRAW mode for this.
-             */
             phase = Phase.WALK_TO_COOKING;
         }
 

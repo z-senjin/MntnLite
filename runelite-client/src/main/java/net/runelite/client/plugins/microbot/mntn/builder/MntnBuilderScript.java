@@ -4,6 +4,7 @@ import net.runelite.api.Skill;
 import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.Script;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.Activity;
+import net.runelite.client.plugins.microbot.mntn.builder.activities.ActivityType;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.cooking.CookingActivity;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.fishing.FishingActivity;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
@@ -14,7 +15,11 @@ import net.runelite.client.plugins.microbot.mntn.builder.core.planner.Plan;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskManager;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStatus;
+import net.runelite.client.plugins.microbot.mntn.builder.tasks.banking.BankingTask;
+import net.runelite.client.plugins.microbot.util.antiban.Rs2Antiban;
+import net.runelite.client.plugins.microbot.util.antiban.enums.ActivityIntensity;
 
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -36,12 +41,15 @@ public class MntnBuilderScript extends Script {
     private AccountPlanner planner;
     private Plan currentPlan;
 
-    // Read by MntnBuilderOverlay - same pattern as GemCrabKillerOverlay reading
-    // plugin.gemCrabKillerScript.gemCrabKillerState directly.
+
+    private boolean initialBankDone = false;
+    private boolean antibanInitialized = false;
+
     public String debugGoal = "-";
     public String debugRequirement = "-";
     public String debugActivity = "-";
     public String debugStrategy = "-";
+    public Duration debugTime = null;
     public double debugScore = 0;
 
     public boolean run(MntnBuilderConfig config) {
@@ -71,6 +79,13 @@ public class MntnBuilderScript extends Script {
                 if (!Microbot.isLoggedIn()) return;
                 if (!super.run()) return;
 
+                setupAntiban(config);
+
+                if (!initialBankDone) {
+                    runInitialBanking();
+                    return;
+                }
+
                 if (!taskManager.hasTask()) {
                     replan();
                 }
@@ -88,6 +103,70 @@ public class MntnBuilderScript extends Script {
         return true;
     }
 
+    private void setupAntiban(MntnBuilderConfig config) {
+        if (antibanInitialized) {
+            return;
+        }
+
+        Rs2Antiban.setActivityIntensity(
+                config.antibanIntensity()
+        );
+        Rs2Antiban.setActivityIntensity(ActivityIntensity.MODERATE);
+
+        antibanInitialized = true;
+    }
+
+    private void runInitialBanking() {
+        if (!taskManager.hasTask()) {
+            // DEPOSIT_ALL with no keep-item - this is a startup reset, not mid-activity
+            // banking, so there's nothing that needs protecting from being deposited yet.
+            // If you want to keep something equipped/held from before the script even
+            // started (e.g. a starter axe), swap this for DEPOSIT_ALL_EXCEPT with that name.
+            taskManager.setTask(new BankingTask(BankingTask.Mode.DEPOSIT_ALL, null));
+            debugGoal = "Startup";
+            debugRequirement = "Warm bank cache";
+            debugActivity = "-";
+            debugStrategy = "Initial banking";
+            debugScore = 0;
+        }
+
+        TaskStatus status = taskManager.tick(context);
+        if (status == TaskStatus.COMPLETE) {
+            initialBankDone = true;
+        } else if (status == TaskStatus.FAILED || status == TaskStatus.REPLAN) {
+            // Startup banking itself failed somehow - clear it so the next tick retries
+            // rather than getting stuck forever on a dead task.
+            taskManager.setTask(null);
+        }
+    }
+
+    private void updateAntibanActivity(ActivityType type) {
+        switch (type) {
+
+            case FISHING:
+                Rs2Antiban.setActivity(
+                        net.runelite.client.plugins.microbot.util.antiban.enums.Activity.GENERAL_FISHING
+                );
+                break;
+
+            case COOKING:
+                Rs2Antiban.setActivity(
+                        net.runelite.client.plugins.microbot.util.antiban.enums.Activity.GENERAL_COOKING
+                );
+                break;
+
+            // Later:
+            // case WOODCUTTING:
+            //     Rs2Antiban.setActivity(
+            //         Activity.GENERAL_WOODCUTTING
+            //     );
+            //     break;
+
+            default:
+                break;
+        }
+    }
+
     private void replan() {
         Plan candidate = planner.plan(context);
 
@@ -103,13 +182,17 @@ public class MntnBuilderScript extends Script {
             return;
         }
 
-        boolean shouldSwitch = currentPlan == null
+        boolean shouldSwitch = !taskManager.hasTask()
+                || currentPlan == null
                 || candidate.score() > currentPlan.score() + COMMITMENT_MARGIN;
         if (!shouldSwitch) {
             return;
         }
 
         currentPlan = candidate;
+        updateAntibanActivity(
+                candidate.activity().type()
+        );
         Task task = candidate.strategy().createTask(context);
         taskManager.setTask(task);
 
@@ -117,6 +200,7 @@ public class MntnBuilderScript extends Script {
         debugRequirement = candidate.requirement().description();
         debugActivity = candidate.activity().type().name();
         debugStrategy = candidate.strategy().name();
+        debugTime = candidate.strategy().commitmentDuration(context);
         debugScore = candidate.score();
 
         System.out.println("[MntnPlanner] Selected: " + debugActivity + " / " + debugStrategy

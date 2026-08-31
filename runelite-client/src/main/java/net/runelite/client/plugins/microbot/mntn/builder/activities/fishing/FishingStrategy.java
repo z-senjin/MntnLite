@@ -5,6 +5,9 @@ import net.runelite.client.plugins.microbot.mntn.builder.activities.Strategy;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.skilling.FishingTask;
+import net.runelite.client.plugins.microbot.util.math.Rs2Random;
+
+import java.time.Duration;
 
 public class FishingStrategy implements Strategy {
 
@@ -48,7 +51,7 @@ public class FishingStrategy implements Strategy {
 
     @Override
     public boolean canExecute(AccountContext context) {
-        return context.getRealLevel(Skill.FISHING) >= method.requiredLevel;
+        return context.getRealLevel(Skill.FISHING) >= method.requiredLevel && (context.bank().hasItem(method.toolItemName) || context.inventory().hasItem(method.toolItemName));
     }
 
     @Override
@@ -65,5 +68,11 @@ public class FishingStrategy implements Strategy {
     @Override
     public Task createTask(AccountContext context) {
         return new FishingTask(method);
+    }
+
+    @Override
+    public Duration commitmentDuration(AccountContext context) {
+        int minutes = Rs2Random.between(20, 180);
+        return Duration.ofMinutes(minutes);
     }
 }

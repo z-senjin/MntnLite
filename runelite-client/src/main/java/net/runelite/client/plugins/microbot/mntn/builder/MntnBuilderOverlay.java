@@ -6,6 +6,7 @@ import net.runelite.client.ui.overlay.components.LineComponent;
 
 import javax.inject.Inject;
 import java.awt.*;
+import java.time.Duration;
 
 /**
  * This is the "debug UI" the doc calls out in section 15 as one of the most valuable things
@@ -56,11 +57,33 @@ public class MntnBuilderOverlay extends OverlayPanel {
                 .rightColor(Color.WHITE)
                 .build());
         panelComponent.getChildren().add(LineComponent.builder()
+                .left("Time Left:")
+                .right(formatDuration(plugin.script.debugTime))
+                .rightColor(Color.GREEN)
+                .build());
+        panelComponent.getChildren().add(LineComponent.builder()
                 .left("Score:")
                 .right(String.format("%.1f", plugin.script.debugScore))
                 .rightColor(Color.GREEN)
                 .build());
 
         return super.render(graphics);
+    }
+
+    public static String formatDuration(Duration duration, String header) {
+        return String.format(header + " %s", formatDuration(duration));
+    }
+
+    /**
+     * Formats a duration into HH:MM:SS format.
+     */
+    public static String formatDuration(Duration duration) {
+        if (duration == null || duration.isNegative() || duration.isZero()) {
+            return "00:00:00";
+        }
+        long hours = duration.toHours();
+        long minutes = duration.toMinutes() % 60;
+        long seconds = duration.getSeconds() % 60;
+        return String.format("%02d:%02d:%02d", hours, minutes, seconds);
     }
 }

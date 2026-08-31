@@ -1,9 +1,11 @@
 package net.runelite.client.plugins.microbot.mntn.builder.core;
 
 import net.runelite.client.plugins.microbot.util.bank.Rs2Bank;
+import net.runelite.client.plugins.microbot.util.inventory.Rs2ItemModel;
 
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -32,14 +34,6 @@ public class BankCache {
      * Pulls a full snapshot from the live bank widget. Only works while the bank is actually
      * open - no-ops otherwise so a stray call from a closed-bank phase can't wipe out a
      * previously good cache with an empty one.
-     *
-     * TODO: verify the exact Rs2Bank enumeration call in your Microbot version - the common
-     * pattern across Microbot's Rs2XxxModel utilities (Rs2NpcModel, Rs2TileObjectModel) is a
-     * method returning a list of item models with getId()/getName()/getQuantity(), e.g.
-     * something like Rs2Bank.bankItems() or Rs2Bank.getAll(). Check autocomplete on Rs2Bank
-     * in your IDE and drop the real call into the loop below - the two hasItem/getCount
-     * confirmed methods (from your GemCrabKiller script) don't give you a way to enumerate
-     * everything, only to check one specific item at a time.
      */
     public void refresh() {
         if (!Rs2Bank.isOpen()) {
@@ -49,13 +43,30 @@ public class BankCache {
         quantitiesById.clear();
         quantitiesByName.clear();
 
-        // TODO replace with the real enumeration, e.g.:
-        // for (Rs2ItemModel item : Rs2Bank.bankItems()) {
-        //     quantitiesById.merge(item.getId(), item.getQuantity(), Integer::sum);
-        //     quantitiesByName.merge(item.getName(), item.getQuantity(), Integer::sum);
-        // }
+        for (Rs2ItemModel item : queryBankItems()) {
+            if (item == null) {
+                continue;
+            }
+            quantitiesById.merge(item.getId(), item.getQuantity(), Integer::sum);
+            quantitiesByName.merge(item.getName(), item.getQuantity(), Integer::sum);
+        }
 
         populated = true;
+    }
+
+    /**
+     * NOT CONFIRMED against your exact Microbot version - none of the reference scripts you
+     * shared ever enumerated the full bank, only checked single items (hasItem) or blindly
+     * deposited (depositAllExcept). Rs2Bank.bankItems() is a best guess based on the naming
+     * pattern your other Rs2XxxModel utilities already follow (Rs2NpcModel, Rs2TileObjectModel).
+     *
+     * If this doesn't compile: open Rs2Bank in your IDE, autocomplete "Rs2Bank." and look for
+     * whatever method returns a List<Rs2ItemModel> (or similar) representing everything
+     * currently in the bank, and swap the one line inside this method for that call. Nothing
+     * else in BankCache needs to change - this is the only place that touches the real API.
+     */
+    private List<Rs2ItemModel> queryBankItems() {
+        return Rs2Bank.bankItems(); // TODO verify this exact method exists in your version
     }
 
     public boolean isPopulated() {

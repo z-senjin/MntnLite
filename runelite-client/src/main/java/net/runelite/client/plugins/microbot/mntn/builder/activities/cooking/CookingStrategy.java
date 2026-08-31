@@ -7,6 +7,9 @@ import net.runelite.client.plugins.microbot.mntn.builder.activities.Strategy;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.skilling.CookingTask;
+import net.runelite.client.plugins.microbot.util.math.Rs2Random;
+
+import java.time.Duration;
 
 public class CookingStrategy implements Strategy {
 
@@ -29,17 +32,17 @@ public class CookingStrategy implements Strategy {
                 30,
                 "Raw shrimps",
                 "Shrimps",
-                "Range",
+                26181,
                 "Cook",
                 new WorldPoint(3274, 3180, 0)
         ),
 
-        COOK_AHCNOVIES(
+        COOK_ANCHOVIES(
                 1,
                 30,
                 "Raw anchovies",
                 "Anchovies",
-                "Range",
+                26181,
                 "Cook",
                 new WorldPoint(3274, 3180, 0)
         ),
@@ -49,7 +52,7 @@ public class CookingStrategy implements Strategy {
                 70,
                 "Raw trout",
                 "Trout",
-                "Range",
+                26181,
                 "Cook",
                 new WorldPoint(3274, 3180, 0)
         ),
@@ -59,7 +62,7 @@ public class CookingStrategy implements Strategy {
                 90,
                 "Raw salmon",
                 "Salmon",
-                "Range",
+                26181,
                 "Cook",
                 new WorldPoint(3274, 3180, 0)
         );
@@ -70,7 +73,7 @@ public class CookingStrategy implements Strategy {
         public final String rawItemName;
         public final String cookedItemName;
 
-        public final String cookingObject;
+        public final int cookingObject;
         public final String action;
 
         public final WorldPoint location;
@@ -80,7 +83,7 @@ public class CookingStrategy implements Strategy {
                 double xpValue,
                 String rawItemName,
                 String cookedItemName,
-                String cookingObject,
+                int cookingObject,
                 String action, WorldPoint location
         ) {
             this.requiredLevel = requiredLevel;
@@ -109,9 +112,6 @@ public class CookingStrategy implements Strategy {
 
         int level = context.getRealLevel(Skill.COOKING);
 
-        Microbot.log("Can execute level? " + level);
-        Microbot.log("Can reqired level? " + method.requiredLevel);
-
         if (level < method.requiredLevel) {
             return false;
         }
@@ -120,8 +120,7 @@ public class CookingStrategy implements Strategy {
          * We need the raw item either in the inventory
          * or available in the bank.
          */
-        //TODO: return if context.bank().hasItem
-        return true;
+        return context.inventory().hasItem(method.rawItemName) || context.bank().hasItem(method.rawItemName);
     }
 
     @Override
@@ -139,20 +138,19 @@ public class CookingStrategy implements Strategy {
          * Prefer food that is already in the inventory.
          * This avoids an unnecessary banking trip.
          */
-        if (context.hasItem(method.rawItemName)) {
+        if (context.inventory().hasItem(method.rawItemName)) {
             score += 30;
         } else {
             score += 10;
         }
-        //TODO:
 
         /*
          * Raw food in the bank is still useful,
          * but requires a banking trip.
          */
-//        if (context.bank().hasItem(method.rawItemName)) {
-//            score += 10;
-//        }
+        if (context.bank().hasItem(method.rawItemName)) {
+            score += 10;
+        }
 
         return score;
     }
@@ -160,6 +158,12 @@ public class CookingStrategy implements Strategy {
     @Override
     public Task createTask(AccountContext context) {
         return new CookingTask(method);
+    }
+
+    @Override
+    public Duration commitmentDuration(AccountContext context) {
+        int minutes = Rs2Random.between(40, 180);
+        return Duration.ofMinutes(minutes);
     }
 
     public Method getMethod() {

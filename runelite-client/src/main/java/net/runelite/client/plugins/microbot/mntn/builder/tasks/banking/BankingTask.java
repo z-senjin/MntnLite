@@ -1,100 +1,324 @@
 package net.runelite.client.plugins.microbot.mntn.builder.tasks.banking;
 
+import net.runelite.api.coords.WorldPoint;
+import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.util.bank.Rs2Bank;
 import net.runelite.client.plugins.microbot.util.bank.enums.BankLocation;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStatus;
+import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
+
+import java.util.Arrays;
+import java.util.Comparator;
 
 /**
- * Reusable banking Task, per the doc's "don't duplicate banking logic in every skill" rule.
- * Your GemCrabKillerScript.handleBanking() inlines this exact walk -> open -> deposit -> close
- * sequence directly in the crab script; this pulls it out so FishingTask, CookingTask,
- * CombatTask etc. can all share one implementation instead of copy-pasting it.
+ * Reusable banking Task.
+ *
+ * Supports:
+ *
+ * DEPOSIT_ALL
+ * DEPOSIT_ALL_EXCEPT
+ * WITHDRAW
+ * DEPOSIT_ALL_AND_WITHDRAW
+ *
+ * Examples:
+ *
+ * Deposit everything:
+ *
+ * new BankingTask(
+ *     BankingTask.Mode.DEPOSIT_ALL,
+ *     null
+ * );
+ *
+ * Deposit everything except a tool:
+ *
+ * new BankingTask(
+ *     BankingTask.Mode.DEPOSIT_ALL_EXCEPT,
+ *     "Small fishing net"
+ * );
+ *
+ * Withdraw 28 raw trout:
+ *
+ * new BankingTask(
+ *     BankingTask.Mode.WITHDRAW,
+ *     null,
+ *     "Raw trout",
+ *     28
+ * );
+ *
+ * Deposit everything and withdraw 28 raw trout:
+ *
+ * new BankingTask(
+ *     BankingTask.Mode.DEPOSIT_ALL_AND_WITHDRAW,
+ *     null,
+ *     "Raw trout",
+ *     28
+ * );
  */
 public class BankingTask implements Task {
 
     public enum Mode {
         DEPOSIT_ALL_EXCEPT,
-        DEPOSIT_ALL
+        DEPOSIT_ALL,
+        WITHDRAW,
+        DEPOSIT_ALL_AND_WITHDRAW
     }
 
     private enum Phase {
-        WALK, OPEN, DEPOSIT, CLOSE, DONE
+        WALK,
+        OPEN,
+        DEPOSIT,
+        WITHDRAW,
+        CLOSE,
+        DONE
     }
 
     private final Mode mode;
+
+    /**
+     * Item that should remain in the inventory when
+     * using DEPOSIT_ALL_EXCEPT.
+     */
     private final String keepItemName;
+
+    /**
+     * Item we want to withdraw.
+     */
+    private final String withdrawItemName;
+
+    /**
+     * Amount to withdraw.
+     *
+     * -1 can be used to mean "withdraw all".
+     */
+    private final int withdrawAmount;
+
     private final BankLocation bankLocation;
+
     private Phase phase = Phase.WALK;
 
-    public BankingTask(Mode mode, String keepItemName) {
-        // TODO: pick the actual nearest/appropriate BankLocation for wherever this task runs -
-        // hardcoded to LUMBRIDGE here just so this compiles as a starting point.
-        this(mode, keepItemName, BankLocation.LUMBRIDGE_TOP);
+    public BankingTask(
+            Mode mode,
+            String keepItemName
+    ) {
+        this(
+                mode,
+                keepItemName,
+                null,
+                0,
+                null
+        );
     }
 
-    public BankingTask(Mode mode, String keepItemName, BankLocation bankLocation) {
+    public BankingTask(
+            Mode mode,
+            String keepItemName,
+            String withdrawItemName,
+            int withdrawAmount
+    ) {
+        this(
+                mode,
+                keepItemName,
+                withdrawItemName,
+                withdrawAmount,
+                null
+        );
+    }
+
+    public BankingTask(
+            Mode mode,
+            String keepItemName,
+            String withdrawItemName,
+            int withdrawAmount,
+            BankLocation bankLocation
+    ) {
         this.mode = mode;
         this.keepItemName = keepItemName;
+        this.withdrawItemName = withdrawItemName;
+        this.withdrawAmount = withdrawAmount;
         this.bankLocation = bankLocation;
     }
 
     @Override
     public TaskStatus tick(AccountContext context) {
+
         switch (phase) {
+
             case WALK:
+
                 if (Rs2Bank.isOpen()) {
                     phase = Phase.DEPOSIT;
                     return TaskStatus.RUNNING;
                 }
-                Rs2Bank.walkToBank(bankLocation);
+
+                Rs2Bank.walkToBank();
+
                 phase = Phase.OPEN;
+
                 return TaskStatus.RUNNING;
+
 
             case OPEN:
-                Rs2Bank.openBank();
-                if (Rs2Bank.isOpen()) {
-                    // Cache what's already in there BEFORE we deposit anything, so a query
-                    // like "does the bank have raw shrimp" reflects reality even if this trip
-                    // turns out to be a no-op deposit (e.g. inventory was already empty).
-                    context.bank().refresh();
-                    phase = Phase.DEPOSIT;
+                Microbot.log("OPEN");
+                if (!Rs2Bank.isOpen()) {
+                    Microbot.log("oepning bank");
+                    Rs2Bank.openBank();
+                    return TaskStatus.RUNNING;
                 }
+
+                /*
+                 * Refresh our account context after opening.
+                 */
+                context.bank().refresh();
+
+                phase = determineNextPhase();
+
                 return TaskStatus.RUNNING;
 
+
             case DEPOSIT:
+
                 if (!Rs2Bank.isOpen()) {
                     phase = Phase.OPEN;
                     return TaskStatus.RUNNING;
                 }
-                if (mode == Mode.DEPOSIT_ALL_EXCEPT && keepItemName != null) {
-                    Rs2Bank.depositAllExcept(false, keepItemName);
-                } else {
-                    // TODO: verify Rs2Bank has a no-arg depositAll() in your Microbot version -
-                    // if not, depositAllExcept(false) with no keep-list is the usual equivalent.
-                    Rs2Bank.depositAll();
-                }
-                // Refresh again now that the deposit actually changed bank contents - this is
-                // the snapshot that matters most, since it's what every later hasItem()/
-                // getCount() call will see until the next banking trip.
+
+                performDeposit();
+
+                /*
+                 * Give the bank operation a chance to complete
+                 * before refreshing.
+                 */
                 context.bank().refresh();
-                phase = Phase.CLOSE;
+
+                phase = determinePhaseAfterDeposit();
+
                 return TaskStatus.RUNNING;
 
-            case CLOSE:
-                Rs2Bank.closeBank();
-                phase = Phase.DONE;
+
+            case WITHDRAW:
+
+                Microbot.log("withdrawing??");
+                if (!Rs2Bank.isOpen()) {
+                    phase = Phase.OPEN;
+                    return TaskStatus.RUNNING;
+                }
+
+                performWithdraw();
+
+                /*
+                 * Refresh our bank snapshot.
+                 */
+                context.bank().refresh();
+
+                phase = Phase.CLOSE;
+
                 return TaskStatus.RUNNING;
+
+
+            case CLOSE:
+
+                if (Rs2Bank.isOpen()) {
+                    Rs2Bank.closeBank();
+                    return TaskStatus.RUNNING;
+                }
+
+                phase = Phase.DONE;
+
+                return TaskStatus.RUNNING;
+
 
             case DONE:
             default:
+
                 return TaskStatus.COMPLETE;
         }
+    }
+
+
+    /**
+     * Determine what should happen immediately after
+     * opening the bank.
+     */
+    private Phase determineNextPhase() {
+
+        switch (mode) {
+
+            case DEPOSIT_ALL:
+            case DEPOSIT_ALL_EXCEPT:
+            case DEPOSIT_ALL_AND_WITHDRAW:
+                return Phase.DEPOSIT;
+
+            case WITHDRAW:
+                return Phase.WITHDRAW;
+
+            default:
+                return Phase.CLOSE;
+        }
+    }
+
+    /**
+     * Determine what should happen after depositing.
+     */
+    private Phase determinePhaseAfterDeposit() {
+
+        if (mode == Mode.DEPOSIT_ALL_AND_WITHDRAW) {
+            return Phase.WITHDRAW;
+        }
+
+        return Phase.CLOSE;
+    }
+
+    /**
+     * Perform the configured deposit operation.
+     */
+    private void performDeposit() {
+
+        if (mode == Mode.DEPOSIT_ALL_EXCEPT
+                && keepItemName != null) {
+
+            Rs2Bank.depositAllExcept(
+                    false,
+                    keepItemName
+            );
+
+            return;
+        }
+
+        Rs2Bank.depositAll();
+    }
+
+    /**
+     * Perform the configured withdrawal.
+     */
+    private void performWithdraw() {
+        if (withdrawItemName == null) {
+            return;
+        }
+
+        if (withdrawAmount == -1) {
+
+            Rs2Bank.withdrawAll(
+                    withdrawItemName
+            );
+
+            return;
+        }
+
+        Rs2Bank.withdrawX(
+                withdrawItemName,
+                withdrawAmount
+        );
     }
 
     @Override
     public boolean needsReplan(AccountContext context) {
         return false;
+    }
+
+    @Override
+    public String describe() {
+        return "Banking (" + mode + ") - " + phase;
     }
 }
