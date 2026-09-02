@@ -27,7 +27,7 @@ public class AccountPlanner {
         this.activities = activities;
     }
 
-    public Plan plan(AccountContext context) {
+    public List<Plan> planAll(AccountContext context) {
         List<Plan> candidates = new ArrayList<>();
 
         for (Goal goal : goals) {
@@ -65,8 +65,12 @@ public class AccountPlanner {
             }
         }
 
-        return candidates.stream()
-                .max(Comparator.comparingDouble(Plan::score))
-                .orElse(null);
+        candidates.sort(Comparator.comparingDouble(Plan::score).reversed());
+        return candidates;
+    }
+
+    public Plan plan(AccountContext context) {
+        List<Plan> candidates = planAll(context);
+        return candidates.isEmpty() ? null : candidates.get(0);
     }
 }

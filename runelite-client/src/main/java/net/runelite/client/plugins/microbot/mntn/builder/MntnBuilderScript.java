@@ -5,8 +5,13 @@ import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.Script;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.Activity;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.ActivityType;
+import net.runelite.api.Quest;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.cooking.CookingActivity;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.fishing.FishingActivity;
+import net.runelite.client.plugins.microbot.mntn.builder.activities.mining.MiningActivity;
+import net.runelite.client.plugins.microbot.mntn.builder.activities.questing.QuestingActivity;
+import net.runelite.client.plugins.microbot.mntn.builder.activities.smithing.SmithingActivity;
+import net.runelite.client.plugins.microbot.mntn.builder.activities.woodcutting.WoodcuttingActivity;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountProfile;
 import net.runelite.client.plugins.microbot.mntn.builder.core.goals.Goal;
@@ -18,6 +23,7 @@ import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStatus;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.banking.BankingTask;
 import net.runelite.client.plugins.microbot.util.antiban.Rs2Antiban;
 import net.runelite.client.plugins.microbot.util.antiban.enums.ActivityIntensity;
+import net.runelite.client.plugins.microbot.util.dialogues.Rs2Dialogue;
 
 import java.time.Duration;
 import java.util.Arrays;
@@ -50,6 +56,7 @@ public class MntnBuilderScript extends Script {
     public String debugActivity = "-";
     public String debugStrategy = "-";
     public Duration debugTime = null;
+    public java.time.Instant debugTaskStartTime = null;
     public double debugScore = 0;
 
     public boolean run(MntnBuilderConfig config) {
@@ -57,20 +64,28 @@ public class MntnBuilderScript extends Script {
         // doc section 4. Config values feed the target levels; priority for each is
         // randomized by AccountProfile itself (Rs2Random) so this account's goal-weighting
         // doesn't play out identically to every other account run off the same config.
-        AccountProfile profile = AccountProfile.builder()
+        AccountProfile.Builder profileBuilder = AccountProfile.builder()
                 .skill(Skill.FISHING, config.fishingTarget())
                 .skill(Skill.COOKING, config.cookingTarget())
-                // TODO: once Combat/Woodcutting activities exist, add them here the same way:
-                //   .skill(Skill.ATTACK, config.attackTarget())
-                //   .skill(Skill.STRENGTH, config.strengthTarget())
-                //   .skill(Skill.DEFENCE, config.defenceTarget())
-                .build();
+                .skill(Skill.WOODCUTTING, config.woodcuttingTarget())
+                .skill(Skill.MINING, config.miningTarget())
+                .skill(Skill.SMITHING, config.smithingTarget());
+
+        if (config.enableCooksAssistant()) {
+            profileBuilder.quest(Quest.COOKS_ASSISTANT);
+        }
+
+        AccountProfile profile = profileBuilder.build();
 
         List<Goal> goals = profile.toGoals();
         List<Activity> activities = Arrays.asList(
                 new FishingActivity(),
-                new CookingActivity()
-                // TODO: new CombatActivity(), new WoodcuttingActivity()
+                new CookingActivity(),
+                new WoodcuttingActivity(),
+                new MiningActivity(),
+                new SmithingActivity(),
+                new QuestingActivity()
+                // TODO: new CombatActivity()
         );
         planner = new AccountPlanner(goals, activities);
 
@@ -88,11 +103,15 @@ public class MntnBuilderScript extends Script {
 
                 if (!taskManager.hasTask()) {
                     replan();
+                } else if (isCommitmentExpired() && !Rs2Dialogue.isInDialogue()) {
+                    replanOnTimeout();
                 }
 
                 TaskStatus status = taskManager.tick(context);
                 if (status == TaskStatus.REPLAN || status == TaskStatus.FAILED
                         || status == TaskStatus.COMPLETE) {
+                    currentPlan = null;
+                    taskManager.setTask(null);
                     replan();
                 }
             } catch (Exception ex) {
@@ -118,11 +137,10 @@ public class MntnBuilderScript extends Script {
 
     private void runInitialBanking() {
         if (!taskManager.hasTask()) {
-            // DEPOSIT_ALL with no keep-item - this is a startup reset, not mid-activity
-            // banking, so there's nothing that needs protecting from being deposited yet.
-            // If you want to keep something equipped/held from before the script even
-            // started (e.g. a starter axe), swap this for DEPOSIT_ALL_EXCEPT with that name.
-            taskManager.setTask(new BankingTask(BankingTask.Mode.DEPOSIT_ALL, null));
+            // DEPOSIT_ALL with depositEquipment=true - this is a startup reset that
+            // clears both inventory and worn equipment into the bank so the planner
+            // starts from a clean slate and the bank cache is fully populated.
+            taskManager.setTask(new BankingTask(BankingTask.Mode.DEPOSIT_ALL, true));
             debugGoal = "Startup";
             debugRequirement = "Warm bank cache";
             debugActivity = "-";
@@ -155,16 +173,60 @@ public class MntnBuilderScript extends Script {
                 );
                 break;
 
-            // Later:
-            // case WOODCUTTING:
-            //     Rs2Antiban.setActivity(
-            //         Activity.GENERAL_WOODCUTTING
-            //     );
-            //     break;
+             case WOODCUTTING:
+                 Rs2Antiban.setActivity(
+                     net.runelite.client.plugins.microbot.util.antiban.enums.Activity.GENERAL_WOODCUTTING
+                 );
+                 break;
+
+             case MINING:
+                 Rs2Antiban.setActivity(
+                     net.runelite.client.plugins.microbot.util.antiban.enums.Activity.GENERAL_MINING
+                 );
+                 break;
+
+             case SMITHING:
+                 Rs2Antiban.setActivity(
+                     net.runelite.client.plugins.microbot.util.antiban.enums.Activity.GENERAL_SMITHING
+                 );
+                 break;
+
+             case QUESTING:
+                 Rs2Antiban.setActivity(
+                     net.runelite.client.plugins.microbot.util.antiban.enums.Activity.GENERAL_COLLECTING
+                 );
+                 break;
 
             default:
                 break;
         }
+    }
+
+    public boolean isCommitmentExpired() {
+        if (debugTime == null || debugTaskStartTime == null) {
+            return false;
+        }
+        return Duration.between(debugTaskStartTime, java.time.Instant.now()).compareTo(debugTime) >= 0;
+    }
+
+    private void applyPlan(Plan plan) {
+        currentPlan = plan;
+        updateAntibanActivity(
+                plan.activity().type()
+        );
+        Task task = plan.strategy().createTask(context);
+        taskManager.setTask(task);
+
+        debugGoal = plan.goal().name();
+        debugRequirement = plan.requirement().description();
+        debugActivity = plan.activity().type().name();
+        debugStrategy = plan.strategy().name();
+        debugTime = plan.strategy().commitmentDuration(context);
+        debugTaskStartTime = java.time.Instant.now();
+        debugScore = plan.score();
+
+        System.out.println("[MntnPlanner] Selected: " + debugActivity + " / " + debugStrategy
+                + " (score=" + debugScore + ") for " + debugRequirement);
     }
 
     private void replan() {
@@ -178,6 +240,8 @@ public class MntnBuilderScript extends Script {
             debugRequirement = "-";
             debugActivity = "-";
             debugStrategy = "-";
+            debugTime = null;
+            debugTaskStartTime = null;
             debugScore = 0;
             return;
         }
@@ -189,22 +253,43 @@ public class MntnBuilderScript extends Script {
             return;
         }
 
-        currentPlan = candidate;
-        updateAntibanActivity(
-                candidate.activity().type()
-        );
-        Task task = candidate.strategy().createTask(context);
-        taskManager.setTask(task);
+        applyPlan(candidate);
+    }
 
-        debugGoal = candidate.goal().name();
-        debugRequirement = candidate.requirement().description();
-        debugActivity = candidate.activity().type().name();
-        debugStrategy = candidate.strategy().name();
-        debugTime = candidate.strategy().commitmentDuration(context);
-        debugScore = candidate.score();
+    private void replanOnTimeout() {
+        List<Plan> candidates = planner.planAll(context);
+        if (candidates.isEmpty()) {
+            currentPlan = null;
+            taskManager.setTask(null);
+            debugGoal = "All goals complete";
+            debugRequirement = "-";
+            debugActivity = "-";
+            debugStrategy = "-";
+            debugTime = null;
+            debugTaskStartTime = null;
+            debugScore = 0;
+            return;
+        }
 
-        System.out.println("[MntnPlanner] Selected: " + debugActivity + " / " + debugStrategy
-                + " (score=" + debugScore + ") for " + debugRequirement);
+        // Look for the best candidate with a different strategy or goal
+        Plan nextPlan = null;
+        if (currentPlan != null) {
+            for (Plan p : candidates) {
+                if (!p.strategy().name().equals(currentPlan.strategy().name())) {
+                    nextPlan = p;
+                    break;
+                }
+            }
+        }
+
+        // If no other strategy is available, refresh the top candidate
+        if (nextPlan == null) {
+            nextPlan = candidates.get(0);
+        }
+
+        System.out.println("[MntnPlanner] Commitment expired for " + (currentPlan != null ? currentPlan.strategy().name() : "previous task")
+                + ". Moving to next: " + nextPlan.strategy().name());
+        applyPlan(nextPlan);
     }
 
     @Override

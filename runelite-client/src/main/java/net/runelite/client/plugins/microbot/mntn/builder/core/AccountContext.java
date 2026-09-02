@@ -1,5 +1,7 @@
 package net.runelite.client.plugins.microbot.mntn.builder.core;
 
+import net.runelite.api.Quest;
+import net.runelite.api.QuestState;
 import net.runelite.api.Skill;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.plugins.microbot.Microbot;
@@ -24,6 +26,7 @@ public class AccountContext {
 
     private final InventoryView inventory = new InventoryView();
     private final BankView bank = new BankView();
+    private final EquipmentView equipment = new EquipmentView();
 
     public InventoryView inventory() {
         return inventory;
@@ -31,6 +34,10 @@ public class AccountContext {
 
     public BankView bank() {
         return bank;
+    }
+
+    public EquipmentView equipment() {
+        return equipment;
     }
 
     public boolean isLoggedIn() {
@@ -45,6 +52,11 @@ public class AccountContext {
     public int getBoostedLevel(Skill skill) {
         if (!isLoggedIn()) return 0;
         return Microbot.getClient().getBoostedSkillLevel(skill);
+    }
+
+    public QuestState getQuestState(Quest quest) {
+        if (!isLoggedIn()) return QuestState.NOT_STARTED;
+        return Rs2Player.getQuestState(quest);
     }
 
     public WorldPoint getLocation() {

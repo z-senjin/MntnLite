@@ -3,6 +3,7 @@ package net.runelite.client.plugins.microbot.mntn.builder.core;
 import net.runelite.api.Quest;
 import net.runelite.api.Skill;
 import net.runelite.client.plugins.microbot.mntn.builder.core.goals.Goal;
+import net.runelite.client.plugins.microbot.mntn.builder.core.goals.QuestGoal;
 import net.runelite.client.plugins.microbot.mntn.builder.core.goals.SkillGoal;
 import net.runelite.client.plugins.microbot.util.math.Rs2Random;
 
@@ -50,17 +51,17 @@ public class AccountProfile {
     }
 
     /**
-     * Converts this profile into the planner's Goal vocabulary. Only skill targets produce
-     * Goals for now - QuestGoal doesn't exist yet in this project (doc's future-extensions
-     * item: "Add quest goals and quest requirements"), so quests() just sits here as data
-     * until that Activity/Requirement pair gets built. Wire this into MntnBuilderScript.run()
-     * in place of the hardcoded Arrays.asList(new SkillGoal(...)) once you're ready.
+     * Converts this profile into the planner's Goal vocabulary.
      */
     public List<Goal> toGoals() {
         List<Goal> goals = new ArrayList<>();
         for (Map.Entry<Skill, SkillTarget> entry : skillTargets.entrySet()) {
             SkillTarget target = entry.getValue();
             goals.add(new SkillGoal(entry.getKey(), target.level, target.priority));
+        }
+        for (Quest quest : quests) {
+            int priority = Rs2Random.between(DEFAULT_PRIORITY_MIN, DEFAULT_PRIORITY_MAX);
+            goals.add(new QuestGoal(quest, priority));
         }
         return goals;
     }

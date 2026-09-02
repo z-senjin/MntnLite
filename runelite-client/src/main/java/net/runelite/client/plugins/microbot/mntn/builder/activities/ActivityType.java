@@ -7,7 +7,10 @@ public enum ActivityType {
     COOKING,
     WOODCUTTING,
     COMBAT,
-    BANKING;
+    BANKING,
+    MINING,
+    SMITHING,
+    QUESTING;
 
     /** Maps a Skill to the ActivityType that trains it. Extend as you add more activities. */
     public static ActivityType forSkill(Skill skill) {
@@ -18,6 +21,10 @@ public enum ActivityType {
                 return COOKING;
             case WOODCUTTING:
                 return WOODCUTTING;
+            case MINING:
+                return MINING;
+            case SMITHING:
+                return SMITHING;
             case ATTACK:
             case STRENGTH:
             case DEFENCE:

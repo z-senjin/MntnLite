@@ -72,6 +72,18 @@ public class FishingTask implements Task {
     }
 
     /**
+     * True only if every tool this method needs is currently in the inventory.
+     */
+    private boolean hasAllToolsInBank(AccountContext context) {
+        for (ToolRequirement requirement : method.toolRequirements) {
+            if (!context.bank().hasItem(requirement.itemName)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
      * The first required tool NOT currently in the inventory, or null if we have everything.
      * Returns the whole ToolRequirement (not just the name) so handleBank() can withdraw it
      * at ITS requested quantity - 1 for a rod, WITHDRAW_ALL for feathers, etc.
@@ -142,6 +154,10 @@ public class FishingTask implements Task {
 
     private TaskStatus handleBank(AccountContext context) {
         Microbot.log("Handling banking");
+
+        if(!hasAllTools(context) && !hasAllToolsInBank(context)){
+            return TaskStatus.REPLAN;
+        }
 
         // Create the banking task only once.
         if (bankingTask == null) {

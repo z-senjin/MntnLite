@@ -7,6 +7,7 @@ import net.runelite.client.ui.overlay.components.LineComponent;
 import javax.inject.Inject;
 import java.awt.*;
 import java.time.Duration;
+import java.time.Instant;
 
 /**
  * This is the "debug UI" the doc calls out in section 15 as one of the most valuable things
@@ -56,10 +57,15 @@ public class MntnBuilderOverlay extends OverlayPanel {
                 .right(plugin.script.debugStrategy)
                 .rightColor(Color.WHITE)
                 .build());
+
+        Duration remaining = computeRemaining();
+        Color timeColor = (remaining != null && !remaining.isNegative() && !remaining.isZero())
+                ? Color.GREEN : Color.RED;
+
         panelComponent.getChildren().add(LineComponent.builder()
                 .left("Time Left:")
-                .right(formatDuration(plugin.script.debugTime))
-                .rightColor(Color.GREEN)
+                .right(formatDuration(remaining))
+                .rightColor(timeColor)
                 .build());
         panelComponent.getChildren().add(LineComponent.builder()
                 .left("Score:")
@@ -68,6 +74,20 @@ public class MntnBuilderOverlay extends OverlayPanel {
                 .build());
 
         return super.render(graphics);
+    }
+
+    /**
+     * Computes remaining time = commitmentDuration - elapsed since task started.
+     */
+    private Duration computeRemaining() {
+        Duration total = plugin.script.debugTime;
+        Instant start = plugin.script.debugTaskStartTime;
+        if (total == null || start == null) {
+            return null;
+        }
+        Duration elapsed = Duration.between(start, Instant.now());
+        Duration remaining = total.minus(elapsed);
+        return remaining.isNegative() ? Duration.ZERO : remaining;
     }
 
     public static String formatDuration(Duration duration, String header) {

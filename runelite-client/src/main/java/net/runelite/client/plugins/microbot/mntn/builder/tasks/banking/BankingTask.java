@@ -1,11 +1,15 @@
 package net.runelite.client.plugins.microbot.mntn.builder.tasks.banking;
 
 import net.runelite.client.plugins.microbot.Microbot;
-import net.runelite.client.plugins.microbot.util.bank.Rs2Bank;
-import net.runelite.client.plugins.microbot.util.bank.enums.BankLocation;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStatus;
+import net.runelite.client.plugins.microbot.util.bank.Rs2Bank;
+import net.runelite.client.plugins.microbot.util.bank.enums.BankLocation;
+import net.runelite.client.plugins.microbot.util.equipment.Rs2Equipment;
+import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
+
+import static net.runelite.client.plugins.microbot.util.Global.sleepUntilTrue;
 
 /**
  * Reusable banking Task.
@@ -78,6 +82,16 @@ public class BankingTask implements Task {
 
     private final Mode mode;
 
+    public static class ItemWithdrawal {
+        public final String itemName;
+        public final int amount;
+
+        public ItemWithdrawal(String itemName, int amount) {
+            this.itemName = itemName;
+            this.amount = amount;
+        }
+    }
+
     /**
      * Items that should remain in the inventory when using DEPOSIT_ALL_EXCEPT. Changed from
      * a single String to String[] so a fishing method needing multiple tools at once (e.g.
@@ -100,7 +114,11 @@ public class BankingTask implements Task {
      */
     private final int withdrawAmount;
 
+    private final ItemWithdrawal[] withdrawals;
+
     private final BankLocation bankLocation;
+
+    private final boolean depositEquipment;
 
     private Phase phase = Phase.WALK;
 
@@ -110,6 +128,19 @@ public class BankingTask implements Task {
     ) {
         this(
                 mode,
+                false,
+                keepItemNames
+        );
+    }
+
+    public BankingTask(
+            Mode mode,
+            boolean depositEquipment,
+            String... keepItemNames
+    ) {
+        this(
+                mode,
+                depositEquipment,
                 keepItemNames,
                 null,
                 0,
@@ -125,6 +156,7 @@ public class BankingTask implements Task {
     ) {
         this(
                 mode,
+                false,
                 keepItemNames,
                 withdrawItemName,
                 withdrawAmount,
@@ -135,15 +167,65 @@ public class BankingTask implements Task {
     public BankingTask(
             Mode mode,
             String[] keepItemNames,
+            ItemWithdrawal... withdrawals
+    ) {
+        this(
+                mode,
+                false,
+                keepItemNames,
+                withdrawals
+        );
+    }
+
+    public BankingTask(
+            Mode mode,
+            boolean depositEquipment,
+            String[] keepItemNames,
+            ItemWithdrawal... withdrawals
+    ) {
+        this.mode = mode;
+        this.depositEquipment = depositEquipment;
+        this.keepItemNames = keepItemNames;
+        this.withdrawals = withdrawals != null ? withdrawals : new ItemWithdrawal[0];
+        this.withdrawItemName = this.withdrawals.length > 0 ? this.withdrawals[0].itemName : null;
+        this.withdrawAmount = this.withdrawals.length > 0 ? this.withdrawals[0].amount : 0;
+        this.bankLocation = null;
+    }
+
+    public BankingTask(
+            Mode mode,
+            String[] keepItemNames,
+            String withdrawItemName,
+            int withdrawAmount,
+            BankLocation bankLocation
+    ) {
+        this(
+                mode,
+                false,
+                keepItemNames,
+                withdrawItemName,
+                withdrawAmount,
+                bankLocation
+        );
+    }
+
+    public BankingTask(
+            Mode mode,
+            boolean depositEquipment,
+            String[] keepItemNames,
             String withdrawItemName,
             int withdrawAmount,
             BankLocation bankLocation
     ) {
         this.mode = mode;
+        this.depositEquipment = depositEquipment;
         this.keepItemNames = keepItemNames;
         this.withdrawItemName = withdrawItemName;
         this.withdrawAmount = withdrawAmount;
         this.bankLocation = bankLocation;
+        this.withdrawals = withdrawItemName != null
+                ? new ItemWithdrawal[]{new ItemWithdrawal(withdrawItemName, withdrawAmount)}
+                : new ItemWithdrawal[0];
     }
 
     @Override
@@ -268,8 +350,7 @@ public class BankingTask implements Task {
      * Determine what should happen after depositing.
      */
     private Phase determinePhaseAfterDeposit() {
-
-        if (mode == Mode.DEPOSIT_ALL_AND_WITHDRAW) {
+        if (mode == Mode.DEPOSIT_ALL_AND_WITHDRAW || (withdrawals != null && withdrawals.length > 0)) {
             return Phase.WITHDRAW;
         }
 
@@ -279,21 +360,26 @@ public class BankingTask implements Task {
     /**
      * Perform the configured deposit operation.
      *
-     * TODO: verify Rs2Bank.depositAllExcept(boolean, String...) actually accepts multiple
-     * item names in your Microbot version - only single-item usage was ever confirmed. If it
-     * turns out to only accept one name, you'd need to loop item-by-item instead.
+     * When depositEquipment is true, equipment is deposited first
+     * (the bank "deposit worn items" button moves them into the bank),
+     * then inventory is deposited.
      */
     private void performDeposit() {
 
-        if (mode == Mode.DEPOSIT_ALL_EXCEPT
-                && keepItemNames != null
-                && keepItemNames.length > 0) {
+        if (depositEquipment && !Rs2Equipment.items().isEmpty()) {
+            Rs2Bank.depositEquipment();
+            sleepUntilTrue(
+                    () -> Rs2Equipment.items().isEmpty(),
+                    100,
+                    5000
+            );
+        }
 
+        if (keepItemNames != null && keepItemNames.length > 0) {
             Rs2Bank.depositAllExcept(
                     false,
                     keepItemNames
             );
-
             return;
         }
 
@@ -304,16 +390,26 @@ public class BankingTask implements Task {
      * Perform the configured withdrawal.
      */
     private void performWithdraw() {
+        if (withdrawals != null && withdrawals.length > 0) {
+            for (ItemWithdrawal withdrawal : withdrawals) {
+                if (withdrawal == null || withdrawal.itemName == null) continue;
+                if (withdrawal.amount == -1) {
+                    Rs2Bank.withdrawAll(withdrawal.itemName);
+                } else {
+                    Rs2Bank.withdrawX(withdrawal.itemName, withdrawal.amount);
+                }
+            }
+            return;
+        }
+
         if (withdrawItemName == null) {
             return;
         }
 
         if (withdrawAmount == -1) {
-
             Rs2Bank.withdrawAll(
                     withdrawItemName
             );
-
             return;
         }
 
