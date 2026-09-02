@@ -6,10 +6,14 @@ import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.api.npc.models.Rs2NpcModel;
 import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.fishing.FishingStrategy;
+import net.runelite.client.plugins.microbot.mntn.builder.activities.fishing.FishingStrategy.ToolRequirement;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStatus;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.banking.BankingTask;
+
+import java.util.ArrayList;
+import java.util.List;
 
 import static net.runelite.client.plugins.microbot.util.Global.sleep;
 import static net.runelite.client.plugins.microbot.util.Global.sleepUntil;
@@ -28,8 +32,6 @@ public class FishingTask implements Task {
     private enum Phase {
         WALK_TO_SPOT, FISHING, BANKING
     }
-    // (e.g. Lumbridge swamp/Al Kharid for net fishing, Catherby for cage fishing, etc).
-    private static final WorldPoint FISHING_AREA = new WorldPoint(3242, 3149, 0);
 
     private final FishingStrategy.Method method;
     private Phase phase = Phase.WALK_TO_SPOT;
@@ -57,9 +59,51 @@ public class FishingTask implements Task {
         }
     }
 
+    /**
+     * True only if every tool this method needs is currently in the inventory.
+     */
+    private boolean hasAllTools(AccountContext context) {
+        for (ToolRequirement requirement : method.toolRequirements) {
+            if (!context.inventory().hasItem(requirement.itemName)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * The first required tool NOT currently in the inventory, or null if we have everything.
+     * Returns the whole ToolRequirement (not just the name) so handleBank() can withdraw it
+     * at ITS requested quantity - 1 for a rod, WITHDRAW_ALL for feathers, etc.
+     * Used to withdraw one missing tool at a time - handleBank() loops back through here
+     * after each completed banking sub-task until nothing is missing anymore.
+     */
+    private ToolRequirement findMissingTool(AccountContext context) {
+        for (ToolRequirement requirement : method.toolRequirements) {
+            if (!context.inventory().hasItem(requirement.itemName)) {
+                return requirement;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Every required tool we already have in the inventory right now - this is the keep-list
+     * passed to DEPOSIT_ALL_EXCEPT so we don't accidentally bank a tool we already have.
+     */
+    private String[] ownedTools(AccountContext context) {
+        List<String> owned = new ArrayList<>();
+        for (ToolRequirement requirement : method.toolRequirements) {
+            if (context.inventory().hasItem(requirement.itemName)) {
+                owned.add(requirement.itemName);
+            }
+        }
+        return owned.toArray(new String[0]);
+    }
+
     private TaskStatus handleWalk(AccountContext context) {
 
-        if(!context.inventory().hasItem(method.toolItemName)){
+        if (!hasAllTools(context)) {
             phase = Phase.BANKING;
             return TaskStatus.RUNNING;
         }
@@ -69,12 +113,12 @@ public class FishingTask implements Task {
             phase = Phase.FISHING;
             return TaskStatus.RUNNING;
         }
-        Rs2Walker.walkTo(FISHING_AREA);
+        Rs2Walker.walkTo(method.location);
         return TaskStatus.RUNNING;
     }
 
     private TaskStatus handleFish(AccountContext context) {
-        if (context.inventory().isFull() || !context.inventory().hasItem(method.toolItemName)) {
+        if (context.inventory().isFull() || !hasAllTools(context)) {
             phase = Phase.BANKING;
             return TaskStatus.RUNNING;
         }
@@ -102,21 +146,40 @@ public class FishingTask implements Task {
         // Create the banking task only once.
         if (bankingTask == null) {
 
-            if (context.inventory().hasItem(method.toolItemName)) {
-                // We have the tool, so deposit everything except it.
+            if (context.inventory().isFull()) {
+                // Free up space first (regardless of what's missing), protecting whatever
+                // tools we already have. If we're also missing a tool, we'll catch that on
+                // the next pass once there's room to withdraw it into.
                 bankingTask = new BankingTask(
                         BankingTask.Mode.DEPOSIT_ALL_EXCEPT,
-                        method.toolItemName
+                        ownedTools(context)
                 );
 
             } else {
-                // We don't have the tool, so withdraw it from the bank.
-                bankingTask = new BankingTask(
-                        BankingTask.Mode.WITHDRAW,
-                        null,
-                        method.toolItemName,
-                        1
-                );
+                ToolRequirement missing = findMissingTool(context);
+
+                if (missing != null) {
+                    // Withdraw one missing tool AT ITS OWN REQUESTED QUANTITY - 1 for a rod,
+                    // WITHDRAW_ALL (-1) for feathers, or whatever a future tool asks for.
+                    // BankingTask already treats -1 as "withdraw all" natively, so this
+                    // passes straight through with no translation needed.
+                    // If more than one tool is missing, handleBank() loops back here again
+                    // once this completes and picks up the next one.
+                    bankingTask = new BankingTask(
+                            BankingTask.Mode.WITHDRAW,
+                            null,
+                            missing.itemName,
+                            missing.quantity
+                    );
+                } else {
+                    // Not full, nothing missing - shouldn't normally reach BANKING in this
+                    // state, but guard with a no-op-ish deposit-except pass rather than
+                    // getting stuck with bankingTask staying null forever.
+                    bankingTask = new BankingTask(
+                            BankingTask.Mode.DEPOSIT_ALL_EXCEPT,
+                            ownedTools(context)
+                    );
+                }
             }
         }
 
@@ -127,14 +190,15 @@ public class FishingTask implements Task {
 
         if (bankStatus == TaskStatus.COMPLETE) {
 
-            // If we needed a tool, make sure we actually have it.
-            if (!context.inventory().hasItem(method.toolItemName)) {
-                Microbot.log("Banking completed but tool is still missing");
-                bankingTask = null;
-                return TaskStatus.REPLAN;
+            bankingTask = null;
+
+            // Check whether we still need more banking (e.g. we just freed up space, or just
+            // withdrew ONE of several missing tools) before heading back out to fish.
+            if (!hasAllTools(context)) {
+                phase = Phase.BANKING;
+                return TaskStatus.RUNNING;
             }
 
-            bankingTask = null;
             phase = Phase.WALK_TO_SPOT;
 
             return TaskStatus.RUNNING;

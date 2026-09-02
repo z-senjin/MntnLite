@@ -1,16 +1,11 @@
 package net.runelite.client.plugins.microbot.mntn.builder.tasks.banking;
 
-import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.util.bank.Rs2Bank;
 import net.runelite.client.plugins.microbot.util.bank.enums.BankLocation;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStatus;
-import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
-
-import java.util.Arrays;
-import java.util.Comparator;
 
 /**
  * Reusable banking Task.
@@ -28,7 +23,7 @@ import java.util.Comparator;
  *
  * new BankingTask(
  *     BankingTask.Mode.DEPOSIT_ALL,
- *     null
+ *     (String) null
  * );
  *
  * Deposit everything except a tool:
@@ -36,6 +31,13 @@ import java.util.Comparator;
  * new BankingTask(
  *     BankingTask.Mode.DEPOSIT_ALL_EXCEPT,
  *     "Small fishing net"
+ * );
+ *
+ * Deposit everything except several tools (e.g. a fishing method needing rod + feathers):
+ *
+ * new BankingTask(
+ *     BankingTask.Mode.DEPOSIT_ALL_EXCEPT,
+ *     "Fishing rod", "Feather"
  * );
  *
  * Withdraw 28 raw trout:
@@ -77,10 +79,14 @@ public class BankingTask implements Task {
     private final Mode mode;
 
     /**
-     * Item that should remain in the inventory when
-     * using DEPOSIT_ALL_EXCEPT.
+     * Items that should remain in the inventory when using DEPOSIT_ALL_EXCEPT. Changed from
+     * a single String to String[] so a fishing method needing multiple tools at once (e.g.
+     * Fishing rod + Feathers for fly fishing) can keep all of them during a deposit trip, not
+     * just one. The simple 2-arg constructor stays varargs, so a single-tool call like
+     * `new BankingTask(Mode.DEPOSIT_ALL_EXCEPT, "Small fishing net")` still compiles exactly
+     * as before - nothing that already calls that constructor needs to change.
      */
-    private final String keepItemName;
+    private final String[] keepItemNames;
 
     /**
      * Item we want to withdraw.
@@ -100,11 +106,11 @@ public class BankingTask implements Task {
 
     public BankingTask(
             Mode mode,
-            String keepItemName
+            String... keepItemNames
     ) {
         this(
                 mode,
-                keepItemName,
+                keepItemNames,
                 null,
                 0,
                 null
@@ -113,13 +119,13 @@ public class BankingTask implements Task {
 
     public BankingTask(
             Mode mode,
-            String keepItemName,
+            String[] keepItemNames,
             String withdrawItemName,
             int withdrawAmount
     ) {
         this(
                 mode,
-                keepItemName,
+                keepItemNames,
                 withdrawItemName,
                 withdrawAmount,
                 null
@@ -128,13 +134,13 @@ public class BankingTask implements Task {
 
     public BankingTask(
             Mode mode,
-            String keepItemName,
+            String[] keepItemNames,
             String withdrawItemName,
             int withdrawAmount,
             BankLocation bankLocation
     ) {
         this.mode = mode;
-        this.keepItemName = keepItemName;
+        this.keepItemNames = keepItemNames;
         this.withdrawItemName = withdrawItemName;
         this.withdrawAmount = withdrawAmount;
         this.bankLocation = bankLocation;
@@ -272,15 +278,20 @@ public class BankingTask implements Task {
 
     /**
      * Perform the configured deposit operation.
+     *
+     * TODO: verify Rs2Bank.depositAllExcept(boolean, String...) actually accepts multiple
+     * item names in your Microbot version - only single-item usage was ever confirmed. If it
+     * turns out to only accept one name, you'd need to loop item-by-item instead.
      */
     private void performDeposit() {
 
         if (mode == Mode.DEPOSIT_ALL_EXCEPT
-                && keepItemName != null) {
+                && keepItemNames != null
+                && keepItemNames.length > 0) {
 
             Rs2Bank.depositAllExcept(
                     false,
-                    keepItemName
+                    keepItemNames
             );
 
             return;

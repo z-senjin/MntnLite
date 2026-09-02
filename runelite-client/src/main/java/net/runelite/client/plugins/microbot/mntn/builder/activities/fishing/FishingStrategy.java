@@ -13,27 +13,63 @@ import java.time.Duration;
 public class FishingStrategy implements Strategy {
 
     /**
+     * Pass as a ToolRequirement's quantity to mean "withdraw everything available" rather
+     * than a fixed count - matches BankingTask's own -1 = "withdraw all" convention, so it
+     * threads straight through with no translation needed.
+     */
+    public static final int WITHDRAW_ALL = -1;
+
+    /**
+     * One (item, quantity) pair a Method needs. quantity is what gets withdrawn when this
+     * item is missing from the inventory during banking - e.g. a Fishing rod wants exactly
+     * 1, Feathers usually want WITHDRAW_ALL (they're stackable, so "all" doesn't cost extra
+     * inventory space the way stacking multiple non-stackable tools would).
+     */
+    public static final class ToolRequirement {
+        public final String itemName;
+        public final int quantity;
+
+        public ToolRequirement(String itemName, int quantity) {
+            this.itemName = itemName;
+            this.quantity = quantity;
+        }
+    }
+
+    /**
      * One concrete fishing method.
      *
-     * canExecute() requires toolItemName to be available (inventory or bank) before the
-     * method is selectable. score() prefers whichever method you qualify for that gives the
-     * best combination of xp and material convenience - same pattern as CookingStrategy:
-     * inventory beats bank, bank beats nothing, and base xp still dominates when the gap is
-     * real (e.g. Cage Lobster's 90 xp vs Net Shrimp's 10 easily clears any materials bonus).
+     * toolRequirements supports spots that need MORE than one item to fish (e.g. fly fishing
+     * needs a Fishing rod AND Feathers), each with its own withdraw quantity. canExecute()
+     * requires every item to be available (inventory or bank) before the method is
+     * selectable.
+     *
+     * score() prefers whichever method you qualify for that gives the best combination of
+     * xp and material convenience - same pattern as CookingStrategy, averaged across however
+     * many tools this method needs so a 2-tool method doesn't get an unfair bonus over a
+     * 1-tool method just for having more items to check.
      */
     public enum Method {
         NET_SHRIMP(
                 1, 10,
                 1530,
                 "Net",
-                "Small fishing net",
+                new ToolRequirement[]{
+                        new ToolRequirement("Small fishing net", 1)
+                },
                 new WorldPoint(3242, 3149, 0) // TODO verify - placeholder
+        ),
+        FLY_FISH_SALMON(
+                30, 70, 1527, "Lure", new ToolRequirement[]{
+                new ToolRequirement("Fly fishing rod", 1), new ToolRequirement("Feather", WITHDRAW_ALL)
+        }, new WorldPoint(3241, 3243, 0)
         ),
         CAGE_LOBSTER(
                 40, 90,
                 2, // TODO verify - placeholder
                 "Cage",
-                "Lobster pot",
+                new ToolRequirement[]{
+                        new ToolRequirement("Lobster pot", 1)
+                },
                 new WorldPoint(2674, 3161, 0) // TODO verify - placeholder
         );
 
@@ -41,16 +77,16 @@ public class FishingStrategy implements Strategy {
         public final double xpValue;
         public final int npcId;
         public final String action;
-        public final String toolItemName;
+        public final ToolRequirement[] toolRequirements;
         public final WorldPoint location;
 
         Method(int requiredLevel, double xpValue, int npcId, String action,
-               String toolItemName, WorldPoint location) {
+               ToolRequirement[] toolRequirements, WorldPoint location) {
             this.requiredLevel = requiredLevel;
             this.xpValue = xpValue;
             this.npcId = npcId;
             this.action = action;
-            this.toolItemName = toolItemName;
+            this.toolRequirements = toolRequirements;
             this.location = location;
         }
     }
@@ -76,10 +112,19 @@ public class FishingStrategy implements Strategy {
         }
 
         /*
-         * We need the tool either in the inventory
-         * or available in the bank.
+         * Every required tool needs to be available - either in the
+         * inventory or in the bank. (Existence only, not the requested quantity - a bank
+         * with only 3 feathers when we'd like WITHDRAW_ALL still counts as "available".)
          */
-        return context.inventory().hasItem(method.toolItemName) || context.bank().hasItem(method.toolItemName);
+        for (ToolRequirement requirement : method.toolRequirements) {
+            boolean hasTool = context.inventory().hasItem(requirement.itemName)
+                    || context.bank().hasItem(requirement.itemName);
+            if (!hasTool) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     @Override
@@ -94,22 +139,24 @@ public class FishingStrategy implements Strategy {
         double score = method.xpValue;
 
         /*
-         * Prefer a method whose tool is already in the inventory.
-         * This avoids an unnecessary banking trip.
+         * Average the materials-convenience bonus across every required tool, rather than
+         * summing it - otherwise a method needing 2 tools would always out-score an
+         * equally-convenient 1-tool method purely by having more items to add points for.
+         *
+         * Per tool: inventory beats bank beats neither (same weighting as CookingStrategy).
          */
-        if (context.inventory().hasItem(method.toolItemName)) {
-            score += 30;
-        } else {
-            score += 10;
+        double convenienceTotal = 0;
+        for (ToolRequirement requirement : method.toolRequirements) {
+            if (context.inventory().hasItem(requirement.itemName)) {
+                convenienceTotal += 30;
+            } else if (context.bank().hasItem(requirement.itemName)) {
+                convenienceTotal += 10;
+            }
+            // else: 0 - shouldn't happen here since canExecute() already required it
+            // to be somewhere, but scores 0 defensively if that ever changes.
         }
 
-        /*
-         * A tool sitting in the bank is still usable,
-         * but requires a banking trip first.
-         */
-        if (context.bank().hasItem(method.toolItemName)) {
-            score += 10;
-        }
+        score += convenienceTotal / method.toolRequirements.length;
 
         return score;
     }
