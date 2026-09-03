@@ -284,7 +284,7 @@ public class CombatTask implements Task {
         }
 
         if (target != null) {
-            target.interact("Attack");
+            target.click("Attack");
             sleep(600, 1000);
         } else {
             // If no monster is nearby, re-center on the spawn area
