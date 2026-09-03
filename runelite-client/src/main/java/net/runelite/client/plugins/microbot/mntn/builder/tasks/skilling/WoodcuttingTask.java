@@ -168,6 +168,9 @@ public class WoodcuttingTask implements Task {
 
             String axe = WoodcuttingStrategy.findBestAxe(context, true);
             if (axe == null) {
+                if (WoodcuttingStrategy.findBestAxe(context, false) == null) {
+                    return TaskStatus.REPLAN;
+                }
                 phase = Phase.BANKING;
                 return TaskStatus.RUNNING;
             }
@@ -196,7 +199,10 @@ public class WoodcuttingTask implements Task {
 
     @Override
     public boolean needsReplan(AccountContext context) {
-        return context.getRealLevel(Skill.WOODCUTTING) < method.requiredLevel;
+        if (context.getRealLevel(Skill.WOODCUTTING) < method.requiredLevel) {
+            return true;
+        }
+        return WoodcuttingStrategy.findBestAxe(context, false) == null;
     }
 
     @Override

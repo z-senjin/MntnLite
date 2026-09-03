@@ -137,6 +137,9 @@ public class MiningTask implements Task {
 
             MiningStrategy.Pickaxe pickaxe = MiningStrategy.findBestPickaxe(context, true);
             if (pickaxe == null) {
+                if (MiningStrategy.findBestPickaxe(context, false) == null) {
+                    return TaskStatus.REPLAN;
+                }
                 phase = Phase.BANKING;
                 return TaskStatus.RUNNING;
             }
@@ -188,7 +191,10 @@ public class MiningTask implements Task {
 
     @Override
     public boolean needsReplan(AccountContext context) {
-        return context.getRealLevel(Skill.MINING) < method.requiredLevel;
+        if (context.getRealLevel(Skill.MINING) < method.requiredLevel) {
+            return true;
+        }
+        return MiningStrategy.findBestPickaxe(context, false) == null;
     }
 
     @Override

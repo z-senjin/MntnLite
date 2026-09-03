@@ -72,11 +72,14 @@ public class FishingTask implements Task {
     }
 
     /**
-     * True only if every tool this method needs is currently in the inventory.
+     * True only if every tool this method needs is currently in inventory OR in the bank.
+     * If ANY required tool is missing from BOTH, returns false.
      */
-    private boolean hasAllToolsInBank(AccountContext context) {
+    private boolean hasAllToolsAvailable(AccountContext context) {
         for (ToolRequirement requirement : method.toolRequirements) {
-            if (!context.bank().hasItem(requirement.itemName)) {
+            boolean hasTool = context.inventory().hasItem(requirement.itemName)
+                    || context.bank().hasItem(requirement.itemName);
+            if (!hasTool) {
                 return false;
             }
         }
@@ -155,7 +158,8 @@ public class FishingTask implements Task {
     private TaskStatus handleBank(AccountContext context) {
         Microbot.log("Handling banking");
 
-        if(!hasAllTools(context) && !hasAllToolsInBank(context)){
+        if (!hasAllToolsAvailable(context)) {
+            Microbot.log("Missing required tool(s) everywhere -> REPLAN");
             return TaskStatus.REPLAN;
         }
 
@@ -175,6 +179,12 @@ public class FishingTask implements Task {
                 ToolRequirement missing = findMissingTool(context);
 
                 if (missing != null) {
+                    // Check if the missing tool actually exists in the bank before withdrawing
+                    if (!context.bank().hasItem(missing.itemName)) {
+                        Microbot.log("Missing tool " + missing.itemName + " not in bank -> REPLAN");
+                        return TaskStatus.REPLAN;
+                    }
+
                     // Withdraw one missing tool AT ITS OWN REQUESTED QUANTITY - 1 for a rod,
                     // WITHDRAW_ALL (-1) for feathers, or whatever a future tool asks for.
                     // BankingTask already treats -1 as "withdraw all" natively, so this
@@ -211,6 +221,10 @@ public class FishingTask implements Task {
             // Check whether we still need more banking (e.g. we just freed up space, or just
             // withdrew ONE of several missing tools) before heading back out to fish.
             if (!hasAllTools(context)) {
+                if (!hasAllToolsAvailable(context)) {
+                    Microbot.log("Still missing required tool after banking -> REPLAN");
+                    return TaskStatus.REPLAN;
+                }
                 phase = Phase.BANKING;
                 return TaskStatus.RUNNING;
             }
@@ -233,8 +247,11 @@ public class FishingTask implements Task {
     @Override
     public boolean needsReplan(AccountContext context) {
         // Guard against something external invalidating this strategy mid-run
-        // (e.g. a config change lowering the goal below the current level).
-        return context.getRealLevel(Skill.FISHING) < method.requiredLevel;
+        // (e.g. a config change lowering the goal below the current level, or running out of tools).
+        if (context.getRealLevel(Skill.FISHING) < method.requiredLevel) {
+            return true;
+        }
+        return !hasAllToolsAvailable(context);
     }
 
     @Override

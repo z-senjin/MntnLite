@@ -6,6 +6,7 @@ import net.runelite.client.plugins.microbot.Script;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.Activity;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.ActivityType;
 import net.runelite.api.Quest;
+import net.runelite.client.plugins.microbot.mntn.builder.activities.combat.CombatActivity;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.cooking.CookingActivity;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.fishing.FishingActivity;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.mining.MiningActivity;
@@ -69,10 +70,17 @@ public class MntnBuilderScript extends Script {
                 .skill(Skill.COOKING, config.cookingTarget())
                 .skill(Skill.WOODCUTTING, config.woodcuttingTarget())
                 .skill(Skill.MINING, config.miningTarget())
-                .skill(Skill.SMITHING, config.smithingTarget());
+                .skill(Skill.SMITHING, config.smithingTarget())
+                .skill(Skill.ATTACK, config.attackTarget())
+                .skill(Skill.STRENGTH, config.strengthTarget())
+                .skill(Skill.DEFENCE, config.defenceTarget());
 
         if (config.enableCooksAssistant()) {
             profileBuilder.quest(Quest.COOKS_ASSISTANT);
+        }
+
+        if (config.enableDoricsQuest()) {
+            profileBuilder.quest(Quest.DORICS_QUEST);
         }
 
         AccountProfile profile = profileBuilder.build();
@@ -84,8 +92,8 @@ public class MntnBuilderScript extends Script {
                 new WoodcuttingActivity(),
                 new MiningActivity(),
                 new SmithingActivity(),
-                new QuestingActivity()
-                // TODO: new CombatActivity()
+                new QuestingActivity(),
+                new CombatActivity(config)
         );
         planner = new AccountPlanner(goals, activities);
 
@@ -194,6 +202,12 @@ public class MntnBuilderScript extends Script {
              case QUESTING:
                  Rs2Antiban.setActivity(
                      net.runelite.client.plugins.microbot.util.antiban.enums.Activity.GENERAL_COLLECTING
+                 );
+                 break;
+
+             case COMBAT:
+                 Rs2Antiban.setActivity(
+                     net.runelite.client.plugins.microbot.util.antiban.enums.Activity.GENERAL_COMBAT
                  );
                  break;
 

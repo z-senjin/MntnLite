@@ -5,6 +5,7 @@ import net.runelite.client.plugins.microbot.mntn.builder.activities.Activity;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.ActivityType;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.Strategy;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.questing.quests.cooksassistant.CooksAssistantStrategy;
+import net.runelite.client.plugins.microbot.mntn.builder.activities.questing.quests.doricsquest.DoricQuestStrategy;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.ActivityRequest;
 
@@ -27,7 +28,8 @@ public class QuestingActivity implements Activity {
 
         if (request.payload() instanceof Quest) {
             Quest quest = (Quest) request.payload();
-            return quest == Quest.COOKS_ASSISTANT;
+            return quest == Quest.COOKS_ASSISTANT
+                    || quest == Quest.DORICS_QUEST;
         }
 
         return true;
@@ -40,10 +42,15 @@ public class QuestingActivity implements Activity {
             if (quest == Quest.COOKS_ASSISTANT) {
                 return Collections.singletonList(new CooksAssistantStrategy());
             }
+            if (quest == Quest.DORICS_QUEST) {
+                return Collections.singletonList(new DoricQuestStrategy());
+            }
         }
 
         List<Strategy> strategies = new ArrayList<>();
         strategies.add(new CooksAssistantStrategy());
+        strategies.add(new DoricQuestStrategy());
         return strategies;
     }
 }
+

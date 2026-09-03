@@ -71,6 +71,46 @@ public interface MntnBuilderConfig extends Config {
         return 20;
     }
 
+    @ConfigItem(
+            keyName = "attackTarget",
+            name = "Attack target level",
+            description = "The planner will keep training Attack until real level reaches this",
+            position = 6
+    )
+    default int attackTarget() {
+        return 20;
+    }
+
+    @ConfigItem(
+            keyName = "strengthTarget",
+            name = "Strength target level",
+            description = "The planner will keep training Strength until real level reaches this",
+            position = 7
+    )
+    default int strengthTarget() {
+        return 20;
+    }
+
+    @ConfigItem(
+            keyName = "defenceTarget",
+            name = "Defence target level",
+            description = "The planner will keep training Defence until real level reaches this",
+            position = 8
+    )
+    default int defenceTarget() {
+        return 20;
+    }
+
+    @ConfigItem(
+            keyName = "prayerTarget",
+            name = "Prayer target level",
+            description = "The planner will keep training Prayer and burying bones until real level reaches this",
+            position = 9
+    )
+    default int prayerTarget() {
+        return 20;
+    }
+
     @ConfigSection(
             name = "Quests",
             description = "Quest goals for the builder to complete",
@@ -86,6 +126,17 @@ public interface MntnBuilderConfig extends Config {
             position = 1
     )
     default boolean enableCooksAssistant() {
+        return true;
+    }
+
+    @ConfigItem(
+            keyName = "enableDoricsQuest",
+            name = "Doric's Quest",
+            description = "Complete Doric's Quest (requires Mining level 15)",
+            section = "questsSection",
+            position = 2
+    )
+    default boolean enableDoricsQuest() {
         return true;
     }
 }

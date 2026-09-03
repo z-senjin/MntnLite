@@ -180,6 +180,10 @@ public class CookingTask implements Task {
      */
     private TaskStatus handleBank(AccountContext context) {
 
+        if (!context.inventory().hasItem(method.rawItemName) && !context.bank().hasItem(method.rawItemName)) {
+            return TaskStatus.REPLAN;
+        }
+
         if (bankingTask == null) {
 
             bankingTask =
@@ -197,6 +201,9 @@ public class CookingTask implements Task {
         if (bankStatus == TaskStatus.COMPLETE) {
 
             bankingTask = null;
+            if (!context.inventory().hasItem(method.rawItemName)) {
+                return TaskStatus.REPLAN;
+            }
             phase = Phase.WALK_TO_COOKING;
         }
 
@@ -208,10 +215,12 @@ public class CookingTask implements Task {
 
         /*
          * If our Cooking level somehow becomes invalid
-         * for the selected strategy, replan.
+         * for the selected strategy, or if raw food is gone, replan.
          */
-        return context.getRealLevel(Skill.COOKING)
-                < method.requiredLevel;
+        if (context.getRealLevel(Skill.COOKING) < method.requiredLevel) {
+            return true;
+        }
+        return !context.inventory().hasItem(method.rawItemName) && !context.bank().hasItem(method.rawItemName);
     }
 
     @Override
