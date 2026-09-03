@@ -55,12 +55,12 @@ public class ForgingTask implements Task {
             return TaskStatus.RUNNING;
         }
 
-        if (context.isNear(ForgingStrategy.FALADOR_ANVIL, 10)) {
+        if (context.isNear(ForgingStrategy.VARROCK_ANVIL, 10)) {
             phase = Phase.FORGING;
             return TaskStatus.RUNNING;
         }
 
-        Rs2Walker.walkTo(ForgingStrategy.FALADOR_ANVIL);
+        Rs2Walker.walkTo(ForgingStrategy.VARROCK_ANVIL);
         return TaskStatus.RUNNING;
     }
 
@@ -84,11 +84,25 @@ public class ForgingTask implements Task {
             return TaskStatus.RUNNING;
         }
 
-        if (!Rs2Widget.isSmithingWidgetOpen()) {
-            anvil.click("Smith");
-            boolean open = sleepUntilTrue(Rs2Widget::isSmithingWidgetOpen, 200, 5000);
-            if (!open) {
+        if (Microbot.getClient().getLocalPlayer() != null) {
+
+            boolean isMovingOrAnimating = Rs2Player.isAnimating() || Rs2Player.isMoving();
+
+            sleep(300, 1000);
+
+            boolean isMovingOrAnimatingAgain = Rs2Player.isAnimating() || Rs2Player.isMoving();
+
+
+            if (isMovingOrAnimating || isMovingOrAnimatingAgain) {
                 return TaskStatus.RUNNING;
+            } else {
+                if (!Rs2Widget.isSmithingWidgetOpen()) {
+                    anvil.click("Smith");
+                    boolean open = sleepUntilTrue(Rs2Widget::isSmithingWidgetOpen, 200, 5000);
+                    if (!open) {
+                        return TaskStatus.RUNNING;
+                    }
+                }
             }
         }
 

@@ -20,7 +20,7 @@ import static net.runelite.client.plugins.microbot.util.Global.sleepUntilTrue;
 
 public class SmeltingTask implements Task {
 
-    private static final int[] FURNACE_OBJECT_IDS = {2030, 2099};
+    private static final int[] FURNACE_OBJECT_IDS = {24009};
 
     private enum Phase {
         WALK_TO_FURNACE, SMELTING, BANKING
@@ -87,7 +87,22 @@ public class SmeltingTask implements Task {
             return TaskStatus.RUNNING;
         }
 
-        furnace.click("Smelt");
+        if (Microbot.getClient().getLocalPlayer() != null) {
+
+            boolean isMovingOrAnimating = Rs2Player.isAnimating() || Rs2Player.isMoving();
+
+            sleep(300, 1000);
+
+            boolean isMovingOrAnimatingAgain = Rs2Player.isAnimating() || Rs2Player.isMoving();
+
+
+            if (isMovingOrAnimating || isMovingOrAnimatingAgain) {
+                return TaskStatus.RUNNING;
+            } else {
+                furnace.click("Smelt");
+            }
+        }
+
 
         boolean open = sleepUntilTrue(Rs2Widget::isProductionWidgetOpen, 200, 6000);
         if (open) {

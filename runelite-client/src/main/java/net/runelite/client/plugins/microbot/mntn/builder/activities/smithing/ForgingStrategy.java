@@ -29,7 +29,7 @@ public class ForgingStrategy implements Strategy {
     }
 
     public static final String HAMMER = "Hammer";
-    public static final WorldPoint FALADOR_ANVIL = new WorldPoint(2978, 3368, 0);
+    public static final WorldPoint VARROCK_ANVIL = new WorldPoint(3187, 3427, 0);
 
     private final BarType barType;
 
