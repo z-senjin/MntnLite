@@ -16,6 +16,8 @@ import net.runelite.client.plugins.microbot.mntn.builder.activities.woodcutting.
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountProfile;
 import net.runelite.client.plugins.microbot.mntn.builder.core.goals.Goal;
+import net.runelite.client.plugins.microbot.mntn.builder.core.goals.QuestGoal;
+import net.runelite.client.plugins.microbot.mntn.builder.core.goals.SkillGoal;
 import net.runelite.client.plugins.microbot.mntn.builder.core.planner.AccountPlanner;
 import net.runelite.client.plugins.microbot.mntn.builder.core.planner.Plan;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
@@ -25,10 +27,14 @@ import net.runelite.client.plugins.microbot.mntn.builder.tasks.banking.BankingTa
 import net.runelite.client.plugins.microbot.util.antiban.Rs2Antiban;
 import net.runelite.client.plugins.microbot.util.antiban.enums.ActivityIntensity;
 import net.runelite.client.plugins.microbot.util.dialogues.Rs2Dialogue;
+import net.runelite.client.plugins.microbot.util.math.Rs2Random;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -47,7 +53,24 @@ public class MntnBuilderScript extends Script {
     private final TaskManager taskManager = new TaskManager();
     private AccountPlanner planner;
     private Plan currentPlan;
+    private MntnBuilderConfig config;
 
+    private final Map<Skill, Double> skillPriorities = new HashMap<>();
+    private final Map<Quest, Integer> questPriorities = new HashMap<>();
+
+    // Cached config snapshot to detect modifications even without event triggers
+    private int lastFishingTarget;
+    private int lastCookingTarget;
+    private int lastWoodcuttingTarget;
+    private int lastMiningTarget;
+    private int lastSmithingTarget;
+    private int lastAttackTarget;
+    private int lastStrengthTarget;
+    private int lastDefenceTarget;
+    private int lastPrayerTarget;
+    private boolean lastCooksAssistant;
+    private boolean lastDoricsQuest;
+    private ActivityIntensity lastAntibanIntensity;
 
     private boolean initialBankDone = false;
     private boolean antibanInitialized = false;
@@ -60,32 +83,98 @@ public class MntnBuilderScript extends Script {
     public java.time.Instant debugTaskStartTime = null;
     public double debugScore = 0;
 
+    public List<Goal> buildGoals(MntnBuilderConfig cfg) {
+        List<Goal> goals = new ArrayList<>();
+
+        addSkillGoal(goals, Skill.FISHING, cfg.fishingTarget());
+        addSkillGoal(goals, Skill.COOKING, cfg.cookingTarget());
+        addSkillGoal(goals, Skill.WOODCUTTING, cfg.woodcuttingTarget());
+        addSkillGoal(goals, Skill.MINING, cfg.miningTarget());
+        addSkillGoal(goals, Skill.SMITHING, cfg.smithingTarget());
+        addSkillGoal(goals, Skill.ATTACK, cfg.attackTarget());
+        addSkillGoal(goals, Skill.STRENGTH, cfg.strengthTarget());
+        addSkillGoal(goals, Skill.DEFENCE, cfg.defenceTarget());
+
+        if (cfg.enableCooksAssistant()) {
+            addQuestGoal(goals, Quest.COOKS_ASSISTANT);
+        }
+
+        if (cfg.enableDoricsQuest()) {
+            addQuestGoal(goals, Quest.DORICS_QUEST);
+        }
+
+        return goals;
+    }
+
+    private void addSkillGoal(List<Goal> goals, Skill skill, int targetLevel) {
+        double priority = skillPriorities.computeIfAbsent(skill, s -> (double) Rs2Random.between(40, 60));
+        goals.add(new SkillGoal(skill, targetLevel, priority));
+    }
+
+    private void addQuestGoal(List<Goal> goals, Quest quest) {
+        int priority = questPriorities.computeIfAbsent(quest, q -> Rs2Random.between(40, 60));
+        goals.add(new QuestGoal(quest, priority));
+    }
+
+    private void updateConfigSnapshot(MntnBuilderConfig cfg) {
+        lastFishingTarget = cfg.fishingTarget();
+        lastCookingTarget = cfg.cookingTarget();
+        lastWoodcuttingTarget = cfg.woodcuttingTarget();
+        lastMiningTarget = cfg.miningTarget();
+        lastSmithingTarget = cfg.smithingTarget();
+        lastAttackTarget = cfg.attackTarget();
+        lastStrengthTarget = cfg.strengthTarget();
+        lastDefenceTarget = cfg.defenceTarget();
+        lastPrayerTarget = cfg.prayerTarget();
+        lastCooksAssistant = cfg.enableCooksAssistant();
+        lastDoricsQuest = cfg.enableDoricsQuest();
+        lastAntibanIntensity = cfg.antibanIntensity();
+    }
+
+    private boolean isConfigChanged(MntnBuilderConfig cfg) {
+        return cfg.fishingTarget() != lastFishingTarget
+                || cfg.cookingTarget() != lastCookingTarget
+                || cfg.woodcuttingTarget() != lastWoodcuttingTarget
+                || cfg.miningTarget() != lastMiningTarget
+                || cfg.smithingTarget() != lastSmithingTarget
+                || cfg.attackTarget() != lastAttackTarget
+                || cfg.strengthTarget() != lastStrengthTarget
+                || cfg.defenceTarget() != lastDefenceTarget
+                || cfg.prayerTarget() != lastPrayerTarget
+                || cfg.enableCooksAssistant() != lastCooksAssistant
+                || cfg.enableDoricsQuest() != lastDoricsQuest
+                || cfg.antibanIntensity() != lastAntibanIntensity;
+    }
+
+    public void onConfigChanged(MntnBuilderConfig newConfig) {
+        this.config = newConfig;
+        updateConfigSnapshot(newConfig);
+
+        Microbot.log("[MntnBuilder] Config changed: updating goals and targets");
+
+        List<Goal> updatedGoals = buildGoals(newConfig);
+        if (planner != null) {
+            planner.setGoals(updatedGoals);
+        }
+
+        Rs2Antiban.setActivityIntensity(newConfig.antibanIntensity());
+
+        // If the currently active goal was completed by the config change, replan immediately
+        if (currentPlan != null && currentPlan.goal().isComplete(context)) {
+            Microbot.log("[MntnBuilder] Current goal completed by config update: " + currentPlan.goal().name() + " -> replanning");
+            currentPlan = null;
+            taskManager.setTask(null);
+            replan();
+        } else {
+            replan();
+        }
+    }
+
     public boolean run(MntnBuilderConfig config) {
-        // AccountProfile is now the single "what does this account want to become" source -
-        // doc section 4. Config values feed the target levels; priority for each is
-        // randomized by AccountProfile itself (Rs2Random) so this account's goal-weighting
-        // doesn't play out identically to every other account run off the same config.
-        AccountProfile.Builder profileBuilder = AccountProfile.builder()
-                .skill(Skill.FISHING, config.fishingTarget())
-                .skill(Skill.COOKING, config.cookingTarget())
-                .skill(Skill.WOODCUTTING, config.woodcuttingTarget())
-                .skill(Skill.MINING, config.miningTarget())
-                .skill(Skill.SMITHING, config.smithingTarget())
-                .skill(Skill.ATTACK, config.attackTarget())
-                .skill(Skill.STRENGTH, config.strengthTarget())
-                .skill(Skill.DEFENCE, config.defenceTarget());
+        this.config = config;
+        updateConfigSnapshot(config);
 
-        if (config.enableCooksAssistant()) {
-            profileBuilder.quest(Quest.COOKS_ASSISTANT);
-        }
-
-        if (config.enableDoricsQuest()) {
-            profileBuilder.quest(Quest.DORICS_QUEST);
-        }
-
-        AccountProfile profile = profileBuilder.build();
-
-        List<Goal> goals = profile.toGoals();
+        List<Goal> goals = buildGoals(config);
         List<Activity> activities = Arrays.asList(
                 new FishingActivity(),
                 new CookingActivity(),
@@ -102,11 +191,24 @@ public class MntnBuilderScript extends Script {
                 if (!Microbot.isLoggedIn()) return;
                 if (!super.run()) return;
 
-                setupAntiban(config);
+                // Check for dynamic config updates
+                if (this.config != null && isConfigChanged(this.config)) {
+                    onConfigChanged(this.config);
+                }
+
+                setupAntiban(this.config);
 
                 if (!initialBankDone) {
                     runInitialBanking();
                     return;
+                }
+
+                // Check if current goal is complete
+                if (currentPlan != null && currentPlan.goal().isComplete(context)) {
+                    Microbot.log("[MntnBuilder] Goal reached: " + currentPlan.goal().name() + "! Replanning...");
+                    currentPlan = null;
+                    taskManager.setTask(null);
+                    replan();
                 }
 
                 if (!taskManager.hasTask()) {
@@ -309,5 +411,11 @@ public class MntnBuilderScript extends Script {
     @Override
     public void shutdown() {
         super.shutdown();
+        skillPriorities.clear();
+        questPriorities.clear();
+        currentPlan = null;
+        taskManager.setTask(null);
+        initialBankDone = false;
+        antibanInitialized = false;
     }
 }

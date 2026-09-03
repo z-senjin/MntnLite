@@ -19,12 +19,20 @@ import java.util.List;
  */
 public class AccountPlanner {
 
-    private final List<Goal> goals;
+    private List<Goal> goals;
     private final List<Activity> activities;
 
     public AccountPlanner(List<Goal> goals, List<Activity> activities) {
         this.goals = goals;
         this.activities = activities;
+    }
+
+    public void setGoals(List<Goal> goals) {
+        this.goals = goals;
+    }
+
+    public List<Goal> getGoals() {
+        return goals;
     }
 
     public List<Plan> planAll(AccountContext context) {

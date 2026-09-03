@@ -7,11 +7,13 @@ import net.runelite.client.config.ConfigItem;
 import net.runelite.client.config.ConfigSection;
 import net.runelite.client.plugins.microbot.util.antiban.enums.ActivityIntensity;
 
-@ConfigGroup("MntnBuilder")
+@ConfigGroup(MntnBuilderConfig.CONFIG_GROUP)
 @ConfigInformation("Planner-driven F2P account builder. This vertical-slice build only knows " +
         "about a single Fishing goal - once that loop is validated end-to-end, add Cooking/" +
         "Combat/Woodcutting goals and activities the same way.")
 public interface MntnBuilderConfig extends Config {
+    String CONFIG_GROUP = "MntnBuilder";
+
     @ConfigItem(
             keyName = "antibanIntensity",
             name = "Antiban intensity",
