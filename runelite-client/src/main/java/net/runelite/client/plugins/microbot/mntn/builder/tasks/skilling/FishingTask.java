@@ -41,9 +41,18 @@ public class FishingTask implements Task {
         this.method = method;
     }
 
+    private void debugLog(AccountContext context, String message) {
+        if (context.isDebugLogging()) {
+            Microbot.log("[MntnBuilder][FishingTask][DEBUG] " + message);
+        }
+    }
+
     @Override
     public TaskStatus tick(AccountContext context) {
+        debugLog(context, "tick: phase=" + phase + ", method=" + method.name());
+
         if (!context.isLoggedIn()) {
+            debugLog(context, "Not logged in, returning BLOCKED");
             return TaskStatus.BLOCKED;
         }
 
@@ -55,6 +64,7 @@ public class FishingTask implements Task {
             case BANKING:
                 return handleBank(context);
             default:
+                debugLog(context, "Unknown phase, returning RUNNING");
                 return TaskStatus.RUNNING;
         }
     }
@@ -117,29 +127,37 @@ public class FishingTask implements Task {
     }
 
     private TaskStatus handleWalk(AccountContext context) {
+        debugLog(context, "handleWalk: checking tools");
 
         if (!hasAllTools(context)) {
+            debugLog(context, "Missing tools, switching to BANKING phase");
             phase = Phase.BANKING;
             return TaskStatus.RUNNING;
         }
 
         Rs2NpcModel spot = Microbot.getRs2NpcCache().query().withId(method.npcId).nearest();
         if (spot != null) {
+            debugLog(context, "Fishing spot found at " + spot.getWorldLocation() + ", switching to FISHING phase");
             phase = Phase.FISHING;
             return TaskStatus.RUNNING;
         }
+        debugLog(context, "No fishing spot nearby, walking to " + method.location);
         Rs2Walker.walkTo(method.location);
         return TaskStatus.RUNNING;
     }
 
     private TaskStatus handleFish(AccountContext context) {
+        debugLog(context, "handleFish: inventoryFull=" + context.inventory().isFull() + ", hasAllTools=" + hasAllTools(context));
+
         if (context.inventory().isFull() || !hasAllTools(context)) {
+            debugLog(context, "Inventory full or missing tools, switching to BANKING phase");
             phase = Phase.BANKING;
             return TaskStatus.RUNNING;
         }
 
         Rs2NpcModel spot = Microbot.getRs2NpcCache().query().withId(method.npcId).nearest();
         if (spot == null) {
+            debugLog(context, "Fishing spot not found, switching to WALK_TO_SPOT phase");
             phase = Phase.WALK_TO_SPOT;
             return TaskStatus.RUNNING;
         }
@@ -150,16 +168,19 @@ public class FishingTask implements Task {
         boolean areWeReallyAnimating = Microbot.getClient().getLocalPlayer() != null
                 && Microbot.getClient().getLocalPlayer().getAnimation() != -1;
         if (!isAnimating && !areWeReallyAnimating) {
+            debugLog(context, "Not animating, clicking fishing spot with action: " + method.action);
             sleepUntil(() -> spot.click(method.action), 2000);
+        } else {
+            debugLog(context, "Already animating, waiting");
         }
         return TaskStatus.RUNNING;
     }
 
     private TaskStatus handleBank(AccountContext context) {
-        Microbot.log("Handling banking");
+        debugLog(context, "handleBank: inventoryFull=" + context.inventory().isFull() + ", hasAllTools=" + hasAllTools(context) + ", hasAllToolsAvailable=" + hasAllToolsAvailable(context));
 
         if (!hasAllToolsAvailable(context)) {
-            Microbot.log("Missing required tool(s) everywhere -> REPLAN");
+            debugLog(context, "Missing required tool(s) everywhere (inventory + bank) -> REPLAN");
             return TaskStatus.REPLAN;
         }
 
@@ -167,6 +188,7 @@ public class FishingTask implements Task {
         if (bankingTask == null) {
 
             if (context.inventory().isFull()) {
+                debugLog(context, "Inventory full, creating DEPOSIT_ALL_EXCEPT banking task with keepItems=" + java.util.Arrays.toString(ownedTools(context)));
                 // Free up space first (regardless of what's missing), protecting whatever
                 // tools we already have. If we're also missing a tool, we'll catch that on
                 // the next pass once there's room to withdraw it into.
@@ -179,9 +201,10 @@ public class FishingTask implements Task {
                 ToolRequirement missing = findMissingTool(context);
 
                 if (missing != null) {
+                    debugLog(context, "Missing tool in inventory: " + missing.itemName + " (qty=" + missing.quantity + ")");
                     // Check if the missing tool actually exists in the bank before withdrawing
                     if (!context.bank().hasItem(missing.itemName)) {
-                        Microbot.log("Missing tool " + missing.itemName + " not in bank -> REPLAN");
+                        debugLog(context, "Missing tool " + missing.itemName + " not in bank -> REPLAN");
                         return TaskStatus.REPLAN;
                     }
 
@@ -191,6 +214,7 @@ public class FishingTask implements Task {
                     // passes straight through with no translation needed.
                     // If more than one tool is missing, handleBank() loops back here again
                     // once this completes and picks up the next one.
+                    debugLog(context, "Creating WITHDRAW banking task for " + missing.itemName + " qty=" + missing.quantity);
                     bankingTask = new BankingTask(
                             BankingTask.Mode.WITHDRAW,
                             null,
@@ -201,18 +225,20 @@ public class FishingTask implements Task {
                     // Not full, nothing missing - shouldn't normally reach BANKING in this
                     // state, but guard with a no-op-ish deposit-except pass rather than
                     // getting stuck with bankingTask staying null forever.
+                    debugLog(context, "Not full, nothing missing, creating DEPOSIT_ALL_EXCEPT banking task");
                     bankingTask = new BankingTask(
                             BankingTask.Mode.DEPOSIT_ALL_EXCEPT,
                             ownedTools(context)
                     );
                 }
             }
+            // BankingTask now uses context.isDebugLogging() directly
         }
 
         TaskStatus bankStatus = bankingTask.tick(context);
 
-        Microbot.log("BankStatus: " + bankStatus);
-        Microbot.log("BankTask: " + bankingTask.describe());
+        debugLog(context, "BankStatus: " + bankStatus);
+        debugLog(context, "BankTask: " + bankingTask.describe());
 
         if (bankStatus == TaskStatus.COMPLETE) {
 
@@ -222,13 +248,15 @@ public class FishingTask implements Task {
             // withdrew ONE of several missing tools) before heading back out to fish.
             if (!hasAllTools(context)) {
                 if (!hasAllToolsAvailable(context)) {
-                    Microbot.log("Still missing required tool after banking -> REPLAN");
+                    debugLog(context, "Still missing required tool after banking -> REPLAN");
                     return TaskStatus.REPLAN;
                 }
+                debugLog(context, "Tools still missing from inventory, staying in BANKING phase");
                 phase = Phase.BANKING;
                 return TaskStatus.RUNNING;
             }
 
+            debugLog(context, "All tools in inventory, switching to WALK_TO_SPOT phase");
             phase = Phase.WALK_TO_SPOT;
 
             return TaskStatus.RUNNING;
@@ -237,6 +265,7 @@ public class FishingTask implements Task {
         if (bankStatus == TaskStatus.FAILED
                 || bankStatus == TaskStatus.REPLAN) {
 
+            debugLog(context, "Banking task failed/replan, clearing banking task");
             bankingTask = null;
             return bankStatus;
         }
@@ -248,10 +277,12 @@ public class FishingTask implements Task {
     public boolean needsReplan(AccountContext context) {
         // Guard against something external invalidating this strategy mid-run
         // (e.g. a config change lowering the goal below the current level, or running out of tools).
-        if (context.getRealLevel(Skill.FISHING) < method.requiredLevel) {
-            return true;
+        boolean levelCheck = context.getRealLevel(Skill.FISHING) < method.requiredLevel;
+        boolean toolsCheck = !hasAllToolsAvailable(context);
+        if (levelCheck || toolsCheck) {
+            debugLog(context, "needsReplan: levelCheck=" + levelCheck + " (current=" + context.getRealLevel(Skill.FISHING) + ", required=" + method.requiredLevel + "), toolsCheck=" + toolsCheck);
         }
-        return !hasAllToolsAvailable(context);
+        return levelCheck || toolsCheck;
     }
 
     @Override

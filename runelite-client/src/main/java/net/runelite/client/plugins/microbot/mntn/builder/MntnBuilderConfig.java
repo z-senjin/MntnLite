@@ -15,6 +15,15 @@ public interface MntnBuilderConfig extends Config {
     String CONFIG_GROUP = "MntnBuilder";
 
     @ConfigItem(
+            keyName = "debugLogging",
+            name = "Debug logging",
+            description = "Enable extensive debug logging for troubleshooting"
+    )
+    default boolean debugLogging() {
+        return false;
+    }
+
+    @ConfigItem(
             keyName = "antibanIntensity",
             name = "Antiban intensity",
             description = "Activity intensity used by Mntn"

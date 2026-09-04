@@ -31,9 +31,18 @@ public class ForgingTask implements Task {
         this.barType = barType;
     }
 
+    private void debugLog(AccountContext context, String message) {
+        if (context.isDebugLogging()) {
+            Microbot.log("[MntnBuilder][ForgingTask][DEBUG] " + message);
+        }
+    }
+
     @Override
     public TaskStatus tick(AccountContext context) {
+        debugLog(context, "tick: phase=" + phase + ", barType=" + barType.name());
+
         if (!context.isLoggedIn()) {
+            debugLog(context, "Not logged in, returning BLOCKED");
             return TaskStatus.BLOCKED;
         }
 
@@ -45,32 +54,42 @@ public class ForgingTask implements Task {
             case BANKING:
                 return handleBank(context);
             default:
+                debugLog(context, "Unknown phase, returning RUNNING");
                 return TaskStatus.RUNNING;
         }
     }
 
     private TaskStatus handleWalk(AccountContext context) {
+        debugLog(context, "handleWalk: hasHammerAndBars=" + hasHammerAndBars(context) + ", nearAnvil=" + context.isNear(ForgingStrategy.VARROCK_ANVIL, 10));
+
         if (!hasHammerAndBars(context)) {
+            debugLog(context, "Missing hammer or bars, switching to BANKING");
             phase = Phase.BANKING;
             return TaskStatus.RUNNING;
         }
 
         if (context.isNear(ForgingStrategy.VARROCK_ANVIL, 10)) {
+            debugLog(context, "Near anvil, switching to FORGING");
             phase = Phase.FORGING;
             return TaskStatus.RUNNING;
         }
 
+        debugLog(context, "Walking to anvil: " + ForgingStrategy.VARROCK_ANVIL);
         Rs2Walker.walkTo(ForgingStrategy.VARROCK_ANVIL);
         return TaskStatus.RUNNING;
     }
 
     private TaskStatus handleForging(AccountContext context) {
+        debugLog(context, "handleForging: hasHammerAndBars=" + hasHammerAndBars(context));
+
         if (!hasHammerAndBars(context)) {
+            debugLog(context, "Missing hammer or bars, switching to BANKING");
             phase = Phase.BANKING;
             return TaskStatus.RUNNING;
         }
 
         if (Rs2Player.isAnimating() || Rs2Player.isMoving()) {
+            debugLog(context, "Already animating/moving, waiting");
             return TaskStatus.RUNNING;
         }
 
@@ -80,6 +99,7 @@ public class ForgingTask implements Task {
                 .nearest();
 
         if (anvil == null) {
+            debugLog(context, "Anvil not found, switching to WALK_TO_ANVIL");
             phase = Phase.WALK_TO_ANVIL;
             return TaskStatus.RUNNING;
         }
@@ -94,12 +114,15 @@ public class ForgingTask implements Task {
 
 
             if (isMovingOrAnimating || isMovingOrAnimatingAgain) {
+                debugLog(context, "Already animating/moving after sleep, waiting");
                 return TaskStatus.RUNNING;
             } else {
                 if (!Rs2Widget.isSmithingWidgetOpen()) {
+                    debugLog(context, "Clicking anvil to open smithing widget");
                     anvil.click("Smith");
                     boolean open = sleepUntilTrue(Rs2Widget::isSmithingWidgetOpen, 200, 5000);
                     if (!open) {
+                        debugLog(context, "Smithing widget did not open");
                         return TaskStatus.RUNNING;
                     }
                 }
@@ -109,6 +132,7 @@ public class ForgingTask implements Task {
         int barCount = context.inventory().getCount(barType.barItemName);
         String targetItem = determineBestItemToForge(context, barCount);
         if (targetItem != null) {
+            debugLog(context, "Clicking widget for: " + targetItem);
             Rs2Widget.clickWidget(targetItem);
             sleep(600, 1000);
         }
@@ -117,15 +141,19 @@ public class ForgingTask implements Task {
     }
 
     private TaskStatus handleBank(AccountContext context) {
+        debugLog(context, "handleBank: bankingTask=" + (bankingTask != null ? bankingTask.describe() : "null"));
+
         if (bankingTask == null) {
             boolean hasHammer = context.inventory().hasItem(ForgingStrategy.HAMMER);
             if (hasHammer) {
+                debugLog(context, "Has hammer, creating DEPOSIT_ALL_AND_WITHDRAW keeping hammer, withdrawing all bars");
                 bankingTask = new BankingTask(
                         BankingTask.Mode.DEPOSIT_ALL_AND_WITHDRAW,
                         new String[]{ForgingStrategy.HAMMER},
                         new BankingTask.ItemWithdrawal(barType.barItemName, -1)
                 );
             } else {
+                debugLog(context, "No hammer, creating DEPOSIT_ALL_AND_WITHDRAW withdrawing hammer and bars");
                 bankingTask = new BankingTask(
                         BankingTask.Mode.DEPOSIT_ALL_AND_WITHDRAW,
                         null,
@@ -138,18 +166,22 @@ public class ForgingTask implements Task {
         TaskStatus bankStatus = bankingTask.tick(context);
 
         if (bankStatus == TaskStatus.COMPLETE) {
+            debugLog(context, "Banking complete");
             bankingTask = null;
 
             if (!hasHammerAndBars(context)) {
                 // Out of bars or missing hammer in bank
+                debugLog(context, "Missing hammer or bars after banking, returning REPLAN");
                 return TaskStatus.REPLAN;
             }
 
+            debugLog(context, "Switching to WALK_TO_ANVIL");
             phase = Phase.WALK_TO_ANVIL;
             return TaskStatus.RUNNING;
         }
 
         if (bankStatus == TaskStatus.FAILED || bankStatus == TaskStatus.REPLAN) {
+            debugLog(context, "Banking failed/replan: " + bankStatus);
             bankingTask = null;
             return bankStatus;
         }
@@ -199,7 +231,11 @@ public class ForgingTask implements Task {
 
     @Override
     public boolean needsReplan(AccountContext context) {
-        return context.getRealLevel(Skill.SMITHING) < barType.requiredLevel;
+        boolean levelCheck = context.getRealLevel(Skill.SMITHING) < barType.requiredLevel;
+        if (levelCheck) {
+            debugLog(context, "needsReplan: levelCheck=" + levelCheck + " (current=" + context.getRealLevel(Skill.SMITHING) + ", required=" + barType.requiredLevel + ")");
+        }
+        return levelCheck;
     }
 
     @Override

@@ -27,6 +27,7 @@ public class AccountContext {
     private final InventoryView inventory = new InventoryView();
     private final BankView bank = new BankView();
     private final EquipmentView equipment = new EquipmentView();
+    private boolean debugLogging = false;
 
     public InventoryView inventory() {
         return inventory;
@@ -38,6 +39,14 @@ public class AccountContext {
 
     public EquipmentView equipment() {
         return equipment;
+    }
+
+    public boolean isDebugLogging() {
+        return debugLogging;
+    }
+
+    public void setDebugLogging(boolean debugLogging) {
+        this.debugLogging = debugLogging;
     }
 
     public boolean isLoggedIn() {

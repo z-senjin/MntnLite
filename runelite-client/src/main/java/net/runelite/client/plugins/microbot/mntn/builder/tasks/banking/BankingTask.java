@@ -122,6 +122,12 @@ public class BankingTask implements Task {
 
     private Phase phase = Phase.WALK;
 
+    private void debugLog(AccountContext context, String message) {
+        if (context.isDebugLogging()) {
+            Microbot.log("[MntnBuilder][BankingTask][DEBUG] " + message);
+        }
+    }
+
     public BankingTask(
             Mode mode,
             String... keepItemNames
@@ -231,15 +237,19 @@ public class BankingTask implements Task {
     @Override
     public TaskStatus tick(AccountContext context) {
 
+        debugLog(context, "tick: phase=" + phase + ", mode=" + mode);
+
         switch (phase) {
 
             case WALK:
 
                 if (Rs2Bank.isOpen()) {
+                    debugLog(context, "Bank already open, moving to DEPOSIT phase");
                     phase = Phase.DEPOSIT;
                     return TaskStatus.RUNNING;
                 }
 
+                debugLog(context, "Walking to bank");
                 Rs2Bank.walkToBank();
 
                 phase = Phase.OPEN;
@@ -248,9 +258,9 @@ public class BankingTask implements Task {
 
 
             case OPEN:
-                Microbot.log("OPEN");
+                debugLog(context, "OPEN phase");
                 if (!Rs2Bank.isOpen()) {
-                    Microbot.log("oepning bank");
+                    debugLog(context, "Bank not open, opening bank");
                     Rs2Bank.openBank();
                     return TaskStatus.RUNNING;
                 }
@@ -259,8 +269,10 @@ public class BankingTask implements Task {
                  * Refresh our account context after opening.
                  */
                 context.bank().refresh();
+                debugLog(context, "Bank opened, bank cache refreshed");
 
                 phase = determineNextPhase();
+                debugLog(context, "Next phase determined: " + phase);
 
                 return TaskStatus.RUNNING;
 
@@ -268,37 +280,43 @@ public class BankingTask implements Task {
             case DEPOSIT:
 
                 if (!Rs2Bank.isOpen()) {
+                    debugLog(context, "Bank closed unexpectedly, returning to OPEN phase");
                     phase = Phase.OPEN;
                     return TaskStatus.RUNNING;
                 }
 
-                performDeposit();
+                debugLog(context, "Performing deposit (mode=" + mode + ", keepItems=" + (keepItemNames != null ? java.util.Arrays.toString(keepItemNames) : "none") + ", depositEquipment=" + depositEquipment + ")");
+                performDeposit(context);
 
                 /*
                  * Give the bank operation a chance to complete
                  * before refreshing.
                  */
                 context.bank().refresh();
+                debugLog(context, "Deposit performed, bank cache refreshed");
 
                 phase = determinePhaseAfterDeposit();
+                debugLog(context, "Next phase after deposit: " + phase);
 
                 return TaskStatus.RUNNING;
 
 
             case WITHDRAW:
 
-                Microbot.log("withdrawing??");
+                debugLog(context, "WITHDRAW phase (withdrawItemName=" + withdrawItemName + ", withdrawAmount=" + withdrawAmount + ", withdrawals=" + (withdrawals != null ? withdrawals.length : 0) + ")");
                 if (!Rs2Bank.isOpen()) {
+                    debugLog(context, "Bank closed unexpectedly, returning to OPEN phase");
                     phase = Phase.OPEN;
                     return TaskStatus.RUNNING;
                 }
 
-                performWithdraw();
+                performWithdraw(context);
 
                 /*
                  * Refresh our bank snapshot.
                  */
                 context.bank().refresh();
+                debugLog(context, "Withdrawal performed, bank cache refreshed");
 
                 phase = Phase.CLOSE;
 
@@ -308,6 +326,7 @@ public class BankingTask implements Task {
             case CLOSE:
 
                 if (Rs2Bank.isOpen()) {
+                    debugLog(context, "Closing bank");
                     Rs2Bank.closeBank();
                     return TaskStatus.RUNNING;
                 }
@@ -320,6 +339,7 @@ public class BankingTask implements Task {
             case DONE:
             default:
 
+                debugLog(context, "Task complete");
                 return TaskStatus.COMPLETE;
         }
     }
@@ -364,18 +384,22 @@ public class BankingTask implements Task {
      * (the bank "deposit worn items" button moves them into the bank),
      * then inventory is deposited.
      */
-    private void performDeposit() {
+    private void performDeposit(AccountContext context) {
+        debugLog(context, "performDeposit: depositEquipment=" + depositEquipment + ", equipmentItems=" + Rs2Equipment.items().size());
 
         if (depositEquipment && !Rs2Equipment.items().isEmpty()) {
+            debugLog(context, "Depositing equipment");
             Rs2Bank.depositEquipment();
             sleepUntilTrue(
                     () -> Rs2Equipment.items().isEmpty(),
                     100,
                     5000
             );
+            debugLog(context, "Equipment deposited");
         }
 
         if (keepItemNames != null && keepItemNames.length > 0) {
+            debugLog(context, "Depositing all except: " + java.util.Arrays.toString(keepItemNames));
             Rs2Bank.depositAllExcept(
                     false,
                     keepItemNames
@@ -383,19 +407,23 @@ public class BankingTask implements Task {
             return;
         }
 
+        debugLog(context, "Depositing all inventory");
         Rs2Bank.depositAll();
     }
 
     /**
      * Perform the configured withdrawal.
      */
-    private void performWithdraw() {
+    private void performWithdraw(AccountContext context) {
+        debugLog(context, "performWithdraw: withdrawals=" + (withdrawals != null ? withdrawals.length : 0) + ", withdrawItemName=" + withdrawItemName + ", withdrawAmount=" + withdrawAmount);
         if (withdrawals != null && withdrawals.length > 0) {
             for (ItemWithdrawal withdrawal : withdrawals) {
                 if (withdrawal == null || withdrawal.itemName == null) continue;
                 if (withdrawal.amount == -1) {
+                    debugLog(context, "Withdrawing all: " + withdrawal.itemName);
                     Rs2Bank.withdrawAll(withdrawal.itemName);
                 } else {
+                    debugLog(context, "Withdrawing " + withdrawal.amount + " x " + withdrawal.itemName);
                     Rs2Bank.withdrawX(withdrawal.itemName, withdrawal.amount);
                 }
             }
@@ -403,16 +431,19 @@ public class BankingTask implements Task {
         }
 
         if (withdrawItemName == null) {
+            debugLog(context, "No item to withdraw");
             return;
         }
 
         if (withdrawAmount == -1) {
+            debugLog(context, "Withdrawing all: " + withdrawItemName);
             Rs2Bank.withdrawAll(
                     withdrawItemName
             );
             return;
         }
 
+        debugLog(context, "Withdrawing " + withdrawAmount + " x " + withdrawItemName);
         Rs2Bank.withdrawX(
                 withdrawItemName,
                 withdrawAmount

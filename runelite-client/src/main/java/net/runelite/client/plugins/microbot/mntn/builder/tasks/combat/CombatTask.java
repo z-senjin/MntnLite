@@ -48,9 +48,18 @@ public class CombatTask implements Task {
         this.prayerTarget = prayerTarget;
     }
 
+    private void debugLog(AccountContext context, String message) {
+        if (context.isDebugLogging()) {
+            Microbot.log("[MntnBuilder][CombatTask][DEBUG] " + message);
+        }
+    }
+
     @Override
     public TaskStatus tick(AccountContext context) {
+        debugLog(context, "tick: phase=" + phase + ", monster=" + monster.displayName + ", targetSkill=" + targetSkill.getName());
+
         if (!context.isLoggedIn()) {
+            debugLog(context, "Not logged in, returning BLOCKED");
             return TaskStatus.BLOCKED;
         }
 
@@ -64,13 +73,17 @@ public class CombatTask implements Task {
             case FIGHTING:
                 return handleFight(context);
             default:
+                debugLog(context, "Unknown phase, returning RUNNING");
                 return TaskStatus.RUNNING;
         }
     }
 
     private TaskStatus handleCheckStatus(AccountContext context) {
+        debugLog(context, "handleCheckStatus: health=" + Rs2Player.getHealthPercentage() + "%, styleConfigured=" + styleConfigured);
+
         // Eat if HP is low
         if (Rs2Player.getHealthPercentage() <= 50) {
+            debugLog(context, "Health <= 50%, eating");
             Rs2Player.eatAt(50);
         }
 
@@ -80,52 +93,65 @@ public class CombatTask implements Task {
         // Verify weapon is equipped
         CombatGear.GearItem bestEquippedWeapon = CombatGear.findBestWeapon(context, false);
         if (bestEquippedWeapon == null || !context.equipment().hasItem(bestEquippedWeapon.name)) {
+            debugLog(context, "No weapon equipped");
             // Check if bank has a weapon
             if (CombatGear.findBestWeapon(context, true) == null) {
                 // No weapon available anywhere - reroll task
+                debugLog(context, "No weapon available anywhere, returning REPLAN");
                 return TaskStatus.REPLAN;
             }
+            debugLog(context, "Weapon in bank, switching to BANKING");
             phase = Phase.BANKING;
             return TaskStatus.RUNNING;
         }
 
         // Check if we need food
         if (Rs2Inventory.getInventoryFood().isEmpty()) {
+            debugLog(context, "No food in inventory");
             if (!CombatStrategy.hasFoodInBank(context)) {
                 // Out of food completely - reroll task
+                debugLog(context, "No food in bank, returning REPLAN");
                 return TaskStatus.REPLAN;
             }
+            debugLog(context, "Food in bank, switching to BANKING");
             phase = Phase.BANKING;
             return TaskStatus.RUNNING;
         }
 
         // Bury any stray bones in inventory if training prayer
         if (shouldBuryBones(context) && Rs2Inventory.contains("Bones")) {
+            debugLog(context, "Burying bones for prayer training");
             Rs2Inventory.interact("Bones", "Bury");
             sleep(600, 900);
         }
 
         // Configure attack style if not done yet
         if (!styleConfigured) {
-            configureCombatStyle();
+            debugLog(context, "Configuring combat style for " + targetSkill.getName());
+            configureCombatStyle(context);
             styleConfigured = true;
         }
 
+        debugLog(context, "Switching to WALK_TO_MONSTER");
         phase = Phase.WALK_TO_MONSTER;
         return TaskStatus.RUNNING;
     }
 
     private TaskStatus handleBank(AccountContext context) {
+        debugLog(context, "handleBank: bankingTask=" + (bankingTask != null ? bankingTask.describe() : "null"));
+
         if (bankingTask == null) {
             CombatGear.GearItem bestWeapon = CombatGear.findBestWeapon(context, true);
             if (bestWeapon == null) {
                 // No weapon available anywhere - reroll task
+                debugLog(context, "No weapon available anywhere, returning REPLAN");
                 return TaskStatus.REPLAN;
             }
 
             String bestFood = CombatStrategy.findBestFoodInBank(context);
             if (bestFood == null && Rs2Inventory.getInventoryFood().isEmpty()) {
                 // No food in bank to withdraw - reroll task
+                debugLog(context, "No food in bank and inventory empty, returning REPLAN");
                 return TaskStatus.REPLAN;
             }
 
@@ -142,6 +168,7 @@ public class CombatTask implements Task {
             for (String f : CombatStrategy.COOKED_FOODS) keepItems.add(f);
             keepItems.addAll(CombatGear.getAllKnownGearNames());
 
+            debugLog(context, "Creating DEPOSIT_ALL_AND_WITHDRAW banking task with " + withdrawals.size() + " withdrawals");
             bankingTask = new BankingTask(
                     BankingTask.Mode.DEPOSIT_ALL_AND_WITHDRAW,
                     keepItems.toArray(new String[0]),
@@ -152,6 +179,7 @@ public class CombatTask implements Task {
         TaskStatus bankStatus = bankingTask.tick(context);
 
         if (bankStatus == TaskStatus.COMPLETE) {
+            debugLog(context, "Banking complete");
             bankingTask = null;
 
             equipAvailableGear(context);
@@ -159,19 +187,23 @@ public class CombatTask implements Task {
             CombatGear.GearItem equippedWeapon = CombatGear.findBestWeapon(context, false);
             if (equippedWeapon == null || !context.equipment().hasItem(equippedWeapon.name)) {
                 // Failed to acquire/equip a weapon
+                debugLog(context, "Failed to acquire/equip weapon, returning REPLAN");
                 return TaskStatus.REPLAN;
             }
 
             if (Rs2Inventory.getInventoryFood().isEmpty()) {
                 // Failed to get food from bank
+                debugLog(context, "Failed to get food from bank, returning REPLAN");
                 return TaskStatus.REPLAN;
             }
 
+            debugLog(context, "Switching to CHECK_STATUS");
             phase = Phase.CHECK_STATUS;
             return TaskStatus.RUNNING;
         }
 
         if (bankStatus == TaskStatus.FAILED || bankStatus == TaskStatus.REPLAN) {
+            debugLog(context, "Banking failed/replan: " + bankStatus);
             bankingTask = null;
             return TaskStatus.REPLAN;
         }
@@ -180,16 +212,21 @@ public class CombatTask implements Task {
     }
 
     private TaskStatus handleWalk(AccountContext context) {
+        debugLog(context, "handleWalk: hasFood=" + !Rs2Inventory.getInventoryFood().isEmpty() + ", health=" + Rs2Player.getHealthPercentage() + "%, nearMonster=" + context.isNear(monster.location, 12));
+
         if (Rs2Inventory.getInventoryFood().isEmpty() && Rs2Player.getHealthPercentage() <= 50) {
+            debugLog(context, "No food and low health, switching to BANKING");
             phase = Phase.BANKING;
             return TaskStatus.RUNNING;
         }
 
         if (context.isNear(monster.location, 12)) {
+            debugLog(context, "Near monster location, switching to FIGHTING");
             phase = Phase.FIGHTING;
             return TaskStatus.RUNNING;
         }
 
+        debugLog(context, "Walking to monster location: " + monster.location);
         Rs2Walker.walkTo(monster.location);
         return TaskStatus.RUNNING;
     }
@@ -204,9 +241,11 @@ public class CombatTask implements Task {
     private TaskStatus handleFight(AccountContext context) {
         // Health check: eat if health <= 50%
         if (Rs2Player.getHealthPercentage() <= 50) {
+            debugLog(context, "Health <= 50%, eating");
             Rs2Player.eatAt(50);
             if (Rs2Inventory.getInventoryFood().isEmpty() && Rs2Player.getHealthPercentage() <= 50) {
                 // Low health and no food left: retreat to bank
+                debugLog(context, "Low health and no food, switching to BANKING");
                 phase = Phase.BANKING;
                 return TaskStatus.RUNNING;
             }
@@ -217,11 +256,13 @@ public class CombatTask implements Task {
             if (Rs2Player.getHealthPercentage() <= 50) {
                 Rs2Player.eatAt(50);
             }
+            debugLog(context, "In combat, waiting");
             return TaskStatus.RUNNING;
         }
 
         // Bury bones in inventory if prayer training
         if (shouldBuryBones(context) && Rs2Inventory.contains("Bones")) {
+            debugLog(context, "Burying bones for prayer");
             Rs2Inventory.interact("Bones", "Bury");
             sleep(600, 900);
             return TaskStatus.RUNNING;
@@ -229,6 +270,7 @@ public class CombatTask implements Task {
 
         // If inventory is full, bank loot
         if (Rs2Inventory.isFull() && !Rs2Inventory.contains("Bones")) {
+            debugLog(context, "Inventory full, switching to BANKING");
             phase = Phase.BANKING;
             return TaskStatus.RUNNING;
         }
@@ -242,6 +284,7 @@ public class CombatTask implements Task {
                     .nearest();
 
             if (loot != null) {
+                debugLog(context, "Picking up loot: " + loot.getName());
                 loot.pickup();
                 sleepUntilTrue(() -> !Rs2Player.isMoving(), 200, 3000);
 
@@ -284,11 +327,13 @@ public class CombatTask implements Task {
         }
 
         if (target != null) {
+            debugLog(context, "Attacking target: " + target.getName());
             target.click("Attack");
             sleep(600, 1000);
         } else {
             // If no monster is nearby, re-center on the spawn area
             if (!context.isNear(monster.location, 10)) {
+                debugLog(context, "No target found, not near spawn, switching to WALK_TO_MONSTER");
                 phase = Phase.WALK_TO_MONSTER;
             }
         }
@@ -299,6 +344,7 @@ public class CombatTask implements Task {
     private void equipAvailableGear(AccountContext context) {
         CombatGear.GearItem bestWeapon = CombatGear.findBestWeapon(context, false);
         if (bestWeapon != null && !context.equipment().hasItem(bestWeapon.name) && context.inventory().hasItem(bestWeapon.name)) {
+            debugLog(context, "Equipping weapon: " + bestWeapon.name);
             Rs2Inventory.wield(bestWeapon.name);
             sleep(300, 600);
         }
@@ -308,6 +354,7 @@ public class CombatTask implements Task {
         if (!usingTwoHanded) {
             CombatGear.GearItem bestShield = CombatGear.findBestArmor(context, CombatGear.SHIELDS, false);
             if (bestShield != null && !context.equipment().hasItem(bestShield.name) && context.inventory().hasItem(bestShield.name)) {
+                debugLog(context, "Equipping shield: " + bestShield.name);
                 Rs2Inventory.wield(bestShield.name);
                 sleep(300, 600);
             }
@@ -315,24 +362,28 @@ public class CombatTask implements Task {
 
         CombatGear.GearItem bestHelm = CombatGear.findBestArmor(context, CombatGear.HELMETS, false);
         if (bestHelm != null && !context.equipment().hasItem(bestHelm.name) && context.inventory().hasItem(bestHelm.name)) {
+            debugLog(context, "Equipping helm: " + bestHelm.name);
             Rs2Inventory.wield(bestHelm.name);
             sleep(300, 600);
         }
 
         CombatGear.GearItem bestBody = CombatGear.findBestArmor(context, CombatGear.BODIES, false);
         if (bestBody != null && !context.equipment().hasItem(bestBody.name) && context.inventory().hasItem(bestBody.name)) {
+            debugLog(context, "Equipping body: " + bestBody.name);
             Rs2Inventory.wield(bestBody.name);
             sleep(300, 600);
         }
 
         CombatGear.GearItem bestLegs = CombatGear.findBestArmor(context, CombatGear.LEGS, false);
         if (bestLegs != null && !context.equipment().hasItem(bestLegs.name) && context.inventory().hasItem(bestLegs.name)) {
+            debugLog(context, "Equipping legs: " + bestLegs.name);
             Rs2Inventory.wield(bestLegs.name);
             sleep(300, 600);
         }
     }
 
-    private void configureCombatStyle() {
+    private void configureCombatStyle(AccountContext context) {
+        debugLog(context, "Configuring combat style for " + targetSkill.getName());
         Rs2Tab.switchToCombatOptionsTab();
         sleep(200, 400);
 
@@ -364,7 +415,11 @@ public class CombatTask implements Task {
 
     @Override
     public boolean needsReplan(AccountContext context) {
-        return context.getRealLevel(targetSkill) >= targetLevel;
+        boolean levelCheck = context.getRealLevel(targetSkill) >= targetLevel;
+        if (levelCheck) {
+            debugLog(context, "needsReplan: target level reached (current=" + context.getRealLevel(targetSkill) + ", target=" + targetLevel + ")");
+        }
+        return levelCheck;
     }
 
     @Override

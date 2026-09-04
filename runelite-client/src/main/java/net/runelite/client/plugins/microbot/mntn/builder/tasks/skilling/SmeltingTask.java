@@ -34,9 +34,18 @@ public class SmeltingTask implements Task {
         this.bar = bar;
     }
 
+    private void debugLog(AccountContext context, String message) {
+        if (context.isDebugLogging()) {
+            Microbot.log("[MntnBuilder][SmeltingTask][DEBUG] " + message);
+        }
+    }
+
     @Override
     public TaskStatus tick(AccountContext context) {
+        debugLog(context, "tick: phase=" + phase + ", bar=" + bar.name());
+
         if (!context.isLoggedIn()) {
+            debugLog(context, "Not logged in, returning BLOCKED");
             return TaskStatus.BLOCKED;
         }
 
@@ -48,32 +57,42 @@ public class SmeltingTask implements Task {
             case BANKING:
                 return handleBank(context);
             default:
+                debugLog(context, "Unknown phase, returning RUNNING");
                 return TaskStatus.RUNNING;
         }
     }
 
     private TaskStatus handleWalk(AccountContext context) {
+        debugLog(context, "handleWalk: hasAllIngredients=" + hasAllIngredients(context) + ", nearFurnace=" + context.isNear(bar.furnaceLocation, 10));
+
         if (!hasAllIngredients(context)) {
+            debugLog(context, "Missing ingredients, switching to BANKING");
             phase = Phase.BANKING;
             return TaskStatus.RUNNING;
         }
 
         if (context.isNear(bar.furnaceLocation, 10)) {
+            debugLog(context, "Near furnace, switching to SMELTING");
             phase = Phase.SMELTING;
             return TaskStatus.RUNNING;
         }
 
+        debugLog(context, "Walking to furnace: " + bar.furnaceLocation);
         Rs2Walker.walkTo(bar.furnaceLocation);
         return TaskStatus.RUNNING;
     }
 
     private TaskStatus handleSmelt(AccountContext context) {
+        debugLog(context, "handleSmelt: hasAllIngredients=" + hasAllIngredients(context));
+
         if (!hasAllIngredients(context)) {
+            debugLog(context, "Missing ingredients, switching to BANKING");
             phase = Phase.BANKING;
             return TaskStatus.RUNNING;
         }
 
         if (Rs2Player.isAnimating() || Rs2Player.isMoving()) {
+            debugLog(context, "Already animating/moving, waiting");
             return TaskStatus.RUNNING;
         }
 
@@ -83,6 +102,7 @@ public class SmeltingTask implements Task {
                 .nearest();
 
         if (furnace == null) {
+            debugLog(context, "Furnace not found, switching to WALK_TO_FURNACE");
             phase = Phase.WALK_TO_FURNACE;
             return TaskStatus.RUNNING;
         }
@@ -97,8 +117,10 @@ public class SmeltingTask implements Task {
 
 
             if (isMovingOrAnimating || isMovingOrAnimatingAgain) {
+                debugLog(context, "Already animating/moving after sleep, waiting");
                 return TaskStatus.RUNNING;
             } else {
+                debugLog(context, "Clicking furnace to smelt");
                 furnace.click("Smelt");
             }
         }
@@ -106,6 +128,7 @@ public class SmeltingTask implements Task {
 
         boolean open = sleepUntilTrue(Rs2Widget::isProductionWidgetOpen, 200, 6000);
         if (open) {
+            debugLog(context, "Production widget open, pressing SPACE");
             sleep(300, 600);
             Rs2Keyboard.keyPress(KeyEvent.VK_SPACE);
             sleep(600, 1000);
@@ -115,7 +138,10 @@ public class SmeltingTask implements Task {
     }
 
     private TaskStatus handleBank(AccountContext context) {
+        debugLog(context, "handleBank: bankingTask=" + (bankingTask != null ? bankingTask.describe() : "null"));
+
         if (bankingTask == null) {
+            debugLog(context, "Creating DEPOSIT_ALL_AND_WITHDRAW banking task for " + bar.name());
             BankingTask.ItemWithdrawal[] withdrawals = new BankingTask.ItemWithdrawal[bar.ingredients.length];
             for (int i = 0; i < bar.ingredients.length; i++) {
                 SmeltingStrategy.OreRequirement req = bar.ingredients[i];
@@ -128,18 +154,22 @@ public class SmeltingTask implements Task {
         TaskStatus bankStatus = bankingTask.tick(context);
 
         if (bankStatus == TaskStatus.COMPLETE) {
+            debugLog(context, "Banking complete");
             bankingTask = null;
 
             if (!hasAllIngredients(context)) {
                 // Not enough ores left in bank to continue smelting this bar
+                debugLog(context, "Not enough ingredients after banking, returning REPLAN");
                 return TaskStatus.REPLAN;
             }
 
+            debugLog(context, "Switching to WALK_TO_FURNACE");
             phase = Phase.WALK_TO_FURNACE;
             return TaskStatus.RUNNING;
         }
 
         if (bankStatus == TaskStatus.FAILED || bankStatus == TaskStatus.REPLAN) {
+            debugLog(context, "Banking failed/replan: " + bankStatus);
             bankingTask = null;
             return bankStatus;
         }
@@ -158,7 +188,11 @@ public class SmeltingTask implements Task {
 
     @Override
     public boolean needsReplan(AccountContext context) {
-        return context.getRealLevel(Skill.SMITHING) < bar.requiredLevel;
+        boolean levelCheck = context.getRealLevel(Skill.SMITHING) < bar.requiredLevel;
+        if (levelCheck) {
+            debugLog(context, "needsReplan: levelCheck=" + levelCheck + " (current=" + context.getRealLevel(Skill.SMITHING) + ", required=" + bar.requiredLevel + ")");
+        }
+        return levelCheck;
     }
 
     @Override

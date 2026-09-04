@@ -36,7 +36,7 @@ import static net.runelite.client.plugins.microbot.util.Global.*;
  * The Task decides HOW to execute the cooking process.
  */
 public class CookingTask implements Task {
-    
+
     private static final int WITHDRAW_QUANTITY = -1;
 
     private enum Phase {
@@ -55,10 +55,18 @@ public class CookingTask implements Task {
         this.method = method;
     }
 
+    private void debugLog(AccountContext context, String message) {
+        if (context.isDebugLogging()) {
+            Microbot.log("[MntnBuilder][CookingTask][DEBUG] " + message);
+        }
+    }
+
     @Override
     public TaskStatus tick(AccountContext context) {
+        debugLog(context, "tick: phase=" + phase + ", method=" + method.name());
 
         if (!context.isLoggedIn()) {
+            debugLog(context, "Not logged in, returning BLOCKED");
             return TaskStatus.BLOCKED;
         }
 
@@ -74,6 +82,7 @@ public class CookingTask implements Task {
                 return handleBank(context);
 
             default:
+                debugLog(context, "Unknown phase, returning RUNNING");
                 return TaskStatus.RUNNING;
         }
     }
@@ -82,19 +91,21 @@ public class CookingTask implements Task {
      * Walk to the cooking location.
      */
     private TaskStatus handleWalk(AccountContext context) {
+        debugLog(context, "handleWalk: hasRawItem=" + context.inventory().hasItem(method.rawItemName) + ", nearLocation=" + context.isNear(method.location, 10));
 
         if(!context.inventory().hasItem(method.rawItemName)){
+            debugLog(context, "Missing raw item in inventory, switching to BANKING phase");
             phase = Phase.BANKING;
             return TaskStatus.RUNNING;
         }
 
         if (context.isNear(method.location, 10)) {
+            debugLog(context, "Near cooking location, switching to COOKING phase");
             phase = Phase.COOKING;
             return TaskStatus.RUNNING;
         }
 
-        Microbot.log("Not near");
-
+        debugLog(context, "Not near cooking location, walking to " + method.location);
         Rs2Walker.walkTo(method.location);
 
         return TaskStatus.RUNNING;
@@ -104,17 +115,18 @@ public class CookingTask implements Task {
      * Handle the actual cooking.
      */
     private TaskStatus handleCooking(AccountContext context) {
-
-        Microbot.log("We handling cooking");
+        debugLog(context, "handleCooking: hasRawItemInInventory=" + Rs2Inventory.contains(method.rawItemName));
 
         if (!Rs2Inventory.contains(method.rawItemName)) {
-
             int bankCount = context.bank().getCount(method.rawItemName);
+            debugLog(context, "No raw item in inventory, bank count=" + bankCount);
 
             if (bankCount < WITHDRAW_QUANTITY) {
+                debugLog(context, "Not enough raw items in bank (" + bankCount + "), returning REPLAN");
                 return TaskStatus.REPLAN;
             }
 
+            debugLog(context, "Switching to BANKING phase to withdraw raw items");
             phase = Phase.BANKING;
             return TaskStatus.RUNNING;
         }
@@ -133,21 +145,24 @@ public class CookingTask implements Task {
 
 
             if (isMovingOrAnimating || isMovingOrAnimatingAgain) {
+                debugLog(context, "Already animating/moving, waiting");
                 return TaskStatus.RUNNING;
             }
         }
 
-        Microbot.log("We looking for it");
+        debugLog(context, "Looking for cooking object: " + method.cookingObject);
 
         Rs2TileObjectModel cookingObject = Microbot.getRs2TileObjectCache().query().withId(method.cookingObject).nearest();
         if (cookingObject == null) {
-            Microbot.log("Cooking object not found!");
+            debugLog(context, "Cooking object not found! Switching to WALK_TO_COOKING");
             phase = Phase.WALK_TO_COOKING;
             return TaskStatus.RUNNING;
         }
 
+        debugLog(context, "Found cooking object at " + cookingObject.getWorldLocation());
         sleep(100, 300);
         if (!Rs2Camera.isTileOnScreen(cookingObject.getLocalLocation())) {
+            debugLog(context, "Cooking object not on screen, turning camera");
             Rs2Camera.turnTo(cookingObject.getLocalLocation());
 
             sleep(100, 2100);
@@ -163,6 +178,7 @@ public class CookingTask implements Task {
         sleepUntilTrue(() -> !Rs2Player.isMoving(), 200, 8000);
 
         if (productionWidgetOpen) {
+            debugLog(context, "Production widget open, pressing SPACE to cook");
             Rs2Keyboard.keyPress(KeyEvent.VK_SPACE);
             Microbot.status = "Cooking " + method.rawItemName;
         }
@@ -179,12 +195,15 @@ public class CookingTask implements Task {
      * WITHDRAW_QUANTITY of the raw item.
      */
     private TaskStatus handleBank(AccountContext context) {
+        debugLog(context, "handleBank: hasRawItemInInventory=" + context.inventory().hasItem(method.rawItemName) + ", hasRawItemInBank=" + context.bank().hasItem(method.rawItemName));
 
         if (!context.inventory().hasItem(method.rawItemName) && !context.bank().hasItem(method.rawItemName)) {
+            debugLog(context, "No raw item in inventory or bank, returning REPLAN");
             return TaskStatus.REPLAN;
         }
 
         if (bankingTask == null) {
+            debugLog(context, "Creating DEPOSIT_ALL_AND_WITHDRAW banking task for " + method.rawItemName);
 
             bankingTask =
                     new BankingTask(
@@ -199,11 +218,13 @@ public class CookingTask implements Task {
                 bankingTask.tick(context);
 
         if (bankStatus == TaskStatus.COMPLETE) {
-
+            debugLog(context, "Banking complete");
             bankingTask = null;
             if (!context.inventory().hasItem(method.rawItemName)) {
+                debugLog(context, "Still no raw item in inventory after banking, returning REPLAN");
                 return TaskStatus.REPLAN;
             }
+            debugLog(context, "Raw item in inventory, switching to WALK_TO_COOKING");
             phase = Phase.WALK_TO_COOKING;
         }
 
@@ -217,10 +238,12 @@ public class CookingTask implements Task {
          * If our Cooking level somehow becomes invalid
          * for the selected strategy, or if raw food is gone, replan.
          */
-        if (context.getRealLevel(Skill.COOKING) < method.requiredLevel) {
-            return true;
+        boolean levelCheck = context.getRealLevel(Skill.COOKING) < method.requiredLevel;
+        boolean itemCheck = !context.inventory().hasItem(method.rawItemName) && !context.bank().hasItem(method.rawItemName);
+        if (levelCheck || itemCheck) {
+            debugLog(context, "needsReplan: levelCheck=" + levelCheck + " (current=" + context.getRealLevel(Skill.COOKING) + ", required=" + method.requiredLevel + "), itemCheck=" + itemCheck);
         }
-        return !context.inventory().hasItem(method.rawItemName) && !context.bank().hasItem(method.rawItemName);
+        return levelCheck || itemCheck;
     }
 
     @Override

@@ -21,10 +21,21 @@ public class AccountPlanner {
 
     private List<Goal> goals;
     private final List<Activity> activities;
+    private boolean debugLogging = false;
 
     public AccountPlanner(List<Goal> goals, List<Activity> activities) {
         this.goals = goals;
         this.activities = activities;
+    }
+
+    public void setDebugLogging(boolean debugLogging) {
+        this.debugLogging = debugLogging;
+    }
+
+    private void debugLog(String message) {
+        if (debugLogging) {
+            Microbot.log("[MntnBuilder][Planner][DEBUG] " + message);
+        }
     }
 
     public void setGoals(List<Goal> goals) {
@@ -38,26 +49,30 @@ public class AccountPlanner {
     public List<Plan> planAll(AccountContext context) {
         List<Plan> candidates = new ArrayList<>();
 
+        debugLog("planAll: evaluating " + goals.size() + " goals");
+
         for (Goal goal : goals) {
-            Microbot.log("Goal: " + goal.name());
+            debugLog("  Goal: " + goal.name() + " (complete=" + goal.isComplete(context) + ")");
             if (goal.isComplete(context)) {
+                debugLog("    -> skipping (complete)");
                 continue;
             }
             for (Requirement requirement : goal.requirements(context)) {
 
-                Microbot.log("Requirement: " + requirement.description());
+                debugLog("    Requirement: " + requirement.description() + " (satisfied=" + requirement.isSatisfied(context) + ")");
                 if (requirement.isSatisfied(context)) {
+                    debugLog("      -> skipping (satisfied)");
                     continue;
                 }
                 for (ActivityRequest request : requirement.getWaysToSatisfy(context)) {
-                    Microbot.log("ActivityRequest: " + request.type().name());
+                    debugLog("      ActivityRequest: " + request.type().name());
                     for (Activity activity : activities) {
-                        Microbot.log("Activity: " + activity.type().name());
+                        debugLog("        Activity: " + activity.type().name() + " (canProvide=" + activity.canProvide(request, context) + ")");
                         if (!activity.canProvide(request, context)) {
                             continue;
                         }
                         for (Strategy strategy : activity.getStrategies(context, request)) {
-                            Microbot.log("Strategy: " + strategy.name());
+                            debugLog("          Strategy: " + strategy.name() + " (canExecute=" + strategy.canExecute(context) + ")");
                             if (!strategy.canExecute(context)) {
                                 continue;
                             }
@@ -65,7 +80,7 @@ public class AccountPlanner {
                                     + requirement.urgency(context)
                                     + goal.priority(context);
 
-                            Microbot.log("Score: " + score);
+                            debugLog("            -> Score: " + score + " (strategy=" + strategy.score(context) + " + urgency=" + requirement.urgency(context) + " + priority=" + goal.priority(context) + ")");
                             candidates.add(new Plan(goal, requirement, activity, strategy, score));
                         }
                     }
@@ -74,6 +89,7 @@ public class AccountPlanner {
         }
 
         candidates.sort(Comparator.comparingDouble(Plan::score).reversed());
+        debugLog("planAll: " + candidates.size() + " candidates, top=" + (candidates.isEmpty() ? "none" : candidates.get(0).strategy().name() + " score=" + candidates.get(0).score()));
         return candidates;
     }
 
