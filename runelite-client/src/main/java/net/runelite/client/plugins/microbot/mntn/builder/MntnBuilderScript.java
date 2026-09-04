@@ -345,6 +345,12 @@ public class MntnBuilderScript extends Script {
                 + " (score=" + debugScore + ") for " + debugRequirement);
     }
 
+    public void forceReplan() {
+        currentPlan = null;
+        taskManager.setTask(null);
+        replan();
+    }
+
     private void replan() {
         Plan candidate = planner.plan(context);
 

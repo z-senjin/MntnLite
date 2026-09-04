@@ -47,6 +47,7 @@ public class MntnBuilderPlugin extends Plugin {
     @Override
     protected void shutDown() {
         script.shutdown();
+        overlay.cleanup();
         overlayManager.remove(overlay);
     }
 

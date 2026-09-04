@@ -2,6 +2,7 @@ package net.runelite.client.plugins.microbot.mntn.builder;
 
 import net.runelite.client.ui.overlay.OverlayPanel;
 import net.runelite.client.ui.overlay.OverlayPosition;
+import net.runelite.client.ui.overlay.components.ButtonComponent;
 import net.runelite.client.ui.overlay.components.LineComponent;
 
 import javax.inject.Inject;
@@ -20,12 +21,30 @@ public class MntnBuilderOverlay extends OverlayPanel {
     private static final Color BACKGROUND_COLOR = new Color(0, 0, 0, 150);
 
     private final MntnBuilderPlugin plugin;
+    private final ButtonComponent skipButton;
 
     @Inject
     MntnBuilderOverlay(MntnBuilderPlugin plugin) {
         super(plugin);
         setPosition(OverlayPosition.TOP_LEFT);
         this.plugin = plugin;
+
+        this.skipButton = new ButtonComponent("Skip Activity");
+        this.skipButton.setPreferredSize(new Dimension(200, 25));
+        this.skipButton.setBackgroundColor(new Color(200, 60, 60));
+        this.skipButton.setTextColor(Color.WHITE);
+        this.skipButton.setFont(new Font("Arial", Font.BOLD, 11));
+        this.skipButton.setOnClick(() -> {
+            if (plugin != null && plugin.script != null) {
+                plugin.script.forceReplan();
+            }
+        });
+        this.skipButton.setParentOverlay(this);
+        this.skipButton.hookMouseListener();
+    }
+
+    public void cleanup() {
+        skipButton.unhookMouseListener();
     }
 
     @Override
@@ -72,6 +91,8 @@ public class MntnBuilderOverlay extends OverlayPanel {
                 .right(String.format("%.1f", plugin.script.debugScore))
                 .rightColor(Color.GREEN)
                 .build());
+
+        panelComponent.getChildren().add(skipButton);
 
         return super.render(graphics);
     }
