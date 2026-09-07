@@ -5,14 +5,21 @@ import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.Strategy;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
+import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.EquipmentRequirement;
+import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.ItemRequirement;
+import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.Requirement;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.combat.CombatTask;
-import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
 import net.runelite.client.plugins.microbot.util.math.Rs2Random;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 
 public class CombatStrategy implements Strategy {
+
+    public static final String STARTER_WEAPON = "Bronze scimitar";
+    public static final String STARTER_FOOD = "Shrimps";
 
     public static final String[] COOKED_FOODS = {
             "Cooked karambwan",
@@ -39,6 +46,7 @@ public class CombatStrategy implements Strategy {
                 "Chickens",
                 1,
                 10,
+                0,
                 new String[]{"Chicken", "Rooster"},
                 new WorldPoint(3230, 3297, 0),
                 new String[]{"Bones", "Feather"}
@@ -47,6 +55,7 @@ public class CombatStrategy implements Strategy {
                 "Goblins",
                 5,
                 20,
+                4,
                 new String[]{"Goblin"},
                 new WorldPoint(3255, 3235, 0),
                 new String[]{"Bones", "Coins"}
@@ -55,6 +64,7 @@ public class CombatStrategy implements Strategy {
                 "Cows",
                 10,
                 60,
+                8,
                 new String[]{"Cow", "Cow calf"},
                 new WorldPoint(3256, 3266, 0),
                 new String[]{"Bones", "Cowhide"}
@@ -63,15 +73,17 @@ public class CombatStrategy implements Strategy {
         public final String displayName;
         public final int minCombatLevel;
         public final int maxRecommendedCombatLevel;
+        public final int recommendedFood;
         public final String[] npcNames;
         public final WorldPoint location;
         public final String[] lootNames;
 
         Monster(String displayName, int minCombatLevel, int maxRecommendedCombatLevel,
-                String[] npcNames, WorldPoint location, String[] lootNames) {
+                int recommendedFood, String[] npcNames, WorldPoint location, String[] lootNames) {
             this.displayName = displayName;
             this.minCombatLevel = minCombatLevel;
             this.maxRecommendedCombatLevel = maxRecommendedCombatLevel;
+            this.recommendedFood = recommendedFood;
             this.npcNames = npcNames;
             this.location = location;
             this.lootNames = lootNames;
@@ -97,18 +109,17 @@ public class CombatStrategy implements Strategy {
 
     @Override
     public boolean canExecute(AccountContext context) {
-        int combatLevel = getCombatLevel();
+        int combatLevel = getCombatLevel(context);
         if (combatLevel < monster.minCombatLevel) {
             return false;
         }
 
-        // Must have a usable weapon in equipment, inventory, or bank
-        if (CombatGear.findBestWeapon(context, true) == null) {
+        // Chickens are the fresh-F2P bootstrap fallback and can be fought unarmed.
+        if (CombatGear.findBestWeapon(context, true) == null && !canFightUnarmed(monster)) {
             return false;
         }
 
-        // Must have food in inventory or in bank
-        if (!hasFood(context)) {
+        if (recommendedFoodCount(context) > 0 && !hasFood(context)) {
             return false;
         }
 
@@ -116,30 +127,52 @@ public class CombatStrategy implements Strategy {
     }
 
     @Override
+    public List<Requirement> requirements(AccountContext context) {
+        List<Requirement> requirements = new ArrayList<>();
+
+        CombatGear.GearItem weapon = selectedWeapon(context);
+        if (weapon != null) {
+            requirements.add(new EquipmentRequirement(weapon.name));
+        } else if (!canFightUnarmed(monster)) {
+            requirements.add(new EquipmentRequirement(STARTER_WEAPON));
+        }
+
+        int foodNeeded = Math.max(0, recommendedFoodCount(context) - inventoryFoodCount(context));
+        if (foodNeeded > 0) {
+            String food = findBestFoodInBank(context);
+            requirements.add(new ItemRequirement(food != null ? food : STARTER_FOOD, foodNeeded));
+        }
+
+        return requirements;
+    }
+
+    @Override
     public double score(AccountContext context) {
-        int combatLevel = getCombatLevel();
+        int combatLevel = getCombatLevel(context);
         if (combatLevel < monster.minCombatLevel) {
             return -1000;
         }
 
-        if (!hasFood(context)) {
+        if (recommendedFoodCount(context) > 0 && !hasFood(context)) {
             return -1000;
         }
 
         CombatGear.GearItem weapon = CombatGear.findBestWeapon(context, true);
-        if (weapon == null) {
+        if (weapon == null && !canFightUnarmed(monster)) {
             return -1000;
         }
 
-        double score = 50.0;
+        double score = weapon != null ? 50.0 : 25.0;
 
         // Weapon tier bonus
-        score += weapon.requiredLevel;
+        if (weapon != null) {
+            score += weapon.requiredLevel;
+        }
 
         // Weapon equipped bonus
-        if (context.equipment().hasItem(weapon.name)) {
+        if (weapon != null && context.equipment().hasItem(weapon.name)) {
             score += 20;
-        } else if (context.inventory().hasItem(weapon.name)) {
+        } else if (weapon != null && context.inventory().hasItem(weapon.name)) {
             score += 10;
         }
 
@@ -165,8 +198,11 @@ public class CombatStrategy implements Strategy {
         }
 
         // Convenience bonus for food on hand
-        if (!Rs2Inventory.getInventoryFood().isEmpty()) {
+        int foodCount = inventoryFoodCount(context);
+        if (foodCount >= recommendedFoodCount(context)) {
             score += 15;
+        } else if (foodCount > 0) {
+            score += 8;
         } else if (hasFoodInBank(context)) {
             score += 5;
         }
@@ -177,6 +213,28 @@ public class CombatStrategy implements Strategy {
         }
 
         return score;
+    }
+
+    @Override
+    public WorldPoint preferredLocation(AccountContext context) {
+        return monster.location;
+    }
+
+    @Override
+    public int estimatedXpPerHour(AccountContext context) {
+        return Math.max(1000, getCombatLevel(context) * 600);
+    }
+
+    @Override
+    public double safetyScore(AccountContext context) {
+        int combatLevel = getCombatLevel(context);
+        if (combatLevel >= monster.maxRecommendedCombatLevel) {
+            return 10;
+        }
+        if (combatLevel >= monster.minCombatLevel + 5) {
+            return 5;
+        }
+        return -10;
     }
 
     @Override
@@ -191,10 +249,29 @@ public class CombatStrategy implements Strategy {
     }
 
     public static boolean hasFood(AccountContext context) {
-        if (!Rs2Inventory.getInventoryFood().isEmpty()) {
+        if (inventoryFoodCount(context) > 0) {
             return true;
         }
         return hasFoodInBank(context);
+    }
+
+    public static int inventoryFoodCount(AccountContext context) {
+        int count = 0;
+        for (String food : COOKED_FOODS) {
+            count += context.inventory().getCount(food);
+        }
+        return count;
+    }
+
+    public static int recommendedFoodCount(Monster monster, AccountContext context) {
+        int combatLevel = getCombatLevel(context);
+        if (monster.recommendedFood <= 0 || combatLevel >= monster.maxRecommendedCombatLevel) {
+            return 0;
+        }
+        if (combatLevel >= monster.minCombatLevel + 10) {
+            return Math.max(2, monster.recommendedFood / 2);
+        }
+        return monster.recommendedFood;
     }
 
     public static boolean hasFoodInBank(AccountContext context) {
@@ -215,11 +292,40 @@ public class CombatStrategy implements Strategy {
         return null;
     }
 
-    private int getCombatLevel() {
-        if (Microbot.getClient().getLocalPlayer() != null) {
-            return Microbot.getClient().getLocalPlayer().getCombatLevel();
+    public static boolean canFightUnarmed(Monster monster) {
+        return monster == Monster.CHICKENS;
+    }
+
+    public int recommendedFoodCount(AccountContext context) {
+        return recommendedFoodCount(monster, context);
+    }
+
+    public static Skill selectCombatStyleSkill(AccountContext context, Skill targetSkill) {
+        if (targetSkill != Skill.PRAYER) {
+            return targetSkill;
         }
-        return 3;
+
+        Skill selected = Skill.STRENGTH;
+        int selectedLevel = context.getRealLevel(selected);
+        for (Skill candidate : new Skill[]{Skill.ATTACK, Skill.STRENGTH, Skill.DEFENCE}) {
+            int level = context.getRealLevel(candidate);
+            if (level < selectedLevel) {
+                selected = candidate;
+                selectedLevel = level;
+            }
+        }
+        return selected;
+    }
+
+    private CombatGear.GearItem selectedWeapon(AccountContext context) {
+        return CombatGear.findBestWeapon(context, true);
+    }
+
+    private static int getCombatLevel(AccountContext context) {
+        if (!context.isLoggedIn() || Microbot.getClient() == null || Microbot.getClient().getLocalPlayer() == null) {
+            return 3;
+        }
+        return Microbot.getClient().getLocalPlayer().getCombatLevel();
     }
 
     public Monster getMonster() {

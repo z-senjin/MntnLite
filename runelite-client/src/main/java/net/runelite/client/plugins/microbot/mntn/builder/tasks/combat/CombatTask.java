@@ -10,6 +10,7 @@ import net.runelite.client.plugins.microbot.mntn.builder.activities.combat.Comba
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStatus;
+import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStopReason;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.banking.BankingTask;
 import net.runelite.client.plugins.microbot.util.combat.Rs2Combat;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
@@ -24,6 +25,10 @@ import static net.runelite.client.plugins.microbot.util.Global.sleep;
 import static net.runelite.client.plugins.microbot.util.Global.sleepUntilTrue;
 
 public class CombatTask implements Task {
+
+    private static final int MAX_STYLE_ATTEMPTS = 3;
+    private static final int MAX_TARGET_SEARCH_FAILURES = 25;
+    private static final int MAX_ATTACK_ATTEMPTS = 5;
 
     private enum Phase {
         CHECK_STATUS,
@@ -40,6 +45,10 @@ public class CombatTask implements Task {
     private Phase phase = Phase.CHECK_STATUS;
     private BankingTask bankingTask;
     private boolean styleConfigured = false;
+    private TaskStopReason lastStopReason = TaskStopReason.NONE;
+    private int styleAttempts;
+    private int targetSearchFailures;
+    private int attackAttempts;
 
     public CombatTask(CombatStrategy.Monster monster, Skill targetSkill, int targetLevel, int prayerTarget) {
         this.monster = monster;
@@ -60,7 +69,7 @@ public class CombatTask implements Task {
 
         if (!context.isLoggedIn()) {
             debugLog(context, "Not logged in, returning BLOCKED");
-            return TaskStatus.BLOCKED;
+            return stop(TaskStatus.BLOCKED, TaskStopReason.NOT_LOGGED_IN);
         }
 
         switch (phase) {
@@ -96,22 +105,27 @@ public class CombatTask implements Task {
             debugLog(context, "No weapon equipped");
             // Check if bank has a weapon
             if (CombatGear.findBestWeapon(context, true) == null) {
+                if (CombatStrategy.canFightUnarmed(monster)) {
+                    debugLog(context, "No weapon available, continuing unarmed against bootstrap monster");
+                } else {
                 // No weapon available anywhere - reroll task
-                debugLog(context, "No weapon available anywhere, returning REPLAN");
-                return TaskStatus.REPLAN;
+                    debugLog(context, "No weapon available anywhere, returning REPLAN");
+                    return stop(TaskStatus.REPLAN, TaskStopReason.EQUIPMENT_MISSING);
+                }
+            } else {
+                debugLog(context, "Weapon in bank, switching to BANKING");
+                phase = Phase.BANKING;
+                return TaskStatus.RUNNING;
             }
-            debugLog(context, "Weapon in bank, switching to BANKING");
-            phase = Phase.BANKING;
-            return TaskStatus.RUNNING;
         }
 
-        // Check if we need food
-        if (Rs2Inventory.getInventoryFood().isEmpty()) {
-            debugLog(context, "No food in inventory");
+        int foodTarget = CombatStrategy.recommendedFoodCount(monster, context);
+        if (CombatStrategy.inventoryFoodCount(context) < foodTarget) {
+            debugLog(context, "Food below target: " + CombatStrategy.inventoryFoodCount(context) + "/" + foodTarget);
             if (!CombatStrategy.hasFoodInBank(context)) {
                 // Out of food completely - reroll task
                 debugLog(context, "No food in bank, returning REPLAN");
-                return TaskStatus.REPLAN;
+                return stop(TaskStatus.REPLAN, TaskStopReason.MISSING_SUPPLIES);
             }
             debugLog(context, "Food in bank, switching to BANKING");
             phase = Phase.BANKING;
@@ -127,8 +141,16 @@ public class CombatTask implements Task {
 
         // Configure attack style if not done yet
         if (!styleConfigured) {
-            debugLog(context, "Configuring combat style for " + targetSkill.getName());
-            configureCombatStyle(context);
+            Skill styleSkill = CombatStrategy.selectCombatStyleSkill(context, targetSkill);
+            debugLog(context, "Configuring combat style for " + styleSkill.getName());
+            if (!configureCombatStyle(context, styleSkill)) {
+                styleAttempts++;
+                debugLog(context, "Failed to configure combat style attempt " + styleAttempts + "/" + MAX_STYLE_ATTEMPTS);
+                return styleAttempts >= MAX_STYLE_ATTEMPTS
+                        ? stop(TaskStatus.REPLAN, TaskStopReason.ACTION_FAILED)
+                        : TaskStatus.RUNNING;
+            }
+            styleAttempts = 0;
             styleConfigured = true;
         }
 
@@ -143,16 +165,23 @@ public class CombatTask implements Task {
         if (bankingTask == null) {
             CombatGear.GearItem bestWeapon = CombatGear.findBestWeapon(context, true);
             if (bestWeapon == null) {
+                if (CombatStrategy.canFightUnarmed(monster)) {
+                    debugLog(context, "No weapon available, continuing unarmed against bootstrap monster");
+                    phase = Phase.CHECK_STATUS;
+                    return TaskStatus.RUNNING;
+                }
                 // No weapon available anywhere - reroll task
                 debugLog(context, "No weapon available anywhere, returning REPLAN");
-                return TaskStatus.REPLAN;
+                return stop(TaskStatus.REPLAN, TaskStopReason.EQUIPMENT_MISSING);
             }
 
-            String bestFood = CombatStrategy.findBestFoodInBank(context);
-            if (bestFood == null && Rs2Inventory.getInventoryFood().isEmpty()) {
+            int foodTarget = CombatStrategy.recommendedFoodCount(monster, context);
+            int foodNeeded = Math.max(0, foodTarget - CombatStrategy.inventoryFoodCount(context));
+            String bestFood = foodNeeded > 0 ? CombatStrategy.findBestFoodInBank(context) : null;
+            if (foodNeeded > 0 && bestFood == null) {
                 // No food in bank to withdraw - reroll task
                 debugLog(context, "No food in bank and inventory empty, returning REPLAN");
-                return TaskStatus.REPLAN;
+                return stop(TaskStatus.REPLAN, TaskStopReason.MISSING_SUPPLIES);
             }
 
             List<String> gearUpgrades = CombatGear.getBankGearUpgrades(context);
@@ -160,8 +189,8 @@ public class CombatTask implements Task {
             for (String gear : gearUpgrades) {
                 withdrawals.add(new BankingTask.ItemWithdrawal(gear, 1));
             }
-            if (bestFood != null) {
-                withdrawals.add(new BankingTask.ItemWithdrawal(bestFood, 12));
+            if (bestFood != null && foodNeeded > 0) {
+                withdrawals.add(new BankingTask.ItemWithdrawal(bestFood, foodNeeded));
             }
 
             List<String> keepItems = new ArrayList<>();
@@ -188,13 +217,14 @@ public class CombatTask implements Task {
             if (equippedWeapon == null || !context.equipment().hasItem(equippedWeapon.name)) {
                 // Failed to acquire/equip a weapon
                 debugLog(context, "Failed to acquire/equip weapon, returning REPLAN");
-                return TaskStatus.REPLAN;
+                return stop(TaskStatus.REPLAN, TaskStopReason.EQUIP_FAILED);
             }
 
-            if (Rs2Inventory.getInventoryFood().isEmpty()) {
+            int foodTarget = CombatStrategy.recommendedFoodCount(monster, context);
+            if (CombatStrategy.inventoryFoodCount(context) < foodTarget) {
                 // Failed to get food from bank
                 debugLog(context, "Failed to get food from bank, returning REPLAN");
-                return TaskStatus.REPLAN;
+                return stop(TaskStatus.REPLAN, TaskStopReason.MISSING_SUPPLIES);
             }
 
             debugLog(context, "Switching to CHECK_STATUS");
@@ -205,16 +235,18 @@ public class CombatTask implements Task {
         if (bankStatus == TaskStatus.FAILED || bankStatus == TaskStatus.REPLAN) {
             debugLog(context, "Banking failed/replan: " + bankStatus);
             bankingTask = null;
-            return TaskStatus.REPLAN;
+            return stop(TaskStatus.REPLAN, TaskStopReason.BANK_FAILED);
         }
 
         return TaskStatus.RUNNING;
     }
 
     private TaskStatus handleWalk(AccountContext context) {
-        debugLog(context, "handleWalk: hasFood=" + !Rs2Inventory.getInventoryFood().isEmpty() + ", health=" + Rs2Player.getHealthPercentage() + "%, nearMonster=" + context.isNear(monster.location, 12));
+        debugLog(context, "handleWalk: hasFood=" + context.inventory().hasFood() + ", health=" + Rs2Player.getHealthPercentage() + "%, nearMonster=" + context.isNear(monster.location, 12));
 
-        if (Rs2Inventory.getInventoryFood().isEmpty() && Rs2Player.getHealthPercentage() <= 50) {
+        if (CombatStrategy.inventoryFoodCount(context) == 0
+                && CombatStrategy.recommendedFoodCount(monster, context) > 0
+                && Rs2Player.getHealthPercentage() <= 50) {
             debugLog(context, "No food and low health, switching to BANKING");
             phase = Phase.BANKING;
             return TaskStatus.RUNNING;
@@ -287,6 +319,7 @@ public class CombatTask implements Task {
                 debugLog(context, "Picking up loot: " + loot.getName());
                 loot.pickup();
                 sleepUntilTrue(() -> !Rs2Player.isMoving(), 200, 3000);
+                targetSearchFailures = 0;
 
                 if (shouldBuryBones(context) && Rs2Inventory.contains("Bones")) {
                     Rs2Inventory.interact("Bones", "Bury");
@@ -328,13 +361,29 @@ public class CombatTask implements Task {
 
         if (target != null) {
             debugLog(context, "Attacking target: " + target.getName());
-            target.click("Attack");
+            boolean clicked = target.click("Attack");
+            if (!clicked) {
+                attackAttempts++;
+                debugLog(context, "Failed to click attack attempt " + attackAttempts + "/" + MAX_ATTACK_ATTEMPTS);
+                return attackAttempts >= MAX_ATTACK_ATTEMPTS
+                        ? stop(TaskStatus.REPLAN, TaskStopReason.ACTION_FAILED)
+                        : TaskStatus.RUNNING;
+            }
+            attackAttempts = 0;
+            targetSearchFailures = 0;
             sleep(600, 1000);
         } else {
             // If no monster is nearby, re-center on the spawn area
             if (!context.isNear(monster.location, 10)) {
                 debugLog(context, "No target found, not near spawn, switching to WALK_TO_MONSTER");
                 phase = Phase.WALK_TO_MONSTER;
+                targetSearchFailures = 0;
+            } else {
+                targetSearchFailures++;
+                debugLog(context, "No target found near spawn attempt " + targetSearchFailures + "/" + MAX_TARGET_SEARCH_FAILURES);
+                if (targetSearchFailures >= MAX_TARGET_SEARCH_FAILURES) {
+                    return stop(TaskStatus.REPLAN, TaskStopReason.RESOURCE_NOT_FOUND);
+                }
             }
         }
 
@@ -382,15 +431,15 @@ public class CombatTask implements Task {
         }
     }
 
-    private void configureCombatStyle(AccountContext context) {
-        debugLog(context, "Configuring combat style for " + targetSkill.getName());
+    private boolean configureCombatStyle(AccountContext context, Skill styleSkill) {
+        debugLog(context, "Configuring combat style for " + styleSkill.getName());
         Rs2Tab.switchToCombatOptionsTab();
         sleep(200, 400);
 
-        Rs2Combat.setAutoRetaliate(true);
+        boolean autoRetaliateSet = Rs2Combat.setAutoRetaliate(true);
 
         WidgetInfo styleWidget;
-        switch (targetSkill) {
+        switch (styleSkill) {
             case ATTACK:
                 styleWidget = WidgetInfo.COMBAT_STYLE_ONE;
                 break;
@@ -403,10 +452,11 @@ public class CombatTask implements Task {
                 break;
         }
 
-        Rs2Combat.setAttackStyle(styleWidget);
+        boolean styleSet = Rs2Combat.setAttackStyle(styleWidget);
         sleep(200, 400);
 
         Rs2Tab.switchToInventoryTab();
+        return autoRetaliateSet && styleSet;
     }
 
     private boolean shouldBuryBones(AccountContext context) {
@@ -420,6 +470,24 @@ public class CombatTask implements Task {
             debugLog(context, "needsReplan: target level reached (current=" + context.getRealLevel(targetSkill) + ", target=" + targetLevel + ")");
         }
         return levelCheck;
+    }
+
+    @Override
+    public TaskStopReason getReplanStopReason(AccountContext context) {
+        if (context.getRealLevel(targetSkill) >= targetLevel) {
+            return TaskStopReason.REQUIREMENT_SATISFIED;
+        }
+        return TaskStopReason.TASK_REQUESTED_REPLAN;
+    }
+
+    @Override
+    public TaskStopReason getLastStopReason() {
+        return lastStopReason;
+    }
+
+    private TaskStatus stop(TaskStatus status, TaskStopReason reason) {
+        lastStopReason = reason != null ? reason : TaskStopReason.UNKNOWN;
+        return status;
     }
 
     @Override

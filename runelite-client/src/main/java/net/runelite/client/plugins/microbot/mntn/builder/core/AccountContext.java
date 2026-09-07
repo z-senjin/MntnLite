@@ -3,6 +3,7 @@ package net.runelite.client.plugins.microbot.mntn.builder.core;
 import net.runelite.api.Quest;
 import net.runelite.api.QuestState;
 import net.runelite.api.Skill;
+import net.runelite.api.WorldType;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.util.player.Rs2Player;
@@ -51,6 +52,19 @@ public class AccountContext {
 
     public boolean isLoggedIn() {
         return Microbot.isLoggedIn();
+    }
+
+    public AccountSnapshot snapshot() {
+        return AccountSnapshot.capture(this);
+    }
+
+    public boolean isMembersWorld() {
+        if (!isLoggedIn() || Microbot.getClient() == null) {
+            return false;
+        }
+        return Microbot.getClientThread().runOnClientThreadOptional(() ->
+                Microbot.getClient().getWorldType().contains(WorldType.MEMBERS)
+        ).orElse(false);
     }
 
     public int getRealLevel(Skill skill) {

@@ -4,11 +4,15 @@ import net.runelite.api.Skill;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.Strategy;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
+import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.ItemRequirement;
+import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.Requirement;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.skilling.FishingTask;
 import net.runelite.client.plugins.microbot.util.math.Rs2Random;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 
 public class FishingStrategy implements Strategy {
 
@@ -53,13 +57,14 @@ public class FishingStrategy implements Strategy {
                 1, 10,
                 1530,
                 "Net",
+                "Raw shrimps",
                 new ToolRequirement[]{
                         new ToolRequirement("Small fishing net", 1)
                 },
                 new WorldPoint(3242, 3149, 0) // TODO verify - placeholder
         ),
         FLY_FISH_SALMON(
-                30, 70, 1527, "Lure", new ToolRequirement[]{
+                30, 70, 1527, "Lure", "Raw salmon", new ToolRequirement[]{
                 new ToolRequirement("Fly fishing rod", 1), new ToolRequirement("Feather", WITHDRAW_ALL)
         }, new WorldPoint(3241, 3243, 0)
         ),
@@ -67,6 +72,7 @@ public class FishingStrategy implements Strategy {
                 40, 90,
                 2, // TODO verify - placeholder
                 "Cage",
+                "Raw lobster",
                 new ToolRequirement[]{
                         new ToolRequirement("Lobster pot", 1)
                 },
@@ -77,15 +83,17 @@ public class FishingStrategy implements Strategy {
         public final double xpValue;
         public final int npcId;
         public final String action;
+        public final String fishItemName;
         public final ToolRequirement[] toolRequirements;
         public final WorldPoint location;
 
         Method(int requiredLevel, double xpValue, int npcId, String action,
-               ToolRequirement[] toolRequirements, WorldPoint location) {
+               String fishItemName, ToolRequirement[] toolRequirements, WorldPoint location) {
             this.requiredLevel = requiredLevel;
             this.xpValue = xpValue;
             this.npcId = npcId;
             this.action = action;
+            this.fishItemName = fishItemName;
             this.toolRequirements = toolRequirements;
             this.location = location;
         }
@@ -128,6 +136,15 @@ public class FishingStrategy implements Strategy {
     }
 
     @Override
+    public List<Requirement> requirements(AccountContext context) {
+        List<Requirement> requirements = new ArrayList<>();
+        for (ToolRequirement requirement : method.toolRequirements) {
+            requirements.add(new ItemRequirement(requirement.itemName, Math.max(1, requirement.quantity)));
+        }
+        return requirements;
+    }
+
+    @Override
     public double score(AccountContext context) {
 
         int level = context.getRealLevel(Skill.FISHING);
@@ -159,6 +176,16 @@ public class FishingStrategy implements Strategy {
         score += convenienceTotal / method.toolRequirements.length;
 
         return score;
+    }
+
+    @Override
+    public WorldPoint preferredLocation(AccountContext context) {
+        return method.location;
+    }
+
+    @Override
+    public int estimatedXpPerHour(AccountContext context) {
+        return (int) (method.xpValue * 450);
     }
 
     @Override

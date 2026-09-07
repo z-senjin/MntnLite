@@ -8,6 +8,8 @@ public enum ActivityType {
     WOODCUTTING,
     COMBAT,
     BANKING,
+    SUPPLY,
+    MONEY_MAKING,
     MINING,
     SMITHING,
     QUESTING;
@@ -28,6 +30,7 @@ public enum ActivityType {
             case ATTACK:
             case STRENGTH:
             case DEFENCE:
+            case PRAYER:
                 return COMBAT;
             default:
                 return null;

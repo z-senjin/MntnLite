@@ -10,6 +10,7 @@ import net.runelite.client.plugins.microbot.mntn.builder.activities.mining.Minin
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStatus;
+import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStopReason;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.banking.BankingTask;
 import net.runelite.client.plugins.microbot.util.dialogues.Rs2Dialogue;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
@@ -73,6 +74,7 @@ public class DoricQuestTask implements Task {
     private Phase phase = Phase.CHECK_STATUS;
     private boolean hasBanked = false;
     private BankingTask bankingTask;
+    private TaskStopReason lastStopReason = TaskStopReason.NONE;
 
     private void debugLog(AccountContext context, String message) {
         if (context.isDebugLogging()) {
@@ -86,7 +88,7 @@ public class DoricQuestTask implements Task {
 
         if (!context.isLoggedIn()) {
             debugLog(context, "Not logged in, returning BLOCKED");
-            return TaskStatus.BLOCKED;
+            return stop(TaskStatus.BLOCKED, TaskStopReason.NOT_LOGGED_IN);
         }
 
         if (context.getQuestState(Quest.DORICS_QUEST) == QuestState.FINISHED) {
@@ -226,7 +228,7 @@ public class DoricQuestTask implements Task {
             bankingTask = null;
             hasBanked = true;
             phase = Phase.CHECK_STATUS;
-            return TaskStatus.RUNNING;
+            return stop(TaskStatus.REPLAN, TaskStopReason.BANK_FAILED);
         }
 
         return TaskStatus.RUNNING;
@@ -246,7 +248,7 @@ public class DoricQuestTask implements Task {
         if (bankPickaxe == null) {
             // No pickaxe anywhere - can't mine, replan
             debugLog(context, "No pickaxe anywhere, returning REPLAN");
-            return TaskStatus.REPLAN;
+            return stop(TaskStatus.REPLAN, TaskStopReason.MISSING_TOOL);
         }
 
         if (bankingTask == null) {
@@ -269,7 +271,7 @@ public class DoricQuestTask implements Task {
         if (status == TaskStatus.FAILED || status == TaskStatus.REPLAN) {
             debugLog(context, "Pickaxe banking failed/replan: " + status);
             bankingTask = null;
-            return TaskStatus.REPLAN;
+            return stop(TaskStatus.REPLAN, TaskStopReason.BANK_FAILED);
         }
 
         return TaskStatus.RUNNING;
@@ -416,6 +418,24 @@ public class DoricQuestTask implements Task {
     @Override
     public boolean needsReplan(AccountContext context) {
         return context.getQuestState(Quest.DORICS_QUEST) == QuestState.FINISHED;
+    }
+
+    @Override
+    public TaskStopReason getReplanStopReason(AccountContext context) {
+        if (context.getQuestState(Quest.DORICS_QUEST) == QuestState.FINISHED) {
+            return TaskStopReason.REQUIREMENT_SATISFIED;
+        }
+        return TaskStopReason.TASK_REQUESTED_REPLAN;
+    }
+
+    @Override
+    public TaskStopReason getLastStopReason() {
+        return lastStopReason;
+    }
+
+    private TaskStatus stop(TaskStatus status, TaskStopReason reason) {
+        lastStopReason = reason != null ? reason : TaskStopReason.UNKNOWN;
+        return status;
     }
 
     @Override

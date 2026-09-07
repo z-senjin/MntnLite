@@ -1,12 +1,49 @@
 package net.runelite.client.plugins.microbot.mntn.builder.activities;
 
+import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
+import net.runelite.client.plugins.microbot.mntn.builder.core.ContentAccess;
+import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.Requirement;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
 
 import java.time.Duration;
+import java.util.Collections;
+import java.util.List;
 
 public interface Strategy {
     String name();
+
+    default ContentAccess contentAccess() {
+        return ContentAccess.FREE_TO_PLAY;
+    }
+
+    default List<Requirement> requirements(AccountContext context) {
+        return Collections.emptyList();
+    }
+
+    default WorldPoint preferredLocation(AccountContext context) {
+        return null;
+    }
+
+    default int estimatedXpPerHour(AccountContext context) {
+        return 0;
+    }
+
+    default int estimatedProfitPerHour(AccountContext context) {
+        return 0;
+    }
+
+    default int estimatedSupplyCost(AccountContext context) {
+        return 0;
+    }
+
+    default double safetyScore(AccountContext context) {
+        return 0;
+    }
+
+    default double unlockValue(AccountContext context) {
+        return 0;
+    }
 
     boolean canExecute(AccountContext context);
 

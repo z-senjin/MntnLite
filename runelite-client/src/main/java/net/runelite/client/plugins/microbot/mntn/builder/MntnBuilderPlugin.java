@@ -14,8 +14,8 @@ import java.awt.*;
 
 @PluginDescriptor(
         name = "Mntn AIO Account Builder",
-        description = "Planner-driven F2P account builder (vertical slice: Fishing only)",
-        tags = {"mntn", "builder", "aio", "fishing"},
+        description = "Planner-driven account builder with an F2P method catalog",
+        tags = {"mntn", "builder", "aio", "account"},
         enabledByDefault = false,
         isExternal = false
 )

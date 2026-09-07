@@ -3,18 +3,23 @@ package net.runelite.client.plugins.microbot.mntn.builder.activities.questing.qu
 import net.runelite.api.Quest;
 import net.runelite.api.QuestState;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.Strategy;
+import net.runelite.client.plugins.microbot.mntn.builder.activities.questing.QuestCatalog;
+import net.runelite.client.plugins.microbot.mntn.builder.activities.questing.QuestMetadata;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
+import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.Requirement;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.questing.CooksAssistantTask;
 import net.runelite.client.plugins.microbot.util.math.Rs2Random;
 
 import java.time.Duration;
+import java.util.List;
 
 public class CooksAssistantStrategy implements Strategy {
 
     public static final String EGG = "Egg";
     public static final String BUCKET_OF_MILK = "Bucket of milk";
     public static final String POT_OF_FLOUR = "Pot of flour";
+    private static final QuestMetadata METADATA = QuestCatalog.get(Quest.COOKS_ASSISTANT).orElseThrow(IllegalStateException::new);
 
     @Override
     public String name() {
@@ -24,6 +29,11 @@ public class CooksAssistantStrategy implements Strategy {
     @Override
     public boolean canExecute(AccountContext context) {
         return context.getQuestState(Quest.COOKS_ASSISTANT) != QuestState.FINISHED;
+    }
+
+    @Override
+    public List<Requirement> requirements(AccountContext context) {
+        return METADATA.requirements();
     }
 
     @Override
@@ -54,6 +64,16 @@ public class CooksAssistantStrategy implements Strategy {
         }
 
         return score;
+    }
+
+    @Override
+    public net.runelite.api.coords.WorldPoint preferredLocation(AccountContext context) {
+        return METADATA.getPreferredLocation();
+    }
+
+    @Override
+    public double unlockValue(AccountContext context) {
+        return context.getQuestState(Quest.COOKS_ASSISTANT) == QuestState.FINISHED ? 0 : METADATA.unlockValue(context);
     }
 
     @Override

@@ -34,7 +34,7 @@ public class CombatActivity implements Activity {
         Skill targetSkill = Skill.STRENGTH;
         if (request.payload() instanceof Skill) {
             Skill s = (Skill) request.payload();
-            if (s == Skill.ATTACK || s == Skill.DEFENCE || s == Skill.STRENGTH) {
+            if (s == Skill.ATTACK || s == Skill.DEFENCE || s == Skill.STRENGTH || s == Skill.PRAYER) {
                 targetSkill = s;
             }
         }
@@ -46,6 +46,9 @@ public class CombatActivity implements Activity {
                 break;
             case DEFENCE:
                 targetLevel = config.defenceTarget();
+                break;
+            case PRAYER:
+                targetLevel = config.prayerTarget();
                 break;
             case STRENGTH:
             default:

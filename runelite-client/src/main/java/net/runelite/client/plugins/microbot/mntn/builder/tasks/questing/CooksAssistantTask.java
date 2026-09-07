@@ -9,6 +9,7 @@ import net.runelite.client.plugins.microbot.api.tileobject.models.Rs2TileObjectM
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStatus;
+import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStopReason;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.banking.BankingTask;
 import net.runelite.client.plugins.microbot.util.dialogues.Rs2Dialogue;
 import net.runelite.client.plugins.microbot.api.tileitem.models.Rs2TileItemModel;
@@ -53,6 +54,7 @@ public class CooksAssistantTask implements Task {
     private Phase phase = Phase.CHECK_STATUS;
     private boolean hasBanked = false;
     private BankingTask bankingTask;
+    private TaskStopReason lastStopReason = TaskStopReason.NONE;
 
     private void debugLog(AccountContext context, String message) {
         if (context.isDebugLogging()) {
@@ -66,7 +68,7 @@ public class CooksAssistantTask implements Task {
 
         if (!context.isLoggedIn()) {
             debugLog(context, "Not logged in, returning BLOCKED");
-            return TaskStatus.BLOCKED;
+            return stop(TaskStatus.BLOCKED, TaskStopReason.NOT_LOGGED_IN);
         }
 
         if (context.getQuestState(Quest.COOKS_ASSISTANT) == QuestState.FINISHED) {
@@ -214,7 +216,7 @@ public class CooksAssistantTask implements Task {
             bankingTask = null;
             hasBanked = true;
             phase = Phase.CHECK_STATUS;
-            return TaskStatus.RUNNING;
+            return stop(TaskStatus.REPLAN, TaskStopReason.BANK_FAILED);
         }
 
         return TaskStatus.RUNNING;
@@ -501,6 +503,24 @@ public class CooksAssistantTask implements Task {
     @Override
     public boolean needsReplan(AccountContext context) {
         return context.getQuestState(Quest.COOKS_ASSISTANT) == QuestState.FINISHED;
+    }
+
+    @Override
+    public TaskStopReason getReplanStopReason(AccountContext context) {
+        if (context.getQuestState(Quest.COOKS_ASSISTANT) == QuestState.FINISHED) {
+            return TaskStopReason.REQUIREMENT_SATISFIED;
+        }
+        return TaskStopReason.TASK_REQUESTED_REPLAN;
+    }
+
+    @Override
+    public TaskStopReason getLastStopReason() {
+        return lastStopReason;
+    }
+
+    private TaskStatus stop(TaskStatus status, TaskStopReason reason) {
+        lastStopReason = reason != null ? reason : TaskStopReason.UNKNOWN;
+        return status;
     }
 
     @Override

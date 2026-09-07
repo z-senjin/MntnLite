@@ -7,6 +7,7 @@ import net.runelite.client.plugins.microbot.mntn.builder.activities.smithing.For
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStatus;
+import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStopReason;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.banking.BankingTask;
 import net.runelite.client.plugins.microbot.util.player.Rs2Player;
 import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
@@ -26,6 +27,7 @@ public class ForgingTask implements Task {
     private final ForgingStrategy.BarType barType;
     private Phase phase = Phase.WALK_TO_ANVIL;
     private BankingTask bankingTask;
+    private TaskStopReason lastStopReason = TaskStopReason.NONE;
 
     public ForgingTask(ForgingStrategy.BarType barType) {
         this.barType = barType;
@@ -43,7 +45,7 @@ public class ForgingTask implements Task {
 
         if (!context.isLoggedIn()) {
             debugLog(context, "Not logged in, returning BLOCKED");
-            return TaskStatus.BLOCKED;
+            return stop(TaskStatus.BLOCKED, TaskStopReason.NOT_LOGGED_IN);
         }
 
         switch (phase) {
@@ -172,7 +174,7 @@ public class ForgingTask implements Task {
             if (!hasHammerAndBars(context)) {
                 // Out of bars or missing hammer in bank
                 debugLog(context, "Missing hammer or bars after banking, returning REPLAN");
-                return TaskStatus.REPLAN;
+                return stop(TaskStatus.REPLAN, TaskStopReason.MISSING_SUPPLIES);
             }
 
             debugLog(context, "Switching to WALK_TO_ANVIL");
@@ -183,7 +185,7 @@ public class ForgingTask implements Task {
         if (bankStatus == TaskStatus.FAILED || bankStatus == TaskStatus.REPLAN) {
             debugLog(context, "Banking failed/replan: " + bankStatus);
             bankingTask = null;
-            return bankStatus;
+            return stop(bankStatus, TaskStopReason.BANK_FAILED);
         }
 
         return TaskStatus.RUNNING;
@@ -236,6 +238,24 @@ public class ForgingTask implements Task {
             debugLog(context, "needsReplan: levelCheck=" + levelCheck + " (current=" + context.getRealLevel(Skill.SMITHING) + ", required=" + barType.requiredLevel + ")");
         }
         return levelCheck;
+    }
+
+    @Override
+    public TaskStopReason getReplanStopReason(AccountContext context) {
+        if (context.getRealLevel(Skill.SMITHING) < barType.requiredLevel) {
+            return TaskStopReason.LEVEL_TOO_LOW;
+        }
+        return TaskStopReason.TASK_REQUESTED_REPLAN;
+    }
+
+    @Override
+    public TaskStopReason getLastStopReason() {
+        return lastStopReason;
+    }
+
+    private TaskStatus stop(TaskStatus status, TaskStopReason reason) {
+        lastStopReason = reason != null ? reason : TaskStopReason.UNKNOWN;
+        return status;
     }
 
     @Override

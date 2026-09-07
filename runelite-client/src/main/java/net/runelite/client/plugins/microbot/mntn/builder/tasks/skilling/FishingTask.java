@@ -10,6 +10,7 @@ import net.runelite.client.plugins.microbot.mntn.builder.activities.fishing.Fish
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStatus;
+import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStopReason;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.banking.BankingTask;
 
 import java.util.ArrayList;
@@ -36,6 +37,7 @@ public class FishingTask implements Task {
     private final FishingStrategy.Method method;
     private Phase phase = Phase.WALK_TO_SPOT;
     private BankingTask bankingTask;
+    private TaskStopReason lastStopReason = TaskStopReason.NONE;
 
     public FishingTask(FishingStrategy.Method method) {
         this.method = method;
@@ -53,7 +55,7 @@ public class FishingTask implements Task {
 
         if (!context.isLoggedIn()) {
             debugLog(context, "Not logged in, returning BLOCKED");
-            return TaskStatus.BLOCKED;
+            return stop(TaskStatus.BLOCKED, TaskStopReason.NOT_LOGGED_IN);
         }
 
         switch (phase) {
@@ -181,7 +183,7 @@ public class FishingTask implements Task {
 
         if (!hasAllToolsAvailable(context)) {
             debugLog(context, "Missing required tool(s) everywhere (inventory + bank) -> REPLAN");
-            return TaskStatus.REPLAN;
+            return stop(TaskStatus.REPLAN, TaskStopReason.MISSING_TOOL);
         }
 
         // Create the banking task only once.
@@ -205,7 +207,7 @@ public class FishingTask implements Task {
                     // Check if the missing tool actually exists in the bank before withdrawing
                     if (!context.bank().hasItem(missing.itemName)) {
                         debugLog(context, "Missing tool " + missing.itemName + " not in bank -> REPLAN");
-                        return TaskStatus.REPLAN;
+                        return stop(TaskStatus.REPLAN, TaskStopReason.MISSING_TOOL);
                     }
 
                     // Withdraw one missing tool AT ITS OWN REQUESTED QUANTITY - 1 for a rod,
@@ -249,7 +251,7 @@ public class FishingTask implements Task {
             if (!hasAllTools(context)) {
                 if (!hasAllToolsAvailable(context)) {
                     debugLog(context, "Still missing required tool after banking -> REPLAN");
-                    return TaskStatus.REPLAN;
+                    return stop(TaskStatus.REPLAN, TaskStopReason.MISSING_TOOL);
                 }
                 debugLog(context, "Tools still missing from inventory, staying in BANKING phase");
                 phase = Phase.BANKING;
@@ -267,7 +269,7 @@ public class FishingTask implements Task {
 
             debugLog(context, "Banking task failed/replan, clearing banking task");
             bankingTask = null;
-            return bankStatus;
+            return stop(bankStatus, TaskStopReason.BANK_FAILED);
         }
 
         return TaskStatus.RUNNING;
@@ -283,6 +285,27 @@ public class FishingTask implements Task {
             debugLog(context, "needsReplan: levelCheck=" + levelCheck + " (current=" + context.getRealLevel(Skill.FISHING) + ", required=" + method.requiredLevel + "), toolsCheck=" + toolsCheck);
         }
         return levelCheck || toolsCheck;
+    }
+
+    @Override
+    public TaskStopReason getReplanStopReason(AccountContext context) {
+        if (context.getRealLevel(Skill.FISHING) < method.requiredLevel) {
+            return TaskStopReason.LEVEL_TOO_LOW;
+        }
+        if (!hasAllToolsAvailable(context)) {
+            return TaskStopReason.MISSING_TOOL;
+        }
+        return TaskStopReason.TASK_REQUESTED_REPLAN;
+    }
+
+    @Override
+    public TaskStopReason getLastStopReason() {
+        return lastStopReason;
+    }
+
+    private TaskStatus stop(TaskStatus status, TaskStopReason reason) {
+        lastStopReason = reason != null ? reason : TaskStopReason.UNKNOWN;
+        return status;
     }
 
     @Override

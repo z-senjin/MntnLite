@@ -4,11 +4,15 @@ import net.runelite.api.Skill;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.Strategy;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
+import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.ItemRequirement;
+import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.Requirement;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.skilling.ForgingTask;
 import net.runelite.client.plugins.microbot.util.math.Rs2Random;
 
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.List;
 
 public class ForgingStrategy implements Strategy {
 
@@ -60,6 +64,14 @@ public class ForgingStrategy implements Strategy {
     }
 
     @Override
+    public List<Requirement> requirements(AccountContext context) {
+        return Arrays.asList(
+                new ItemRequirement(HAMMER, 1),
+                new ItemRequirement(barType.barItemName, 1)
+        );
+    }
+
+    @Override
     public double score(AccountContext context) {
         int level = context.getRealLevel(Skill.SMITHING);
         if (level < barType.requiredLevel) {
@@ -79,6 +91,16 @@ public class ForgingStrategy implements Strategy {
         }
 
         return score;
+    }
+
+    @Override
+    public WorldPoint preferredLocation(AccountContext context) {
+        return VARROCK_ANVIL;
+    }
+
+    @Override
+    public int estimatedXpPerHour(AccountContext context) {
+        return (int) (barType.xpPerBar * 650);
     }
 
     @Override

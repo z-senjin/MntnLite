@@ -4,11 +4,15 @@ import net.runelite.api.Skill;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.Strategy;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
+import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.ItemRequirement;
+import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.Requirement;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.skilling.SmeltingTask;
 import net.runelite.client.plugins.microbot.util.math.Rs2Random;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 
 public class SmeltingStrategy implements Strategy {
 
@@ -102,6 +106,15 @@ public class SmeltingStrategy implements Strategy {
     }
 
     @Override
+    public List<Requirement> requirements(AccountContext context) {
+        List<Requirement> requirements = new ArrayList<>();
+        for (OreRequirement ingredient : bar.ingredients) {
+            requirements.add(new ItemRequirement(ingredient.itemName, ingredient.withdrawAmount));
+        }
+        return requirements;
+    }
+
+    @Override
     public double score(AccountContext context) {
         int level = context.getRealLevel(Skill.SMITHING);
         if (level < bar.requiredLevel) {
@@ -121,6 +134,16 @@ public class SmeltingStrategy implements Strategy {
         score += convenienceTotal / bar.ingredients.length;
 
         return score;
+    }
+
+    @Override
+    public WorldPoint preferredLocation(AccountContext context) {
+        return bar.furnaceLocation;
+    }
+
+    @Override
+    public int estimatedXpPerHour(AccountContext context) {
+        return (int) (bar.xpValue * 900);
     }
 
     @Override

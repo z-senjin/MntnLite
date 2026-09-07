@@ -7,6 +7,7 @@ import net.runelite.client.plugins.microbot.mntn.builder.activities.mining.Minin
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStatus;
+import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStopReason;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.banking.BankingTask;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
 import net.runelite.client.plugins.microbot.util.player.Rs2Player;
@@ -23,6 +24,7 @@ public class MiningTask implements Task {
     private final MiningStrategy.Method method;
     private Phase phase = Phase.WALK_TO_MINE;
     private BankingTask bankingTask;
+    private TaskStopReason lastStopReason = TaskStopReason.NONE;
 
     public MiningTask(MiningStrategy.Method method) {
         this.method = method;
@@ -40,7 +42,7 @@ public class MiningTask implements Task {
 
         if (!context.isLoggedIn()) {
             debugLog(context, "Not logged in, returning BLOCKED");
-            return TaskStatus.BLOCKED;
+            return stop(TaskStatus.BLOCKED, TaskStopReason.NOT_LOGGED_IN);
         }
 
         switch (phase) {
@@ -153,7 +155,7 @@ public class MiningTask implements Task {
                         );
                     } else {
                         debugLog(context, "No pickaxe available anywhere, returning REPLAN");
-                        return TaskStatus.REPLAN;
+                        return stop(TaskStatus.REPLAN, TaskStopReason.MISSING_TOOL);
                     }
                 }
             }
@@ -169,7 +171,7 @@ public class MiningTask implements Task {
             if (pickaxe == null) {
                 if (MiningStrategy.findBestPickaxe(context, false) == null) {
                     debugLog(context, "No pickaxe available after banking, returning REPLAN");
-                    return TaskStatus.REPLAN;
+                    return stop(TaskStatus.REPLAN, TaskStopReason.MISSING_TOOL);
                 }
                 debugLog(context, "Pickaxe not in inventory/equipped but in bank, staying in BANKING");
                 phase = Phase.BANKING;
@@ -185,7 +187,7 @@ public class MiningTask implements Task {
         if (bankStatus == TaskStatus.FAILED || bankStatus == TaskStatus.REPLAN) {
             debugLog(context, "Banking failed/replan: " + bankStatus);
             bankingTask = null;
-            return bankStatus;
+            return stop(bankStatus, TaskStopReason.BANK_FAILED);
         }
 
         return TaskStatus.RUNNING;
@@ -231,6 +233,27 @@ public class MiningTask implements Task {
             debugLog(context, "needsReplan: levelCheck=" + levelCheck + " (current=" + context.getRealLevel(Skill.MINING) + ", required=" + method.requiredLevel + "), pickaxeCheck=" + pickaxeCheck);
         }
         return levelCheck || pickaxeCheck;
+    }
+
+    @Override
+    public TaskStopReason getReplanStopReason(AccountContext context) {
+        if (context.getRealLevel(Skill.MINING) < method.requiredLevel) {
+            return TaskStopReason.LEVEL_TOO_LOW;
+        }
+        if (MiningStrategy.findBestPickaxe(context, false) == null) {
+            return TaskStopReason.MISSING_TOOL;
+        }
+        return TaskStopReason.TASK_REQUESTED_REPLAN;
+    }
+
+    @Override
+    public TaskStopReason getLastStopReason() {
+        return lastStopReason;
+    }
+
+    private TaskStatus stop(TaskStatus status, TaskStopReason reason) {
+        lastStopReason = reason != null ? reason : TaskStopReason.UNKNOWN;
+        return status;
     }
 
     @Override

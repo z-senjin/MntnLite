@@ -31,7 +31,7 @@ public class QuestGoal implements Goal {
 
     @Override
     public List<Requirement> requirements(AccountContext context) {
-        return Collections.singletonList(new QuestRequirement(quest, priority));
+        return Collections.singletonList(new QuestRequirement(quest));
     }
 
     @Override

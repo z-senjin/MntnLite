@@ -28,8 +28,7 @@ public class QuestingActivity implements Activity {
 
         if (request.payload() instanceof Quest) {
             Quest quest = (Quest) request.payload();
-            return quest == Quest.COOKS_ASSISTANT
-                    || quest == Quest.DORICS_QUEST;
+            return QuestCatalog.isSupported(quest);
         }
 
         return true;
@@ -45,6 +44,7 @@ public class QuestingActivity implements Activity {
             if (quest == Quest.DORICS_QUEST) {
                 return Collections.singletonList(new DoricQuestStrategy());
             }
+            return Collections.emptyList();
         }
 
         List<Strategy> strategies = new ArrayList<>();

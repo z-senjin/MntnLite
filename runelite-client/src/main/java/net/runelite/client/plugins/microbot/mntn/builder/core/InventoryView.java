@@ -41,4 +41,8 @@ public class InventoryView {
     public int getCount(String itemName) {
         return Rs2Inventory.itemQuantity(itemName); // TODO verify this exists
     }
+
+    public int getCount(int itemId) {
+        return Rs2Inventory.itemQuantity(itemId);
+    }
 }

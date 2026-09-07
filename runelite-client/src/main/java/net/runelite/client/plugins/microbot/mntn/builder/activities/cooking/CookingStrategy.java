@@ -5,11 +5,15 @@ import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.Strategy;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
+import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.ItemRequirement;
+import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.Requirement;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.skilling.CookingTask;
 import net.runelite.client.plugins.microbot.util.math.Rs2Random;
 
 import java.time.Duration;
+import java.util.Collections;
+import java.util.List;
 
 public class CookingStrategy implements Strategy {
 
@@ -124,6 +128,11 @@ public class CookingStrategy implements Strategy {
     }
 
     @Override
+    public List<Requirement> requirements(AccountContext context) {
+        return Collections.singletonList(new ItemRequirement(method.rawItemName, 1));
+    }
+
+    @Override
     public double score(AccountContext context) {
 
         int level = context.getRealLevel(Skill.COOKING);
@@ -153,6 +162,16 @@ public class CookingStrategy implements Strategy {
         }
 
         return score;
+    }
+
+    @Override
+    public WorldPoint preferredLocation(AccountContext context) {
+        return method.location;
+    }
+
+    @Override
+    public int estimatedXpPerHour(AccountContext context) {
+        return (int) (method.xpValue * 900);
     }
 
     @Override

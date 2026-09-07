@@ -2,14 +2,17 @@ package net.runelite.client.plugins.microbot.mntn.builder.activities.questing.qu
 
 import net.runelite.api.Quest;
 import net.runelite.api.QuestState;
-import net.runelite.api.Skill;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.Strategy;
+import net.runelite.client.plugins.microbot.mntn.builder.activities.questing.QuestCatalog;
+import net.runelite.client.plugins.microbot.mntn.builder.activities.questing.QuestMetadata;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
+import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.Requirement;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.questing.DoricQuestTask;
 import net.runelite.client.plugins.microbot.util.math.Rs2Random;
 
 import java.time.Duration;
+import java.util.List;
 
 public class DoricQuestStrategy implements Strategy {
 
@@ -20,6 +23,7 @@ public class DoricQuestStrategy implements Strategy {
     public static final int CLAY_NEEDED = 6;
     public static final int COPPER_NEEDED = 4;
     public static final int IRON_NEEDED = 2;
+    private static final QuestMetadata METADATA = QuestCatalog.get(Quest.DORICS_QUEST).orElseThrow(IllegalStateException::new);
 
     @Override
     public String name() {
@@ -28,18 +32,17 @@ public class DoricQuestStrategy implements Strategy {
 
     @Override
     public boolean canExecute(AccountContext context) {
-        if (context.getQuestState(Quest.DORICS_QUEST) == QuestState.FINISHED) {
-            return false;
-        }
-        return context.getRealLevel(Skill.MINING) >= 15;
+        return context.getQuestState(Quest.DORICS_QUEST) != QuestState.FINISHED;
+    }
+
+    @Override
+    public List<Requirement> requirements(AccountContext context) {
+        return METADATA.requirements();
     }
 
     @Override
     public double score(AccountContext context) {
         if (context.getQuestState(Quest.DORICS_QUEST) == QuestState.FINISHED) {
-            return -1000;
-        }
-        if (context.getRealLevel(Skill.MINING) < 15) {
             return -1000;
         }
 
@@ -65,6 +68,16 @@ public class DoricQuestStrategy implements Strategy {
         score += ironAvailable * 2;
 
         return score;
+    }
+
+    @Override
+    public net.runelite.api.coords.WorldPoint preferredLocation(AccountContext context) {
+        return METADATA.getPreferredLocation();
+    }
+
+    @Override
+    public double unlockValue(AccountContext context) {
+        return context.getQuestState(Quest.DORICS_QUEST) == QuestState.FINISHED ? 0 : METADATA.unlockValue(context);
     }
 
     @Override

@@ -13,6 +13,7 @@ import net.runelite.client.plugins.microbot.mntn.builder.activities.cooking.Cook
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStatus;
+import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStopReason;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.banking.BankingTask;
 import net.runelite.client.plugins.microbot.util.widget.Rs2Widget;
 
@@ -50,6 +51,7 @@ public class CookingTask implements Task {
     private Phase phase = Phase.WALK_TO_COOKING;
 
     private BankingTask bankingTask;
+    private TaskStopReason lastStopReason = TaskStopReason.NONE;
 
     public CookingTask(CookingStrategy.Method method) {
         this.method = method;
@@ -67,7 +69,7 @@ public class CookingTask implements Task {
 
         if (!context.isLoggedIn()) {
             debugLog(context, "Not logged in, returning BLOCKED");
-            return TaskStatus.BLOCKED;
+            return stop(TaskStatus.BLOCKED, TaskStopReason.NOT_LOGGED_IN);
         }
 
         switch (phase) {
@@ -121,9 +123,9 @@ public class CookingTask implements Task {
             int bankCount = context.bank().getCount(method.rawItemName);
             debugLog(context, "No raw item in inventory, bank count=" + bankCount);
 
-            if (bankCount < WITHDRAW_QUANTITY) {
+            if (!context.bank().hasItem(method.rawItemName)) {
                 debugLog(context, "Not enough raw items in bank (" + bankCount + "), returning REPLAN");
-                return TaskStatus.REPLAN;
+                return stop(TaskStatus.REPLAN, TaskStopReason.MISSING_SUPPLIES);
             }
 
             debugLog(context, "Switching to BANKING phase to withdraw raw items");
@@ -199,7 +201,7 @@ public class CookingTask implements Task {
 
         if (!context.inventory().hasItem(method.rawItemName) && !context.bank().hasItem(method.rawItemName)) {
             debugLog(context, "No raw item in inventory or bank, returning REPLAN");
-            return TaskStatus.REPLAN;
+            return stop(TaskStatus.REPLAN, TaskStopReason.MISSING_SUPPLIES);
         }
 
         if (bankingTask == null) {
@@ -222,10 +224,14 @@ public class CookingTask implements Task {
             bankingTask = null;
             if (!context.inventory().hasItem(method.rawItemName)) {
                 debugLog(context, "Still no raw item in inventory after banking, returning REPLAN");
-                return TaskStatus.REPLAN;
+                return stop(TaskStatus.REPLAN, TaskStopReason.MISSING_SUPPLIES);
             }
             debugLog(context, "Raw item in inventory, switching to WALK_TO_COOKING");
             phase = Phase.WALK_TO_COOKING;
+        }
+
+        if (bankStatus == TaskStatus.FAILED || bankStatus == TaskStatus.REPLAN) {
+            return stop(bankStatus, TaskStopReason.BANK_FAILED);
         }
 
         return bankStatus;
@@ -244,6 +250,27 @@ public class CookingTask implements Task {
             debugLog(context, "needsReplan: levelCheck=" + levelCheck + " (current=" + context.getRealLevel(Skill.COOKING) + ", required=" + method.requiredLevel + "), itemCheck=" + itemCheck);
         }
         return levelCheck || itemCheck;
+    }
+
+    @Override
+    public TaskStopReason getReplanStopReason(AccountContext context) {
+        if (context.getRealLevel(Skill.COOKING) < method.requiredLevel) {
+            return TaskStopReason.LEVEL_TOO_LOW;
+        }
+        if (!context.inventory().hasItem(method.rawItemName) && !context.bank().hasItem(method.rawItemName)) {
+            return TaskStopReason.MISSING_SUPPLIES;
+        }
+        return TaskStopReason.TASK_REQUESTED_REPLAN;
+    }
+
+    @Override
+    public TaskStopReason getLastStopReason() {
+        return lastStopReason;
+    }
+
+    private TaskStatus stop(TaskStatus status, TaskStopReason reason) {
+        lastStopReason = reason != null ? reason : TaskStopReason.UNKNOWN;
+        return status;
     }
 
     @Override

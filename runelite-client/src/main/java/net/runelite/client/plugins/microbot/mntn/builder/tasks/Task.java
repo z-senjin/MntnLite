@@ -13,7 +13,15 @@ public interface Task {
 
     boolean needsReplan(AccountContext context);
 
+    default TaskStopReason getReplanStopReason(AccountContext context) {
+        return TaskStopReason.TASK_REQUESTED_REPLAN;
+    }
+
     default String describe() {
         return getClass().getSimpleName();
+    }
+
+    default TaskStopReason getLastStopReason() {
+        return TaskStopReason.NONE;
     }
 }

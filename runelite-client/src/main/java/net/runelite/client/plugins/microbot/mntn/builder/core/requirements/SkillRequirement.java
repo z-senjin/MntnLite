@@ -11,12 +11,10 @@ public class SkillRequirement implements Requirement {
 
     private final Skill skill;
     private final int targetLevel;
-    private final double urgency;
 
-    public SkillRequirement(Skill skill, int targetLevel, double urgency) {
+    public SkillRequirement(Skill skill, int targetLevel) {
         this.skill = skill;
         this.targetLevel = targetLevel;
-        this.urgency = urgency;
     }
 
     @Override
@@ -35,7 +33,8 @@ public class SkillRequirement implements Requirement {
 
     @Override
     public double urgency(AccountContext context) {
-        return urgency;
+        int remaining = Math.max(0, targetLevel - context.getRealLevel(skill));
+        return Math.min(25, remaining * 2.0);
     }
 
     @Override

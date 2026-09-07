@@ -4,11 +4,15 @@ import net.runelite.api.Skill;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.Strategy;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
+import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.ItemRequirement;
+import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.Requirement;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.skilling.WoodcuttingTask;
 import net.runelite.client.plugins.microbot.util.math.Rs2Random;
 
 import java.time.Duration;
+import java.util.Collections;
+import java.util.List;
 
 public class WoodcuttingStrategy implements Strategy {
 
@@ -117,6 +121,15 @@ public class WoodcuttingStrategy implements Strategy {
     }
 
     @Override
+    public List<Requirement> requirements(AccountContext context) {
+        String axe = findBestAxe(context, false);
+        if (axe == null) {
+            return Collections.emptyList();
+        }
+        return Collections.singletonList(new ItemRequirement(axe, 1));
+    }
+
+    @Override
     public double score(AccountContext context) {
         int level = context.getRealLevel(Skill.WOODCUTTING);
         if (level < method.requiredLevel) {
@@ -143,6 +156,16 @@ public class WoodcuttingStrategy implements Strategy {
         }
 
         return score;
+    }
+
+    @Override
+    public WorldPoint preferredLocation(AccountContext context) {
+        return method.location;
+    }
+
+    @Override
+    public int estimatedXpPerHour(AccountContext context) {
+        return (int) (method.xpValue * 500);
     }
 
     /**

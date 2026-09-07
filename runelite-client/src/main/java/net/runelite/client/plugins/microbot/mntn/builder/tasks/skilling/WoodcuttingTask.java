@@ -9,6 +9,7 @@ import net.runelite.client.plugins.microbot.mntn.builder.activities.woodcutting.
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStatus;
+import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStopReason;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.banking.BankingTask;
 
 import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
@@ -29,6 +30,7 @@ public class WoodcuttingTask implements Task {
     private final WoodcuttingStrategy.Method method;
     private Phase phase = Phase.WALK_TO_TREE;
     private BankingTask bankingTask;
+    private TaskStopReason lastStopReason = TaskStopReason.NONE;
 
     public WoodcuttingTask(WoodcuttingStrategy.Method method) {
         this.method = method;
@@ -46,7 +48,7 @@ public class WoodcuttingTask implements Task {
 
         if (!context.isLoggedIn()) {
             debugLog(context, "Not logged in, returning BLOCKED");
-            return TaskStatus.BLOCKED;
+            return stop(TaskStatus.BLOCKED, TaskStopReason.NOT_LOGGED_IN);
         }
 
         switch (phase) {
@@ -182,7 +184,7 @@ public class WoodcuttingTask implements Task {
                     // Shouldn't happen - canExecute() already required an axe to exist
                     // somewhere - but if it's gone (e.g. dropped/sold mid-session), reroll.
                     debugLog(context, "No axe available anywhere, returning REPLAN");
-                    return TaskStatus.REPLAN;
+                    return stop(TaskStatus.REPLAN, TaskStopReason.MISSING_TOOL);
                 }
             }
         }
@@ -197,7 +199,7 @@ public class WoodcuttingTask implements Task {
             if (axe == null) {
                 if (WoodcuttingStrategy.findBestAxe(context, false) == null) {
                     debugLog(context, "No axe available after banking, returning REPLAN");
-                    return TaskStatus.REPLAN;
+                    return stop(TaskStatus.REPLAN, TaskStopReason.MISSING_TOOL);
                 }
                 debugLog(context, "Axe not in inventory/equipped but in bank, staying in BANKING");
                 phase = Phase.BANKING;
@@ -213,7 +215,7 @@ public class WoodcuttingTask implements Task {
         if (bankStatus == TaskStatus.FAILED || bankStatus == TaskStatus.REPLAN) {
             debugLog(context, "Banking failed/replan: " + bankStatus);
             bankingTask = null;
-            return bankStatus;
+            return stop(bankStatus, TaskStopReason.BANK_FAILED);
         }
 
         return TaskStatus.RUNNING;
@@ -236,6 +238,27 @@ public class WoodcuttingTask implements Task {
             debugLog(context, "needsReplan: levelCheck=" + levelCheck + " (current=" + context.getRealLevel(Skill.WOODCUTTING) + ", required=" + method.requiredLevel + "), axeCheck=" + axeCheck);
         }
         return levelCheck || axeCheck;
+    }
+
+    @Override
+    public TaskStopReason getReplanStopReason(AccountContext context) {
+        if (context.getRealLevel(Skill.WOODCUTTING) < method.requiredLevel) {
+            return TaskStopReason.LEVEL_TOO_LOW;
+        }
+        if (WoodcuttingStrategy.findBestAxe(context, false) == null) {
+            return TaskStopReason.MISSING_TOOL;
+        }
+        return TaskStopReason.TASK_REQUESTED_REPLAN;
+    }
+
+    @Override
+    public TaskStopReason getLastStopReason() {
+        return lastStopReason;
+    }
+
+    private TaskStatus stop(TaskStatus status, TaskStopReason reason) {
+        lastStopReason = reason != null ? reason : TaskStopReason.UNKNOWN;
+        return status;
     }
 
     @Override

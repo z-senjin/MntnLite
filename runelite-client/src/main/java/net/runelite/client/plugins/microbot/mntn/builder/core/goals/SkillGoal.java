@@ -32,7 +32,7 @@ public class SkillGoal implements Goal {
 
     @Override
     public List<Requirement> requirements(AccountContext context) {
-        return Collections.singletonList(new SkillRequirement(skill, targetLevel, priority));
+        return Collections.singletonList(new SkillRequirement(skill, targetLevel));
     }
 
     @Override

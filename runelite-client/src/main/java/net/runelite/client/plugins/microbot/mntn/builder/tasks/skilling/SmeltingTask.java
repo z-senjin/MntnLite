@@ -7,6 +7,7 @@ import net.runelite.client.plugins.microbot.mntn.builder.activities.smithing.Sme
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStatus;
+import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStopReason;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.banking.BankingTask;
 import net.runelite.client.plugins.microbot.util.keyboard.Rs2Keyboard;
 import net.runelite.client.plugins.microbot.util.player.Rs2Player;
@@ -29,6 +30,7 @@ public class SmeltingTask implements Task {
     private final SmeltingStrategy.Bar bar;
     private Phase phase = Phase.WALK_TO_FURNACE;
     private BankingTask bankingTask;
+    private TaskStopReason lastStopReason = TaskStopReason.NONE;
 
     public SmeltingTask(SmeltingStrategy.Bar bar) {
         this.bar = bar;
@@ -46,7 +48,7 @@ public class SmeltingTask implements Task {
 
         if (!context.isLoggedIn()) {
             debugLog(context, "Not logged in, returning BLOCKED");
-            return TaskStatus.BLOCKED;
+            return stop(TaskStatus.BLOCKED, TaskStopReason.NOT_LOGGED_IN);
         }
 
         switch (phase) {
@@ -160,7 +162,7 @@ public class SmeltingTask implements Task {
             if (!hasAllIngredients(context)) {
                 // Not enough ores left in bank to continue smelting this bar
                 debugLog(context, "Not enough ingredients after banking, returning REPLAN");
-                return TaskStatus.REPLAN;
+                return stop(TaskStatus.REPLAN, TaskStopReason.MISSING_SUPPLIES);
             }
 
             debugLog(context, "Switching to WALK_TO_FURNACE");
@@ -171,7 +173,7 @@ public class SmeltingTask implements Task {
         if (bankStatus == TaskStatus.FAILED || bankStatus == TaskStatus.REPLAN) {
             debugLog(context, "Banking failed/replan: " + bankStatus);
             bankingTask = null;
-            return bankStatus;
+            return stop(bankStatus, TaskStopReason.BANK_FAILED);
         }
 
         return TaskStatus.RUNNING;
@@ -193,6 +195,24 @@ public class SmeltingTask implements Task {
             debugLog(context, "needsReplan: levelCheck=" + levelCheck + " (current=" + context.getRealLevel(Skill.SMITHING) + ", required=" + bar.requiredLevel + ")");
         }
         return levelCheck;
+    }
+
+    @Override
+    public TaskStopReason getReplanStopReason(AccountContext context) {
+        if (context.getRealLevel(Skill.SMITHING) < bar.requiredLevel) {
+            return TaskStopReason.LEVEL_TOO_LOW;
+        }
+        return TaskStopReason.TASK_REQUESTED_REPLAN;
+    }
+
+    @Override
+    public TaskStopReason getLastStopReason() {
+        return lastStopReason;
+    }
+
+    private TaskStatus stop(TaskStatus status, TaskStopReason reason) {
+        lastStopReason = reason != null ? reason : TaskStopReason.UNKNOWN;
+        return status;
     }
 
     @Override

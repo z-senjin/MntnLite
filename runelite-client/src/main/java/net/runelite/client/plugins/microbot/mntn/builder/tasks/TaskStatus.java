@@ -5,5 +5,25 @@ public enum TaskStatus {
     COMPLETE,
     BLOCKED,
     FAILED,
-    REPLAN
+    REPLAN;
+
+    public boolean clearsTask() {
+        return this == COMPLETE
+                || this == BLOCKED
+                || this == FAILED
+                || this == REPLAN;
+    }
+
+    public boolean needsPlannerDecision() {
+        return this == COMPLETE
+                || this == BLOCKED
+                || this == FAILED
+                || this == REPLAN;
+    }
+
+    public boolean isUnsuccessfulStop() {
+        return this == BLOCKED
+                || this == FAILED
+                || this == REPLAN;
+    }
 }

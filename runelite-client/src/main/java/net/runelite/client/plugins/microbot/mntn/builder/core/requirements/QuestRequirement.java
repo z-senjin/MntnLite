@@ -11,11 +11,9 @@ import java.util.List;
 public class QuestRequirement implements Requirement {
 
     private final Quest quest;
-    private final double urgency;
 
-    public QuestRequirement(Quest quest, double urgency) {
+    public QuestRequirement(Quest quest) {
         this.quest = quest;
-        this.urgency = urgency;
     }
 
     @Override
@@ -30,7 +28,14 @@ public class QuestRequirement implements Requirement {
 
     @Override
     public double urgency(AccountContext context) {
-        return urgency;
+        QuestState state = context.getQuestState(quest);
+        if (state == QuestState.IN_PROGRESS) {
+            return 30;
+        }
+        if (state == QuestState.NOT_STARTED) {
+            return 10;
+        }
+        return 0;
     }
 
     @Override
