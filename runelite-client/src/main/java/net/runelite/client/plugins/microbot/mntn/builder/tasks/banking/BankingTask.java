@@ -1,8 +1,10 @@
 package net.runelite.client.plugins.microbot.mntn.builder.tasks.banking;
 
+import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
+import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskActionGuard;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStopReason;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStatus;
 import net.runelite.client.plugins.microbot.util.bank.Rs2Bank;
@@ -10,7 +12,10 @@ import net.runelite.client.plugins.microbot.util.bank.enums.BankLocation;
 import net.runelite.client.plugins.microbot.util.equipment.Rs2Equipment;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
 
-import static net.runelite.client.plugins.microbot.util.Global.sleepUntilTrue;
+import java.util.Arrays;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.Set;
 
 /**
  * Reusable banking Task.
@@ -72,6 +77,22 @@ public class BankingTask implements Task {
     private static final int MAX_DEPOSIT_ATTEMPTS = 3;
     private static final int MAX_WITHDRAW_ATTEMPTS = 3;
     private static final int MAX_CLOSE_ATTEMPTS = 3;
+    private static final int MAX_BANK_RESOLVE_ATTEMPTS = 5;
+    private static final int BANK_RESOLVE_COOLDOWN_TICKS = 10;
+    private static final int BANK_RESELECT_WALK_ATTEMPTS = 10;
+    private static final int MAX_AVOIDED_BANKS = 4;
+    private static final BankLocation[] F2P_FALLBACK_BANKS = {
+            BankLocation.VARROCK_EAST,
+            BankLocation.VARROCK_WEST,
+            BankLocation.GRAND_EXCHANGE,
+            BankLocation.DRAYNOR_VILLAGE,
+            BankLocation.FALADOR_EAST,
+            BankLocation.FALADOR_WEST,
+            BankLocation.EDGEVILLE,
+            BankLocation.AL_KHARID,
+            BankLocation.LUMBRIDGE_TOP,
+            BankLocation.LUMBRIDGE_FRONT
+    };
 
     public enum Mode {
         DEPOSIT_ALL_EXCEPT,
@@ -87,6 +108,12 @@ public class BankingTask implements Task {
         WITHDRAW,
         CLOSE,
         DONE
+    }
+
+    private enum DepositOutcome {
+        COMPLETE,
+        WAITING,
+        FAILED
     }
 
     private final Mode mode;
@@ -137,6 +164,11 @@ public class BankingTask implements Task {
     private int depositAttempts;
     private int withdrawAttempts;
     private int closeAttempts;
+    private int bankResolveAttempts;
+    private int bankResolveCooldownTicks;
+    private BankLocation cachedTargetBank;
+    private final Set<BankLocation> avoidedBanks = new HashSet<>();
+    private final TaskActionGuard equipmentDepositGuard = new TaskActionGuard(4, 8_000, 700);
 
     private void debugLog(AccountContext context, String message) {
         if (context.isDebugLogging()) {
@@ -272,8 +304,9 @@ public class BankingTask implements Task {
             case OPEN:
                 debugLog(context, "OPEN phase");
                 if (!Rs2Bank.isOpen()) {
-                    if (!isNearTargetBank()) {
+                    if (!isNearTargetBank(context)) {
                         debugLog(context, "Not near bank while opening, returning to WALK phase");
+                        abandonCachedTarget(context, "not near bank during open");
                         phase = Phase.WALK;
                         return TaskStatus.RUNNING;
                     }
@@ -289,6 +322,7 @@ public class BankingTask implements Task {
                             if (openRecoveryCycles >= MAX_OPEN_RECOVERY_CYCLES) {
                                 return stop(TaskStatus.BLOCKED, TaskStopReason.BANK_FAILED);
                             }
+                            abandonCachedTarget(context, "open failed repeatedly");
                             phase = Phase.WALK;
                         }
                     }
@@ -318,7 +352,11 @@ public class BankingTask implements Task {
                 }
 
                 debugLog(context, "Performing deposit (mode=" + mode + ", keepItems=" + (keepItemNames != null ? java.util.Arrays.toString(keepItemNames) : "none") + ", depositEquipment=" + depositEquipment + ")");
-                if (!performDeposit(context)) {
+                DepositOutcome depositOutcome = performDeposit(context);
+                if (depositOutcome == DepositOutcome.WAITING) {
+                    return TaskStatus.RUNNING;
+                }
+                if (depositOutcome == DepositOutcome.FAILED) {
                     depositAttempts++;
                     debugLog(context, "Deposit failed attempt " + depositAttempts + "/" + MAX_DEPOSIT_ATTEMPTS);
                     if (depositAttempts >= MAX_DEPOSIT_ATTEMPTS) {
@@ -407,10 +445,14 @@ public class BankingTask implements Task {
     }
 
     private TaskStatus handleWalkToBank(AccountContext context) {
-        BankLocation targetBank = targetBank();
+        BankLocation targetBank = targetBank(context);
         if (targetBank == null) {
-            debugLog(context, "No reachable bank found");
-            return stop(TaskStatus.BLOCKED, TaskStopReason.BANK_FAILED);
+            walkAttempts++;
+            debugLog(context, "No reachable bank target resolved attempt " + walkAttempts + "/" + MAX_WALK_ATTEMPTS);
+            if (walkAttempts >= MAX_WALK_ATTEMPTS) {
+                return stop(TaskStatus.BLOCKED, TaskStopReason.BANK_FAILED);
+            }
+            return TaskStatus.RUNNING;
         }
 
         debugLog(context, "Walking to bank: " + targetBank);
@@ -421,20 +463,111 @@ public class BankingTask implements Task {
             if (walkAttempts >= MAX_WALK_ATTEMPTS) {
                 return stop(TaskStatus.BLOCKED, TaskStopReason.BANK_FAILED);
             }
+            if (walkAttempts % BANK_RESELECT_WALK_ATTEMPTS == 0) {
+                abandonCachedTarget(context, "walk stalled");
+            }
             return TaskStatus.RUNNING;
         }
 
         walkAttempts = 0;
+        bankResolveAttempts = 0;
         phase = Phase.OPEN;
         return TaskStatus.RUNNING;
     }
 
-    private BankLocation targetBank() {
-        return bankLocation != null ? bankLocation : Rs2Bank.getNearestBank();
+    private BankLocation targetBank(AccountContext context) {
+        if (bankLocation != null) {
+            return bankLocation;
+        }
+        if (cachedTargetBank != null) {
+            return cachedTargetBank;
+        }
+
+        BankLocation nearest = bankResolveCooldownTicks > 0 ? null : resolveNearestBank(context);
+        if (nearest != null && !avoidedBanks.contains(nearest)) {
+            return rememberTarget(context, nearest, "nearest");
+        }
+        if (bankResolveCooldownTicks > 0) {
+            bankResolveCooldownTicks--;
+            debugLog(context, "Skipping nearest-bank lookup during recovery cooldown ("
+                    + bankResolveCooldownTicks + " ticks left)");
+        }
+
+        BankLocation fallback = nearestFallbackBank(context);
+        if (fallback != null) {
+            return rememberTarget(context, fallback, "fallback");
+        }
+
+        return null;
     }
 
-    private boolean isNearTargetBank() {
-        BankLocation targetBank = targetBank();
+    private BankLocation resolveNearestBank(AccountContext context) {
+        try {
+            bankResolveAttempts++;
+            BankLocation nearest = Rs2Bank.getNearestBank();
+            if (nearest != null) {
+                bankResolveAttempts = 0;
+                return nearest;
+            }
+            debugLog(context, "Nearest-bank lookup returned null attempt "
+                    + bankResolveAttempts + "/" + MAX_BANK_RESOLVE_ATTEMPTS);
+        } catch (RuntimeException ex) {
+            debugLog(context, "Nearest-bank lookup failed attempt "
+                    + bankResolveAttempts + "/" + MAX_BANK_RESOLVE_ATTEMPTS
+                    + ": " + ex.getClass().getSimpleName());
+        }
+
+        if (bankResolveAttempts >= MAX_BANK_RESOLVE_ATTEMPTS) {
+            debugLog(context, "Nearest-bank lookup exhausted; using fallback bank resolver");
+            bankResolveAttempts = 0;
+            bankResolveCooldownTicks = BANK_RESOLVE_COOLDOWN_TICKS;
+        }
+        return null;
+    }
+
+    private BankLocation nearestFallbackBank(AccountContext context) {
+        WorldPoint location = context.getLocation();
+        if (location == null) {
+            return null;
+        }
+
+        return Arrays.stream(F2P_FALLBACK_BANKS)
+                .filter(candidate -> candidate != null && !avoidedBanks.contains(candidate))
+                .min(Comparator.comparingInt(candidate -> candidate.getWorldPoint().distanceTo(location)))
+                .orElseGet(() -> {
+                    if (!avoidedBanks.isEmpty()) {
+                        avoidedBanks.clear();
+                        debugLog(context, "All fallback banks were avoided; clearing avoided-bank list");
+                        return nearestFallbackBank(context);
+                    }
+                    return null;
+                });
+    }
+
+    private BankLocation rememberTarget(AccountContext context, BankLocation target, String source) {
+        cachedTargetBank = target;
+        debugLog(context, "Selected " + source + " bank target: " + target);
+        return target;
+    }
+
+    private void abandonCachedTarget(AccountContext context, String reason) {
+        if (bankLocation != null || cachedTargetBank == null) {
+            return;
+        }
+
+        debugLog(context, "Abandoning bank target " + cachedTargetBank + " because " + reason);
+        if (avoidedBanks.size() >= MAX_AVOIDED_BANKS) {
+            avoidedBanks.clear();
+            debugLog(context, "Avoided-bank list reached limit; clearing it");
+        }
+        avoidedBanks.add(cachedTargetBank);
+        cachedTargetBank = null;
+        bankResolveAttempts = 0;
+        bankResolveCooldownTicks = BANK_RESOLVE_COOLDOWN_TICKS;
+    }
+
+    private boolean isNearTargetBank(AccountContext context) {
+        BankLocation targetBank = targetBank(context);
         return targetBank != null && Rs2Bank.isNearBank(targetBank, BANK_DISTANCE);
     }
 
@@ -478,35 +611,36 @@ public class BankingTask implements Task {
      * (the bank "deposit worn items" button moves them into the bank),
      * then inventory is deposited.
      */
-    private boolean performDeposit(AccountContext context) {
+    private DepositOutcome performDeposit(AccountContext context) {
         debugLog(context, "performDeposit: depositEquipment=" + depositEquipment + ", equipmentItems=" + Rs2Equipment.items().size());
 
         if (depositEquipment && !Rs2Equipment.items().isEmpty()) {
-            debugLog(context, "Depositing equipment");
-            if (!Rs2Bank.depositEquipment()) {
-                return false;
-            }
-            boolean equipmentDeposited = sleepUntilTrue(
-                    () -> Rs2Equipment.items().isEmpty(),
-                    100,
-                    5000
+            TaskActionGuard.Result depositResult = equipmentDepositGuard.evaluate(
+                    "deposit worn equipment",
+                    Rs2Equipment.items().isEmpty()
             );
-            if (!equipmentDeposited) {
-                return false;
+            if (depositResult == TaskActionGuard.Result.EXHAUSTED) {
+                return DepositOutcome.FAILED;
             }
-            debugLog(context, "Equipment deposited");
+            if (depositResult == TaskActionGuard.Result.READY) {
+                debugLog(context, "Depositing equipment");
+                Rs2Bank.depositEquipment();
+                equipmentDepositGuard.recordAttempt();
+            }
+            return DepositOutcome.WAITING;
         }
+        equipmentDepositGuard.reset();
 
         if (keepItemNames != null && keepItemNames.length > 0) {
             debugLog(context, "Depositing all except: " + java.util.Arrays.toString(keepItemNames));
             return Rs2Bank.depositAllExcept(
                     false,
                     keepItemNames
-            );
+            ) ? DepositOutcome.COMPLETE : DepositOutcome.FAILED;
         }
 
         debugLog(context, "Depositing all inventory");
-        return Rs2Bank.depositAll();
+        return Rs2Bank.depositAll() ? DepositOutcome.COMPLETE : DepositOutcome.FAILED;
     }
 
     /**

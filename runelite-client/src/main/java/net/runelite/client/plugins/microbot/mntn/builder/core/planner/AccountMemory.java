@@ -26,6 +26,7 @@ public class AccountMemory {
     private final Map<String, StopRecord> failedStrategies = new HashMap<>();
 
     public void recordSelected(Plan plan) {
+        prune(Duration.ofHours(2));
         if (plan == null) {
             return;
         }
@@ -41,6 +42,7 @@ public class AccountMemory {
     }
 
     public void recordOutcome(Plan plan, TaskStatus status, TaskStopReason reason) {
+        prune(Duration.ofHours(2));
         if (plan == null || status == null) {
             return;
         }
@@ -53,6 +55,7 @@ public class AccountMemory {
     }
 
     public int recentSelectionCount(String strategyName, Duration window) {
+        prune(window != null ? window : Duration.ofHours(2));
         if (strategyName == null || window == null) {
             return 0;
         }
@@ -68,6 +71,7 @@ public class AccountMemory {
     }
 
     public boolean isCoolingDown(String strategyName) {
+        prune(Duration.ofHours(2));
         StopRecord record = failedStrategies.get(strategyName);
         if (record == null) {
             return false;
@@ -77,6 +81,7 @@ public class AccountMemory {
     }
 
     public TaskStopReason getRecentStopReason(String strategyName) {
+        prune(Duration.ofHours(2));
         StopRecord record = failedStrategies.get(strategyName);
         if (record == null || !record.stoppedAt.plus(FAILURE_COOLDOWN).isAfter(Instant.now())) {
             return TaskStopReason.NONE;

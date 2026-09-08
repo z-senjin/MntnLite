@@ -57,4 +57,9 @@ public class MoneyRequirement implements Requirement {
         return context.inventory().getCount(ItemID.COINS_995)
                 + context.bank().getCount(ItemID.COINS_995) >= amount;
     }
+
+    public int getMissingTotalCoins(AccountContext context) {
+        return Math.max(0, amount - context.inventory().getCount(ItemID.COINS_995)
+                - context.bank().getCount(ItemID.COINS_995));
+    }
 }

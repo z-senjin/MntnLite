@@ -8,10 +8,14 @@ import net.runelite.client.plugins.microbot.mntn.builder.activities.Activity;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.ActivityType;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.Strategy;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.combat.CombatActivity;
+import net.runelite.client.plugins.microbot.mntn.builder.activities.moneymaking.MoneyMakingActivity;
+import net.runelite.client.plugins.microbot.mntn.builder.activities.mining.MiningActivity;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.supply.SupplyActivity;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.supply.SupplyRoutePolicy;
+import net.runelite.client.plugins.microbot.mntn.builder.activities.woodcutting.WoodcuttingActivity;
 import net.runelite.client.plugins.microbot.mntn.builder.MntnBuilderConfig;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
+import net.runelite.client.plugins.microbot.mntn.builder.core.AccountSnapshot;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AllowedContent;
 import net.runelite.client.plugins.microbot.mntn.builder.core.BankView;
 import net.runelite.client.plugins.microbot.mntn.builder.core.ContentAccess;
@@ -22,6 +26,7 @@ import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.Activ
 import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.ItemRequirement;
 import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.MoneyRequirement;
 import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.Requirement;
+import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.SkillRequirement;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStatus;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStopReason;
@@ -36,9 +41,30 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 
 public class AccountPlannerTest {
+
+    @Test
+    public void plannerEvaluatesEachGoalRequirementProviderAndStrategyOncePerPass() {
+        TestContext context = new TestContext();
+        TestRequirement requirement = new TestRequirement(ActivityType.FISHING, "Catch fish");
+        TestGoal goal = new TestGoal(requirement);
+        TestStrategy strategy = new TestStrategy("Fishing", ContentAccess.FREE_TO_PLAY, 10);
+        TestActivity activity = new TestActivity(ActivityType.FISHING, strategy);
+
+        Plan plan = planner(goal, activity).plan(context);
+
+        assertNotNull(plan);
+        assertEquals(1, goal.completionChecks);
+        assertEquals(1, requirement.satisfiedChecks);
+        assertEquals(1, activity.providerChecks);
+        assertEquals(1, strategy.executionChecks);
+        assertEquals(1, strategy.scoreChecks);
+    }
 
     @Test
     public void filtersMembersStrategiesWhenConfiguredForF2pOnly() {
@@ -56,6 +82,23 @@ public class AccountPlannerTest {
         planner.setAllowedContent(AllowedContent.F2P_ONLY);
 
         Plan plan = planner.plan(context);
+
+        assertNotNull(plan);
+        assertEquals("F2P fishing", plan.strategy().name());
+    }
+
+    @Test
+    public void f2pPlanningDoesNotCaptureFullAccountSnapshot() {
+        TestContext context = new TestContext();
+        context.snapshotForbidden = true;
+        TestRequirement requirement = new TestRequirement(ActivityType.FISHING, "Catch fish");
+        TestGoal goal = new TestGoal(requirement);
+        TestActivity activity = new TestActivity(
+                ActivityType.FISHING,
+                new TestStrategy("F2P fishing", ContentAccess.FREE_TO_PLAY, 10)
+        );
+
+        Plan plan = planner(goal, activity).plan(context);
 
         assertNotNull(plan);
         assertEquals("F2P fishing", plan.strategy().name());
@@ -81,6 +124,135 @@ public class AccountPlannerTest {
         assertNotNull(plan);
         assertEquals(ActivityType.MONEY_MAKING, plan.activity().type());
         assertEquals("Collect cowhides", plan.strategy().name());
+    }
+
+    @Test
+    public void continuesTheSameStrategyAcrossMultipleSupplyPrerequisites() {
+        TestContext context = new TestContext();
+        TestRequirement goalRequirement = new TestRequirement(ActivityType.SMITHING, "Train Smithing");
+        TestGoal goal = new TestGoal(goalRequirement);
+        TestStrategy smeltBronze = new TestStrategy("Smelt bronze", ContentAccess.FREE_TO_PLAY, 100)
+                .withRequirements(
+                        new ItemRequirement("Copper ore", 14),
+                        new ItemRequirement("Tin ore", 14)
+                );
+        TestStrategy withdrawSupply = new TestStrategy("Withdraw supply", ContentAccess.FREE_TO_PLAY, 10);
+        TestActivity smithing = new TestActivity(ActivityType.SMITHING, smeltBronze);
+        TestActivity supply = new PayloadActivity(ActivityType.SUPPLY, ItemRequirement.class, withdrawSupply);
+        AccountPlanner planner = planner(goal, smithing, supply);
+
+        Plan copperPlan = planner.plan(context);
+
+        assertNotNull(copperPlan);
+        assertEquals("Withdraw supply", copperPlan.strategy().name());
+        assertEquals("Smelt bronze", copperPlan.objectiveStrategy().name());
+        assertTrue(copperPlan.hasPendingObjective());
+
+        context.inventory.items.put("Copper ore", 14);
+        Plan tinPlan = planner.continuePlan(copperPlan, context);
+
+        assertNotNull(tinPlan);
+        assertEquals("Withdraw supply", tinPlan.strategy().name());
+        assertEquals("Smelt bronze", tinPlan.objectiveStrategy().name());
+
+        context.inventory.items.put("Tin ore", 14);
+        Plan smeltingPlan = planner.continuePlan(tinPlan, context);
+
+        assertNotNull(smeltingPlan);
+        assertEquals("Smelt bronze", smeltingPlan.strategy().name());
+        assertFalse(smeltingPlan.hasPendingObjective());
+    }
+
+    @Test
+    public void prefersMiningCoalOverFundingAGrandExchangePurchase() {
+        TestContext context = new TestContext();
+        context.realLevels.put(Skill.MINING, 47);
+        context.bank.items.put("Bronze pickaxe", 1);
+        TestRequirement goalRequirement = new TestRequirement(ActivityType.SMITHING, "Train Smithing");
+        TestGoal goal = new TestGoal(goalRequirement);
+        TestStrategy smeltSteel = new TestStrategy("Smelt steel", ContentAccess.FREE_TO_PLAY, 100)
+                .withRequirements(new ItemRequirement("Coal", 18));
+        TestActivity smithing = new TestActivity(ActivityType.SMITHING, smeltSteel);
+        AccountPlanner planner = planner(goal, smithing, new MiningActivity(), new SupplyActivity());
+
+        Plan pickaxePlan = planner.plan(context);
+
+        assertNotNull(pickaxePlan);
+        assertEquals(ActivityType.SUPPLY, pickaxePlan.activity().type());
+        assertEquals("Have 1 x Bronze pickaxe in inventory", pickaxePlan.requirement().description());
+        assertEquals("Smelt steel", pickaxePlan.objectiveStrategy().name());
+
+        context.inventory.items.put("Bronze pickaxe", 1);
+        Plan coalPlan = planner.continuePlan(pickaxePlan, context);
+
+        assertNotNull(coalPlan);
+        assertEquals(ActivityType.MINING, coalPlan.activity().type());
+        assertTrue(coalPlan.strategy().name().startsWith("COAL_ORE_"));
+    }
+
+    @Test
+    public void freshF2pCanBootstrapStarterToolCoinsWithChickenFeathers() {
+        TestContext context = new TestContext();
+        TestGoal goal = new TestGoal(new MoneyRequirement(20));
+        MoneyMakingActivity money = new MoneyMakingActivity(
+                new SupplyRoutePolicy(true, false, false)
+        );
+
+        Plan plan = planner(goal, money).plan(context);
+
+        assertNotNull(plan);
+        assertEquals(ActivityType.MONEY_MAKING, plan.activity().type());
+        assertEquals("MONEY_CHICKEN_FEATHERS_GRAND_EXCHANGE", plan.strategy().name());
+    }
+
+    @Test
+    public void emptyBankWoodcuttingGoalChainsThroughCoinsToABronzeAxe() {
+        TestContext context = new TestContext();
+        TestGoal goal = new TestGoal(new SkillRequirement(Skill.WOODCUTTING, 2));
+        SupplyRoutePolicy geOnly = new SupplyRoutePolicy(true, false, false);
+
+        Plan plan = planner(
+                goal,
+                new WoodcuttingActivity(),
+                new SupplyActivity(geOnly),
+                new MoneyMakingActivity(geOnly)
+        ).plan(context);
+
+        assertNotNull(plan);
+        assertEquals(ActivityType.MONEY_MAKING, plan.activity().type());
+        assertEquals("MONEY_CHICKEN_FEATHERS_GRAND_EXCHANGE", plan.strategy().name());
+    }
+
+    @Test
+    public void emptyBankMiningGoalChainsThroughCoinsToABronzePickaxe() {
+        TestContext context = new TestContext();
+        TestGoal goal = new TestGoal(new SkillRequirement(Skill.MINING, 2));
+        SupplyRoutePolicy geOnly = new SupplyRoutePolicy(true, false, false);
+
+        Plan plan = planner(
+                goal,
+                new MiningActivity(),
+                new SupplyActivity(geOnly),
+                new MoneyMakingActivity(geOnly)
+        ).plan(context);
+
+        assertNotNull(plan);
+        assertEquals(ActivityType.MONEY_MAKING, plan.activity().type());
+        assertEquals("MONEY_CHICKEN_FEATHERS_GRAND_EXCHANGE", plan.strategy().name());
+    }
+
+    @Test
+    public void doesNotSelectStrategyWhoseUnmetPrerequisiteHasNoRoute() {
+        TestContext context = new TestContext();
+        TestRequirement goalRequirement = new TestRequirement(ActivityType.FISHING, "Catch fish");
+        TestGoal goal = new TestGoal(goalRequirement);
+        TestStrategy fishing = new TestStrategy("Fishing with missing supplies", ContentAccess.FREE_TO_PLAY, 100)
+                .withRequirements(new MoneyRequirement(100));
+        TestActivity activity = new TestActivity(ActivityType.FISHING, fishing);
+
+        Plan plan = planner(goal, activity).plan(context);
+
+        assertNull("A strategy cannot run when its declared prerequisite has no plan", plan);
     }
 
     @Test
@@ -174,6 +346,53 @@ public class AccountPlannerTest {
         assertNotNull(planner.diagnoseNoPlan(context), plan);
         assertEquals(ActivityType.COMBAT, plan.activity().type());
         assertEquals("Chickens_Attack", plan.strategy().name());
+        assertNotNull("A selected fresh-F2P plan must create a runnable task", plan.strategy().createTask(context));
+    }
+
+    @Test
+    public void combatBootstrapRemainsRunnableWithOnlyABankedBronzeAxe() {
+        TestContext context = new TestContext();
+        context.bank.items.put("Bronze axe", 1);
+        context.bank.items.put("Coins", 31);
+        FreshCombatConfig config = new FreshCombatConfig();
+        List<Goal> goals = new net.runelite.client.plugins.microbot.mntn.builder.MntnBuilderScript()
+                .buildGoals(config);
+        AccountPlanner planner = new AccountPlanner(
+                goals,
+                Arrays.asList(
+                        new CombatActivity(config),
+                        new SupplyActivity(new SupplyRoutePolicy(true, true, true))
+                )
+        );
+
+        Plan plan = planner.planCombatBootstrap(context);
+
+        assertNotNull(plan);
+        assertEquals(ActivityType.COMBAT, plan.activity().type());
+        assertEquals("Chickens_Attack", plan.strategy().name());
+    }
+
+    @Test
+    public void bankedBronzeAxeCreatesEquipmentSupplyPrerequisiteBeforeCombat() {
+        TestContext context = new TestContext();
+        context.bank.items.put("Bronze axe", 1);
+        context.bank.items.put("Coins", 31);
+        FreshCombatConfig config = new FreshCombatConfig();
+        List<Goal> goals = new net.runelite.client.plugins.microbot.mntn.builder.MntnBuilderScript()
+                .buildGoals(config);
+        AccountPlanner planner = new AccountPlanner(
+                goals,
+                Arrays.asList(
+                        new CombatActivity(config),
+                        new SupplyActivity(new SupplyRoutePolicy(true, true, true))
+                )
+        );
+
+        Plan plan = planner.plan(context);
+
+        assertNotNull(plan);
+        assertEquals(ActivityType.SUPPLY, plan.activity().type());
+        assertEquals("Equip Bronze axe", plan.requirement().description());
     }
 
     private static AccountPlanner planner(Goal goal, Activity... activities) {
@@ -244,6 +463,7 @@ public class AccountPlannerTest {
         private final Map<Skill, Integer> realLevels = new EnumMap<>(Skill.class);
         private final Map<Quest, QuestState> quests = new EnumMap<>(Quest.class);
         private boolean membersWorld;
+        private boolean snapshotForbidden;
 
         @Override
         public InventoryView inventory() {
@@ -268,6 +488,14 @@ public class AccountPlannerTest {
         @Override
         public boolean isMembersWorld() {
             return membersWorld;
+        }
+
+        @Override
+        public AccountSnapshot snapshot() {
+            if (snapshotForbidden) {
+                throw new AssertionError("F2P planning must not capture an account snapshot");
+            }
+            return super.snapshot();
         }
 
         @Override
@@ -343,6 +571,7 @@ public class AccountPlannerTest {
 
     private static class TestGoal implements Goal {
         private final Requirement requirement;
+        private int completionChecks;
 
         private TestGoal(Requirement requirement) {
             this.requirement = requirement;
@@ -355,6 +584,7 @@ public class AccountPlannerTest {
 
         @Override
         public boolean isComplete(AccountContext context) {
+            completionChecks++;
             return false;
         }
 
@@ -372,6 +602,7 @@ public class AccountPlannerTest {
     private static class TestRequirement implements Requirement {
         private final ActivityType type;
         private final String description;
+        private int satisfiedChecks;
 
         private TestRequirement(ActivityType type, String description) {
             this.type = type;
@@ -380,6 +611,7 @@ public class AccountPlannerTest {
 
         @Override
         public boolean isSatisfied(AccountContext context) {
+            satisfiedChecks++;
             return false;
         }
 
@@ -436,6 +668,7 @@ public class AccountPlannerTest {
     private static class TestActivity implements Activity {
         private final ActivityType type;
         private final List<Strategy> strategies;
+        private int providerChecks;
 
         private TestActivity(ActivityType type, Strategy... strategies) {
             this.type = type;
@@ -449,6 +682,7 @@ public class AccountPlannerTest {
 
         @Override
         public boolean canProvide(ActivityRequest request, AccountContext context) {
+            providerChecks++;
             return request.type() == type;
         }
 
@@ -477,6 +711,8 @@ public class AccountPlannerTest {
         private final ContentAccess contentAccess;
         private final double score;
         private List<Requirement> requirements = Collections.emptyList();
+        private int executionChecks;
+        private int scoreChecks;
 
         private TestStrategy(String name, ContentAccess contentAccess, double score) {
             this.name = name;
@@ -506,11 +742,13 @@ public class AccountPlannerTest {
 
         @Override
         public boolean canExecute(AccountContext context) {
+            executionChecks++;
             return true;
         }
 
         @Override
         public double score(AccountContext context) {
+            scoreChecks++;
             return score;
         }
 

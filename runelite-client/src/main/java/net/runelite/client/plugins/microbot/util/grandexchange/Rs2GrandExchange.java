@@ -590,7 +590,16 @@ public class Rs2GrandExchange {
         int tries = 0;
         while (quantity != getOfferQuantity()) {
             Widget quantityButtonX = GrandExchangeWidget.getQuantityButton_X();
-            if (quantityButtonX == null) { log.warn("Quantity button not found"); tries++; continue; }
+            if (quantityButtonX == null) {
+                tries++;
+                if (tries > 3) {
+                    log.warn("Quantity button not available after {} attempts", tries);
+                    backToOverview();
+                    return false;
+                }
+                sleep(150, 250);
+                continue;
+            }
             Microbot.getMouse().click(quantityButtonX.getBounds());
             sleepUntil(() -> Rs2Widget.getWidget(InterfaceID.Chatbox.MES_TEXT2) != null); //GE Enter Price/Quantity
             sleep(600, 1000);

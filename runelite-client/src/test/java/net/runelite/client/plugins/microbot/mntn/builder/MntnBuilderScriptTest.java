@@ -1,7 +1,12 @@
 package net.runelite.client.plugins.microbot.mntn.builder;
 
+import net.runelite.client.plugins.microbot.mntn.builder.activities.ActivityType;
+import net.runelite.client.plugins.microbot.breakhandler.BreakHandlerState;
+import net.runelite.client.plugins.microbot.breakhandler.breakhandlerv2.BreakHandlerV2State;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.core.goals.Goal;
+import net.runelite.client.plugins.microbot.util.antiban.Rs2AntibanSettings;
+import net.runelite.client.plugins.microbot.util.antiban.enums.Activity;
 import org.junit.Test;
 
 import java.util.List;
@@ -69,6 +74,85 @@ public class MntnBuilderScriptTest {
 
         assertFalse(goals.isEmpty());
         assertEquals(90.0, goals.get(0).priority(new AccountContext()), 0.01);
+    }
+
+    @Test
+    public void mapsKnownStarterMethodsToSpecificAntibanActivities() {
+        assertEquals(Activity.KILLING_CHICKENS,
+                MntnBuilderScript.antibanActivityFor(ActivityType.COMBAT, "Chickens_Attack"));
+        assertEquals(Activity.CATCHING_SHRIMP_AND_ANCHOVIES,
+                MntnBuilderScript.antibanActivityFor(ActivityType.FISHING, "NET_SHRIMP"));
+        assertEquals(Activity.CUTTING_OAK_LOGS,
+                MntnBuilderScript.antibanActivityFor(ActivityType.WOODCUTTING, "OAK_TREE"));
+        assertEquals(Activity.GENERAL_COLLECTING,
+                MntnBuilderScript.antibanActivityFor(ActivityType.SUPPLY, "SUPPLY_BANK_Equip Bronze axe"));
+    }
+
+    @Test
+    public void reportsAntibanGuardReasonWithoutChangingPlanState() {
+        boolean originalCooldown = Rs2AntibanSettings.actionCooldownActive;
+        boolean originalBreak = Rs2AntibanSettings.microBreakActive;
+        try {
+            Rs2AntibanSettings.actionCooldownActive = true;
+            Rs2AntibanSettings.microBreakActive = false;
+            assertEquals("Paused: Antiban cooldown", MntnBuilderScript.scriptGuardState());
+
+            Rs2AntibanSettings.microBreakActive = true;
+            assertEquals("Paused: Antiban break", MntnBuilderScript.scriptGuardState());
+        } finally {
+            Rs2AntibanSettings.actionCooldownActive = originalCooldown;
+            Rs2AntibanSettings.microBreakActive = originalBreak;
+        }
+    }
+
+    @Test
+    public void yieldsToEveryActiveBreakHandlerState() {
+        assertFalse(MntnBuilderScript.isBreakHandlerOwnershipState(BreakHandlerState.WAITING_FOR_BREAK));
+        assertTrue(MntnBuilderScript.isBreakHandlerOwnershipState(BreakHandlerState.BREAK_REQUESTED));
+        assertTrue(MntnBuilderScript.isBreakHandlerOwnershipState(BreakHandlerState.INITIATING_BREAK));
+        assertTrue(MntnBuilderScript.isBreakHandlerOwnershipState(BreakHandlerState.LOGGED_OUT));
+        assertTrue(MntnBuilderScript.isBreakHandlerOwnershipState(BreakHandlerState.BREAK_ENDING));
+
+        assertFalse(MntnBuilderScript.isBreakHandlerOwnershipState(BreakHandlerV2State.WAITING_FOR_BREAK));
+        assertTrue(MntnBuilderScript.isBreakHandlerOwnershipState(BreakHandlerV2State.BREAK_REQUESTED));
+        assertTrue(MntnBuilderScript.isBreakHandlerOwnershipState(BreakHandlerV2State.INITIATING_BREAK));
+        assertTrue(MntnBuilderScript.isBreakHandlerOwnershipState(BreakHandlerV2State.LOGOUT_REQUESTED));
+        assertTrue(MntnBuilderScript.isBreakHandlerOwnershipState(BreakHandlerV2State.LOGGED_OUT));
+        assertTrue(MntnBuilderScript.isBreakHandlerOwnershipState(BreakHandlerV2State.PROFILE_SWITCHING));
+    }
+
+    @Test
+    public void runtimeStatusPublishesImmutableOverlaySnapshot() {
+        MntnBuilderOverlayState snapshot = new MntnBuilderOverlayState(
+                true, true, "Running", "Attack 10", "Attack level 10", "COMBAT",
+                "Chickens_Attack", "Combat (Chickens - Attack) - FIGHTING", "RUNNING",
+                "NONE", "FREE_TO_PLAY", "BALANCED", null, null, 42.0);
+        try {
+            MntnBuilderRuntimeStatus.publish(snapshot);
+
+            assertEquals(snapshot, MntnBuilderRuntimeStatus.getLatest());
+        } finally {
+            MntnBuilderRuntimeStatus.clear();
+        }
+        assertEquals(null, MntnBuilderRuntimeStatus.getLatest());
+    }
+
+    @Test
+    public void testOverridesExposeExplicitNormalAndTaskModes() {
+        assertFalse(MntnBuilderTestOverride.NORMAL_PLANNER.isActive());
+        assertTrue(MntnBuilderTestOverride.COMBAT_CHICKENS_DEFENCE.isActive());
+        assertEquals(ActivityType.COMBAT, MntnBuilderTestOverride.COMBAT_CHICKENS_DEFENCE.activityType());
+        assertEquals(ActivityType.MONEY_MAKING, MntnBuilderTestOverride.MONEY_CHICKEN_FEATHERS.activityType());
+    }
+
+    @Test
+    public void forceReplanQueuesWorkInsteadOfRunningPlannerFromCaller() {
+        MntnBuilderScript script = new MntnBuilderScript();
+
+        assertFalse(script.isForceReplanRequested());
+        script.forceReplan();
+
+        assertTrue(script.isForceReplanRequested());
     }
 
     private static class TestConfig implements MntnBuilderConfig {

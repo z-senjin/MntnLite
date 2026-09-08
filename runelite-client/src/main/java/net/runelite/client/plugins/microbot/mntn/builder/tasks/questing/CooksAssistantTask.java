@@ -8,6 +8,7 @@ import net.runelite.client.plugins.microbot.api.npc.models.Rs2NpcModel;
 import net.runelite.client.plugins.microbot.api.tileobject.models.Rs2TileObjectModel;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
+import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskActionGuard;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStatus;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStopReason;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.banking.BankingTask;
@@ -18,9 +19,6 @@ import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
 
 import java.util.ArrayList;
 import java.util.List;
-
-import static net.runelite.client.plugins.microbot.util.Global.sleep;
-import static net.runelite.client.plugins.microbot.util.Global.sleepUntilTrue;
 
 public class CooksAssistantTask implements Task {
 
@@ -55,6 +53,11 @@ public class CooksAssistantTask implements Task {
     private boolean hasBanked = false;
     private BankingTask bankingTask;
     private TaskStopReason lastStopReason = TaskStopReason.NONE;
+    private final TaskActionGuard travelGuard = new TaskActionGuard(10, 30_000, 800);
+    private final TaskActionGuard actionGuard = new TaskActionGuard(5, 12_000, 900);
+    private final TaskActionGuard resourceGuard = new TaskActionGuard(8, 15_000, 900);
+    private final TaskActionGuard dialogueGuard = new TaskActionGuard(12, 30_000, 700);
+    private boolean millControlsOperated;
 
     private void debugLog(AccountContext context, String message) {
         if (context.isDebugLogging()) {
@@ -231,25 +234,21 @@ public class CooksAssistantTask implements Task {
         }
 
         if (!context.isNear(CHICKEN_COOP, 8)) {
-            debugLog(context, "Walking to chicken coop: " + CHICKEN_COOP);
-            Rs2Walker.walkTo(CHICKEN_COOP);
-            return TaskStatus.RUNNING;
+            return attemptTravel("walk to chicken coop", () -> Rs2Walker.walkTo(CHICKEN_COOP));
         }
 
         Rs2TileItemModel egg = Microbot.getRs2TileItemCache().query()
                 .withName(EGG)
                 .within(15)
                 .nearest();
-        if (egg != null) {
+        if (egg == null) {
+            return waitForResource("find egg", TaskStopReason.GROUND_ITEM_NOT_FOUND);
+        }
+        resourceGuard.reset();
+        return attemptAction("pick up egg", context.inventory().hasItem(EGG), () -> {
             debugLog(context, "Picking up egg at: " + egg.getWorldLocation());
             egg.pickup();
-        }
-        sleepUntilTrue(() -> context.inventory().hasItem(EGG), 300, 4000);
-        if (context.inventory().hasItem(EGG)) {
-            debugLog(context, "Got egg, switching to CHECK_STATUS");
-            phase = Phase.CHECK_STATUS;
-        }
-        return TaskStatus.RUNNING;
+        }, TaskStopReason.GROUND_PICKUP_FAILED);
     }
 
     private TaskStatus handleGatherBucket(AccountContext context) {
@@ -261,25 +260,21 @@ public class CooksAssistantTask implements Task {
         }
 
         if (!context.isNear(LUMBRIDGE_CELLAR, 10)) {
-            debugLog(context, "Walking to Lumbridge cellar: " + LUMBRIDGE_CELLAR);
-            Rs2Walker.walkTo(LUMBRIDGE_CELLAR);
-            return TaskStatus.RUNNING;
+            return attemptTravel("walk to Lumbridge cellar", () -> Rs2Walker.walkTo(LUMBRIDGE_CELLAR));
         }
 
         Rs2TileItemModel bucket = Microbot.getRs2TileItemCache().query()
                 .withName(BUCKET)
                 .within(15)
                 .nearest();
-        if (bucket != null) {
+        if (bucket == null) {
+            return waitForResource("find bucket", TaskStopReason.GROUND_ITEM_NOT_FOUND);
+        }
+        resourceGuard.reset();
+        return attemptAction("pick up bucket", context.inventory().hasItem(BUCKET), () -> {
             debugLog(context, "Picking up bucket at: " + bucket.getWorldLocation());
             bucket.pickup();
-        }
-        sleepUntilTrue(() -> context.inventory().hasItem(BUCKET), 300, 4000);
-        if (context.inventory().hasItem(BUCKET)) {
-            debugLog(context, "Got bucket, switching to CHECK_STATUS");
-            phase = Phase.CHECK_STATUS;
-        }
-        return TaskStatus.RUNNING;
+        }, TaskStopReason.GROUND_PICKUP_FAILED);
     }
 
     private TaskStatus handleGatherMilk(AccountContext context) {
@@ -297,9 +292,7 @@ public class CooksAssistantTask implements Task {
         }
 
         if (!context.isNear(DAIRY_COW, 10)) {
-            debugLog(context, "Walking to dairy cow: " + DAIRY_COW);
-            Rs2Walker.walkTo(DAIRY_COW);
-            return TaskStatus.RUNNING;
+            return attemptTravel("walk to dairy cow", () -> Rs2Walker.walkTo(DAIRY_COW));
         }
 
         if (Rs2Player.isAnimating() || Rs2Player.isMoving()) {
@@ -312,16 +305,14 @@ public class CooksAssistantTask implements Task {
                 .within(10)
                 .nearest();
 
-        if (cow != null) {
+        if (cow == null) {
+            return waitForResource("find dairy cow", TaskStopReason.RESOURCE_NOT_FOUND);
+        }
+        resourceGuard.reset();
+        return attemptAction("milk dairy cow", context.inventory().hasItem(MILK), () -> {
             debugLog(context, "Milking cow at: " + cow.getWorldLocation());
             cow.click("Milk");
-            sleepUntilTrue(() -> context.inventory().hasItem(MILK), 300, 6000);
-            if (context.inventory().hasItem(MILK)) {
-                debugLog(context, "Got milk, switching to CHECK_STATUS");
-                phase = Phase.CHECK_STATUS;
-            }
-        }
-        return TaskStatus.RUNNING;
+        }, TaskStopReason.ACTION_FAILED);
     }
 
     private TaskStatus handleGatherPot(AccountContext context) {
@@ -333,25 +324,21 @@ public class CooksAssistantTask implements Task {
         }
 
         if (!context.isNear(LUMBRIDGE_KITCHEN, 6)) {
-            debugLog(context, "Walking to Lumbridge kitchen: " + LUMBRIDGE_KITCHEN);
-            Rs2Walker.walkTo(LUMBRIDGE_KITCHEN);
-            return TaskStatus.RUNNING;
+            return attemptTravel("walk to Lumbridge kitchen", () -> Rs2Walker.walkTo(LUMBRIDGE_KITCHEN));
         }
 
         Rs2TileItemModel pot = Microbot.getRs2TileItemCache().query()
                 .withName(POT)
                 .within(10)
                 .nearest();
-        if (pot != null) {
+        if (pot == null) {
+            return waitForResource("find pot", TaskStopReason.GROUND_ITEM_NOT_FOUND);
+        }
+        resourceGuard.reset();
+        return attemptAction("pick up pot", context.inventory().hasItem(POT), () -> {
             debugLog(context, "Picking up pot at: " + pot.getWorldLocation());
             pot.pickup();
-        }
-        sleepUntilTrue(() -> context.inventory().hasItem(POT), 300, 4000);
-        if (context.inventory().hasItem(POT)) {
-            debugLog(context, "Got pot, switching to CHECK_STATUS");
-            phase = Phase.CHECK_STATUS;
-        }
-        return TaskStatus.RUNNING;
+        }, TaskStopReason.GROUND_PICKUP_FAILED);
     }
 
     private TaskStatus handleGatherWheat(AccountContext context) {
@@ -363,9 +350,7 @@ public class CooksAssistantTask implements Task {
         }
 
         if (!context.isNear(WHEAT_FIELD, 10)) {
-            debugLog(context, "Walking to wheat field: " + WHEAT_FIELD);
-            Rs2Walker.walkTo(WHEAT_FIELD);
-            return TaskStatus.RUNNING;
+            return attemptTravel("walk to wheat field", () -> Rs2Walker.walkTo(WHEAT_FIELD));
         }
 
         if (Rs2Player.isAnimating() || Rs2Player.isMoving()) {
@@ -378,33 +363,29 @@ public class CooksAssistantTask implements Task {
                 .within(10)
                 .nearest();
 
-        if (wheat != null) {
+        if (wheat == null) {
+            return waitForResource("find wheat", TaskStopReason.RESOURCE_NOT_FOUND);
+        }
+        resourceGuard.reset();
+        return attemptAction("pick wheat", context.inventory().hasItem(GRAIN), () -> {
             debugLog(context, "Picking wheat at: " + wheat.getWorldLocation());
             wheat.click("Pick");
-            sleepUntilTrue(() -> context.inventory().hasItem(GRAIN), 300, 5000);
-            if (context.inventory().hasItem(GRAIN)) {
-                debugLog(context, "Got grain, switching to CHECK_STATUS");
-                phase = Phase.CHECK_STATUS;
-            }
-        }
-        return TaskStatus.RUNNING;
+        }, TaskStopReason.ACTION_FAILED);
     }
 
     private TaskStatus handleMillFlour(AccountContext context) {
-        debugLog(context, "handleMillFlour: hasFlour=" + context.inventory().hasItem(FLOUR) + ", hasGrain=" + context.inventory().hasItem(GRAIN) + ", plane=" + Microbot.getClient().getPlane());
+        int plane = context.getPlane();
+        debugLog(context, "handleMillFlour: hasFlour=" + context.inventory().hasItem(FLOUR)
+                + ", hasGrain=" + context.inventory().hasItem(GRAIN) + ", plane=" + plane);
         if (context.inventory().hasItem(FLOUR)) {
             debugLog(context, "Has flour, switching to CHECK_STATUS");
             phase = Phase.CHECK_STATUS;
             return TaskStatus.RUNNING;
         }
 
-        // If we have Grain, head to the top floor to put grain in the hopper
         if (context.inventory().hasItem(GRAIN)) {
-            int plane = Microbot.getClient().getPlane();
             if (plane != 2) {
-                debugLog(context, "Walking to mill top floor: " + MILL_TOP);
-                Rs2Walker.walkTo(MILL_TOP);
-                return TaskStatus.RUNNING;
+                return attemptTravel("walk to mill top", () -> Rs2Walker.walkTo(MILL_TOP));
             }
 
             Rs2TileObjectModel hopper = Microbot.getRs2TileObjectCache().query()
@@ -412,32 +393,34 @@ public class CooksAssistantTask implements Task {
                     .within(10)
                     .nearest();
 
-            if (hopper != null && context.inventory().hasItem(GRAIN)) {
+            if (hopper == null) {
+                return waitForResource("find mill hopper", TaskStopReason.RESOURCE_NOT_FOUND);
+            }
+            resourceGuard.reset();
+            return attemptAction("fill mill hopper", !context.inventory().hasItem(GRAIN), () -> {
                 debugLog(context, "Filling hopper with grain");
                 hopper.click("Fill");
-                sleepUntilTrue(() -> !context.inventory().hasItem(GRAIN), 300, 4000);
-            }
+            }, TaskStopReason.ACTION_FAILED);
+        }
 
+        if (!millControlsOperated && plane == 2) {
             Rs2TileObjectModel controls = Microbot.getRs2TileObjectCache().query()
                     .withNames("Hopper controls")
                     .within(10)
                     .nearest();
-
-            if (controls != null) {
-                controls.click("Operate");
-                sleep(1200, 1800);
+            if (controls == null) {
+                return waitForResource("find hopper controls", TaskStopReason.RESOURCE_NOT_FOUND);
             }
-
-            // Descend back down to ground floor
-            Rs2Walker.walkTo(MILL_GROUND);
-            return TaskStatus.RUNNING;
+            resourceGuard.reset();
+            TaskStatus status = attemptAction("operate mill hopper", false, () -> {
+                controls.click("Operate");
+                millControlsOperated = true;
+            }, TaskStopReason.ACTION_FAILED);
+            return status;
         }
 
-        // Ground floor: collect flour into pot
-        int plane = Microbot.getClient().getPlane();
         if (plane != 0) {
-            Rs2Walker.walkTo(MILL_GROUND);
-            return TaskStatus.RUNNING;
+            return attemptTravel("walk to mill ground", () -> Rs2Walker.walkTo(MILL_GROUND));
         }
 
         Rs2TileObjectModel bin = Microbot.getRs2TileObjectCache().query()
@@ -445,32 +428,36 @@ public class CooksAssistantTask implements Task {
                 .within(10)
                 .nearest();
 
-        if (bin != null) {
-            bin.click("Empty");
-            sleepUntilTrue(() -> context.inventory().hasItem(FLOUR), 300, 5000);
-            if (context.inventory().hasItem(FLOUR)) {
-                phase = Phase.CHECK_STATUS;
-            }
+        if (bin == null) {
+            return waitForResource("find flour bin", TaskStopReason.RESOURCE_NOT_FOUND);
         }
-
-        return TaskStatus.RUNNING;
+        resourceGuard.reset();
+        return attemptAction("empty flour bin", context.inventory().hasItem(FLOUR),
+                () -> bin.click("Empty"), TaskStopReason.ACTION_FAILED);
     }
 
     private TaskStatus handleTalkToCook(AccountContext context) {
         if (!context.isNear(LUMBRIDGE_KITCHEN, 6)) {
-            Rs2Walker.walkTo(LUMBRIDGE_KITCHEN);
-            return TaskStatus.RUNNING;
+            return attemptTravel("walk to Cook", () -> Rs2Walker.walkTo(LUMBRIDGE_KITCHEN));
         }
 
         if (Rs2Dialogue.isInDialogue()) {
+            TaskActionGuard.Result dialogueResult = dialogueGuard.evaluate(
+                    "advance Cook dialogue",
+                    context.getQuestState(Quest.COOKS_ASSISTANT) == QuestState.FINISHED
+            );
+            if (dialogueResult == TaskActionGuard.Result.EXHAUSTED) {
+                return stop(TaskStatus.REPLAN, TaskStopReason.QUEST_STEP_FAILED);
+            }
             if (Rs2Dialogue.hasSelectAnOption()) {
                 Rs2Dialogue.clickOption("What's wrong?", "I'm always happy to help a cook in need.", "Yes.");
             }
             if (Rs2Dialogue.hasContinue()) {
                 Rs2Dialogue.clickContinue();
             }
-            sleep(400, 800);
-
+            if (dialogueResult == TaskActionGuard.Result.READY) {
+                dialogueGuard.recordAttempt();
+            }
             if (context.getQuestState(Quest.COOKS_ASSISTANT) == QuestState.FINISHED) {
                 return TaskStatus.COMPLETE;
             }
@@ -480,6 +467,7 @@ public class CooksAssistantTask implements Task {
         if (context.getQuestState(Quest.COOKS_ASSISTANT) == QuestState.FINISHED) {
             return TaskStatus.COMPLETE;
         }
+        dialogueGuard.reset();
 
         Rs2NpcModel cook = Microbot.getRs2NpcCache().query()
                 .withNames("Cook")
@@ -487,11 +475,10 @@ public class CooksAssistantTask implements Task {
                 .nearest();
 
         if (cook != null) {
-            cook.click("Talk-to");
-            sleep(600, 1200);
+            return attemptAction("talk to Cook", Rs2Dialogue.isInDialogue(),
+                    () -> cook.click("Talk-to"), TaskStopReason.QUEST_STEP_FAILED);
         }
-
-        return TaskStatus.RUNNING;
+        return waitForResource("find Cook", TaskStopReason.QUEST_STEP_FAILED);
     }
 
     private boolean hasAllQuestItems(AccountContext context) {
@@ -521,6 +508,46 @@ public class CooksAssistantTask implements Task {
     private TaskStatus stop(TaskStatus status, TaskStopReason reason) {
         lastStopReason = reason != null ? reason : TaskStopReason.UNKNOWN;
         return status;
+    }
+
+    private TaskStatus attemptTravel(String actionKey, Runnable action) {
+        TaskActionGuard.Result result = travelGuard.evaluate(actionKey, false);
+        if (result == TaskActionGuard.Result.EXHAUSTED) {
+            return stop(TaskStatus.REPLAN, TaskStopReason.TRAVEL_FAILED);
+        }
+        if (result == TaskActionGuard.Result.READY) {
+            action.run();
+            travelGuard.recordAttempt();
+        }
+        return TaskStatus.RUNNING;
+    }
+
+    private TaskStatus attemptAction(
+            String actionKey,
+            boolean confirmed,
+            Runnable action,
+            TaskStopReason failureReason
+    ) {
+        TaskActionGuard.Result result = actionGuard.evaluate(actionKey, confirmed);
+        if (result == TaskActionGuard.Result.EXHAUSTED) {
+            return stop(TaskStatus.REPLAN, failureReason);
+        }
+        if (result == TaskActionGuard.Result.READY) {
+            action.run();
+            actionGuard.recordAttempt();
+        }
+        return TaskStatus.RUNNING;
+    }
+
+    private TaskStatus waitForResource(String actionKey, TaskStopReason failureReason) {
+        TaskActionGuard.Result result = resourceGuard.evaluate(actionKey, false);
+        if (result == TaskActionGuard.Result.EXHAUSTED) {
+            return stop(TaskStatus.REPLAN, failureReason);
+        }
+        if (result == TaskActionGuard.Result.READY) {
+            resourceGuard.recordAttempt();
+        }
+        return TaskStatus.RUNNING;
     }
 
     @Override

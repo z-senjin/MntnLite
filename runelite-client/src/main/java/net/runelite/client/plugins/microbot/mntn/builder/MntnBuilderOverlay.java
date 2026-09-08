@@ -150,7 +150,7 @@ public class MntnBuilderOverlay extends OverlayPanel {
     }
 
     private Color stateColor(MntnBuilderOverlayState state) {
-        if ("Startup".equals(state.getRunnerState())) {
+        if ("Startup".equals(state.getRunnerState()) || state.getRunnerState().startsWith("Paused")) {
             return WARN_COLOR;
         }
         return GOOD_COLOR;

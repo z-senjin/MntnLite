@@ -8,13 +8,12 @@ import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.woodcutting.WoodcuttingStrategy;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
+import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskActionGuard;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStatus;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStopReason;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.banking.BankingTask;
 
 import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
-
-import static net.runelite.client.plugins.microbot.util.Global.sleep;
 
 /**
  * Generic Woodcutting Task, parameterized by WoodcuttingStrategy.Method - same pattern as
@@ -28,12 +27,24 @@ public class WoodcuttingTask implements Task {
     }
 
     private final WoodcuttingStrategy.Method method;
+    private final WoodcuttingStrategy.Location location;
     private Phase phase = Phase.WALK_TO_TREE;
     private BankingTask bankingTask;
     private TaskStopReason lastStopReason = TaskStopReason.NONE;
+    private final TaskActionGuard walkGuard = new TaskActionGuard(10, 30_000, 800);
+    private final TaskActionGuard chopGuard = new TaskActionGuard(5, 12_000, 900);
+    private final TaskActionGuard treeGuard = new TaskActionGuard(8, 12_000, 900);
 
     public WoodcuttingTask(WoodcuttingStrategy.Method method) {
+        this(method, WoodcuttingStrategy.Location.defaultFor(method));
+    }
+
+    public WoodcuttingTask(WoodcuttingStrategy.Method method, WoodcuttingStrategy.Location location) {
+        if (location.method != method) {
+            throw new IllegalArgumentException("Woodcutting location does not support " + method);
+        }
         this.method = method;
+        this.location = location;
     }
 
     private void debugLog(AccountContext context, String message) {
@@ -78,7 +89,7 @@ public class WoodcuttingTask implements Task {
      */
     private Rs2TileObjectModel findNearestTree() {
         for (int objectId : method.treeObjectIds) {
-            Rs2TileObjectModel tree = Microbot.getRs2TileObjectCache().query().withId(objectId).nearest();
+            Rs2TileObjectModel tree = Microbot.getRs2TileObjectCache().query().withId(objectId).within(20).nearest();
             if (tree != null) {
                 return tree;
             }
@@ -97,14 +108,22 @@ public class WoodcuttingTask implements Task {
 
         tryEquipAxe(context, axe);
 
-        if (context.isNear(method.location, 10)) {
+        if (context.isNear(location.point, 10)) {
+            walkGuard.reset();
             debugLog(context, "Near woodcutting location, switching to CHOPPING");
             phase = Phase.CHOPPING;
             return TaskStatus.RUNNING;
         }
 
-        debugLog(context, "Walking to woodcutting location: " + method.location);
-        Rs2Walker.walkTo(method.location);
+        TaskActionGuard.Result walkResult = walkGuard.evaluate("walk to trees " + method.name(), false);
+        if (walkResult == TaskActionGuard.Result.EXHAUSTED) {
+            return stop(TaskStatus.REPLAN, TaskStopReason.TRAVEL_FAILED);
+        }
+        if (walkResult == TaskActionGuard.Result.READY) {
+            debugLog(context, "Walking to woodcutting location: " + location.point);
+            Rs2Walker.walkTo(location.point);
+            walkGuard.recordAttempt();
+        }
         return TaskStatus.RUNNING;
     }
 
@@ -128,28 +147,34 @@ public class WoodcuttingTask implements Task {
 
         Rs2TileObjectModel tree = findNearestTree();
         if (tree == null) {
-            // Tree could be depleted/despawned - go find another of the same type.
+            TaskActionGuard.Result treeResult = treeGuard.evaluate("find tree " + location.name(), false);
+            if (treeResult == TaskActionGuard.Result.EXHAUSTED) {
+                return stop(TaskStatus.REPLAN, TaskStopReason.RESOURCE_NOT_FOUND);
+            }
+            if (treeResult == TaskActionGuard.Result.READY) {
+                treeGuard.recordAttempt();
+            }
             debugLog(context, "No tree found nearby, switching to WALK_TO_TREE");
             phase = Phase.WALK_TO_TREE;
             return TaskStatus.RUNNING;
         }
 
-        if (Microbot.getClient().getLocalPlayer() != null) {
+        treeGuard.reset();
 
-            boolean isMovingOrAnimating = Rs2Player.isAnimating() || Rs2Player.isMoving();
-
-            sleep(300, 1000);
-
-            boolean isMovingOrAnimatingAgain = Rs2Player.isAnimating() || Rs2Player.isMoving();
-
-
-            if (isMovingOrAnimating || isMovingOrAnimatingAgain) {
-                debugLog(context, "Already animating/moving, waiting");
-                return TaskStatus.RUNNING;
-            } else {
-                debugLog(context, "Clicking tree: " + tree.getWorldLocation() + " with action: " + method.action);
-                tree.click(method.action);
-            }
+        boolean isMovingOrAnimating = Rs2Player.isAnimating() || Rs2Player.isMoving();
+        if (isMovingOrAnimating) {
+            chopGuard.reset();
+            debugLog(context, "Already animating/moving, waiting");
+            return TaskStatus.RUNNING;
+        }
+        TaskActionGuard.Result chopResult = chopGuard.evaluate("chop " + method.name(), false);
+        if (chopResult == TaskActionGuard.Result.EXHAUSTED) {
+            return stop(TaskStatus.REPLAN, TaskStopReason.ACTION_FAILED);
+        }
+        if (chopResult == TaskActionGuard.Result.READY) {
+            debugLog(context, "Clicking tree: " + tree.getWorldLocation() + " with action: " + method.action);
+            tree.click(method.action);
+            chopGuard.recordAttempt();
         }
         return TaskStatus.RUNNING;
     }
@@ -212,7 +237,7 @@ public class WoodcuttingTask implements Task {
             return TaskStatus.RUNNING;
         }
 
-        if (bankStatus == TaskStatus.FAILED || bankStatus == TaskStatus.REPLAN) {
+        if (bankStatus.isUnsuccessfulStop()) {
             debugLog(context, "Banking failed/replan: " + bankStatus);
             bankingTask = null;
             return stop(bankStatus, TaskStopReason.BANK_FAILED);
@@ -263,6 +288,6 @@ public class WoodcuttingTask implements Task {
 
     @Override
     public String describe() {
-        return "Woodcutting (" + method.name() + ") - " + phase;
+        return "Woodcutting (" + method.name() + " at " + location.name() + ") - " + phase;
     }
 }

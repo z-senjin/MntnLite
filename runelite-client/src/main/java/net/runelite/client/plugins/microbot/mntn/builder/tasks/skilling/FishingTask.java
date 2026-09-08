@@ -9,15 +9,14 @@ import net.runelite.client.plugins.microbot.mntn.builder.activities.fishing.Fish
 import net.runelite.client.plugins.microbot.mntn.builder.activities.fishing.FishingStrategy.ToolRequirement;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
+import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskActionGuard;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStatus;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStopReason;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.banking.BankingTask;
+import net.runelite.client.plugins.microbot.util.player.Rs2Player;
 
 import java.util.ArrayList;
 import java.util.List;
-
-import static net.runelite.client.plugins.microbot.util.Global.sleep;
-import static net.runelite.client.plugins.microbot.util.Global.sleepUntil;
 
 /**
  * Generic fishing Task, parameterized by FishingStrategy.Method - this is the
@@ -35,12 +34,24 @@ public class FishingTask implements Task {
     }
 
     private final FishingStrategy.Method method;
+    private final FishingStrategy.Location location;
     private Phase phase = Phase.WALK_TO_SPOT;
     private BankingTask bankingTask;
     private TaskStopReason lastStopReason = TaskStopReason.NONE;
+    private final TaskActionGuard walkGuard = new TaskActionGuard(10, 30_000, 800);
+    private final TaskActionGuard fishGuard = new TaskActionGuard(5, 12_000, 900);
+    private final TaskActionGuard spotGuard = new TaskActionGuard(8, 12_000, 900);
 
     public FishingTask(FishingStrategy.Method method) {
+        this(method, FishingStrategy.Location.defaultFor(method));
+    }
+
+    public FishingTask(FishingStrategy.Method method, FishingStrategy.Location location) {
+        if (location.method != method) {
+            throw new IllegalArgumentException("Fishing location does not support " + method);
+        }
         this.method = method;
+        this.location = location;
     }
 
     private void debugLog(AccountContext context, String message) {
@@ -137,14 +148,35 @@ public class FishingTask implements Task {
             return TaskStatus.RUNNING;
         }
 
-        Rs2NpcModel spot = Microbot.getRs2NpcCache().query().withId(method.npcId).nearest();
+        Rs2NpcModel spot = Microbot.getRs2NpcCache().query().withId(method.npcId).within(20).nearest();
         if (spot != null) {
+            walkGuard.reset();
+            spotGuard.reset();
             debugLog(context, "Fishing spot found at " + spot.getWorldLocation() + ", switching to FISHING phase");
             phase = Phase.FISHING;
             return TaskStatus.RUNNING;
         }
-        debugLog(context, "No fishing spot nearby, walking to " + method.location);
-        Rs2Walker.walkTo(method.location);
+
+        if (context.isNear(location.point, 15)) {
+            TaskActionGuard.Result spotResult = spotGuard.evaluate("find fishing " + location.name(), false);
+            if (spotResult == TaskActionGuard.Result.EXHAUSTED) {
+                return stop(TaskStatus.REPLAN, TaskStopReason.RESOURCE_NOT_FOUND);
+            }
+            if (spotResult == TaskActionGuard.Result.READY) {
+                spotGuard.recordAttempt();
+            }
+            return TaskStatus.RUNNING;
+        }
+
+        TaskActionGuard.Result walkResult = walkGuard.evaluate("walk to fishing " + method.name(), false);
+        if (walkResult == TaskActionGuard.Result.EXHAUSTED) {
+            return stop(TaskStatus.REPLAN, TaskStopReason.TRAVEL_FAILED);
+        }
+        if (walkResult == TaskActionGuard.Result.READY) {
+            debugLog(context, "No fishing spot nearby, walking to " + location.point);
+            Rs2Walker.walkTo(location.point);
+            walkGuard.recordAttempt();
+        }
         return TaskStatus.RUNNING;
     }
 
@@ -157,24 +189,37 @@ public class FishingTask implements Task {
             return TaskStatus.RUNNING;
         }
 
-        Rs2NpcModel spot = Microbot.getRs2NpcCache().query().withId(method.npcId).nearest();
+        Rs2NpcModel spot = Microbot.getRs2NpcCache().query().withId(method.npcId).within(20).nearest();
         if (spot == null) {
+            TaskActionGuard.Result spotResult = spotGuard.evaluate("find fishing " + location.name(), false);
+            if (spotResult == TaskActionGuard.Result.EXHAUSTED) {
+                return stop(TaskStatus.REPLAN, TaskStopReason.RESOURCE_NOT_FOUND);
+            }
+            if (spotResult == TaskActionGuard.Result.READY) {
+                spotGuard.recordAttempt();
+            }
             debugLog(context, "Fishing spot not found, switching to WALK_TO_SPOT phase");
             phase = Phase.WALK_TO_SPOT;
             return TaskStatus.RUNNING;
         }
 
-        boolean isAnimating = Microbot.getClient().getLocalPlayer() != null
-                && Microbot.getClient().getLocalPlayer().getAnimation() != -1;
-        sleep(100, 400);
-        boolean areWeReallyAnimating = Microbot.getClient().getLocalPlayer() != null
-                && Microbot.getClient().getLocalPlayer().getAnimation() != -1;
-        if (!isAnimating && !areWeReallyAnimating) {
+        boolean isAnimating = Rs2Player.isAnimating();
+        if (!isAnimating) {
+            TaskActionGuard.Result fishResult = fishGuard.evaluate("fish " + method.name(), false);
+            if (fishResult == TaskActionGuard.Result.EXHAUSTED) {
+                return stop(TaskStatus.REPLAN, TaskStopReason.ACTION_FAILED);
+            }
+            if (fishResult == TaskActionGuard.Result.READY) {
             debugLog(context, "Not animating, clicking fishing spot with action: " + method.action);
-            sleepUntil(() -> spot.click(method.action), 2000);
+                spot.click(method.action);
+                fishGuard.recordAttempt();
+            }
         } else {
+            fishGuard.reset();
             debugLog(context, "Already animating, waiting");
         }
+
+        spotGuard.reset();
         return TaskStatus.RUNNING;
     }
 
@@ -264,8 +309,7 @@ public class FishingTask implements Task {
             return TaskStatus.RUNNING;
         }
 
-        if (bankStatus == TaskStatus.FAILED
-                || bankStatus == TaskStatus.REPLAN) {
+        if (bankStatus.isUnsuccessfulStop()) {
 
             debugLog(context, "Banking task failed/replan, clearing banking task");
             bankingTask = null;
@@ -310,6 +354,6 @@ public class FishingTask implements Task {
 
     @Override
     public String describe() {
-        return "Fishing (" + method.name() + ") - " + phase;
+        return "Fishing (" + method.name() + " at " + location.name() + ") - " + phase;
     }
 }

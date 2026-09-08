@@ -25,6 +25,11 @@ import java.util.List;
 
 public class MoneyMakingStrategy implements Strategy {
 
+    public enum SaleRoute {
+        GENERAL_STORE,
+        GRAND_EXCHANGE
+    }
+
     public enum SourceType {
         COMBAT,
         FISHING,
@@ -34,10 +39,19 @@ public class MoneyMakingStrategy implements Strategy {
     }
 
     public enum Method {
+        CHICKEN_FEATHERS(
+                SourceType.COMBAT,
+                "Feather",
+                3,
+                0,
+                20,
+                CombatStrategy.Monster.CHICKENS.location
+        ),
         COWHIDES(
                 SourceType.COMBAT,
                 "Cowhide",
                 120,
+                0,
                 10,
                 CombatStrategy.Monster.COWS.location
         ),
@@ -45,6 +59,7 @@ public class MoneyMakingStrategy implements Strategy {
                 SourceType.MINING,
                 MiningStrategy.Method.COPPER_ORE.oreItemName,
                 60,
+                0,
                 14,
                 MiningStrategy.Method.COPPER_ORE.location
         ),
@@ -52,6 +67,7 @@ public class MoneyMakingStrategy implements Strategy {
                 SourceType.MINING,
                 MiningStrategy.Method.IRON_ORE.oreItemName,
                 80,
+                2,
                 10,
                 MiningStrategy.Method.IRON_ORE.location
         ),
@@ -59,6 +75,7 @@ public class MoneyMakingStrategy implements Strategy {
                 SourceType.SMELTING,
                 SmeltingStrategy.Bar.BRONZE_BAR.barItemName,
                 160,
+                1,
                 8,
                 SmeltingStrategy.Bar.BRONZE_BAR.furnaceLocation
         ),
@@ -66,6 +83,7 @@ public class MoneyMakingStrategy implements Strategy {
                 SourceType.SMELTING,
                 SmeltingStrategy.Bar.IRON_BAR.barItemName,
                 180,
+                2,
                 8,
                 SmeltingStrategy.Bar.IRON_BAR.furnaceLocation
         ),
@@ -73,6 +91,7 @@ public class MoneyMakingStrategy implements Strategy {
                 SourceType.WOODCUTTING,
                 WoodcuttingStrategy.Method.NORMAL_TREE.logItemName,
                 25,
+                0,
                 14,
                 WoodcuttingStrategy.Method.NORMAL_TREE.location
         ),
@@ -80,6 +99,7 @@ public class MoneyMakingStrategy implements Strategy {
                 SourceType.FISHING,
                 FishingStrategy.Method.NET_SHRIMP.fishItemName,
                 20,
+                0,
                 14,
                 FishingStrategy.Method.NET_SHRIMP.location
         );
@@ -87,35 +107,55 @@ public class MoneyMakingStrategy implements Strategy {
         public final SourceType sourceType;
         public final String itemName;
         public final int fallbackUnitPrice;
+        public final int minimumGeneralStoreUnitPrice;
         public final int minimumSellQuantity;
         public final WorldPoint location;
 
-        Method(SourceType sourceType, String itemName, int fallbackUnitPrice, int minimumSellQuantity, WorldPoint location) {
+        Method(SourceType sourceType, String itemName, int fallbackUnitPrice, int generalStoreUnitPrice,
+               int minimumSellQuantity, WorldPoint location) {
             this.sourceType = sourceType;
             this.itemName = itemName;
             this.fallbackUnitPrice = fallbackUnitPrice;
+            this.minimumGeneralStoreUnitPrice = generalStoreUnitPrice;
             this.minimumSellQuantity = minimumSellQuantity;
             this.location = location;
+        }
+
+        /**
+         * A shop route is only offered for items with a known non-zero floor at
+         * Lumbridge's 40% general store. Low-value loot belongs on the GE.
+         */
+        public boolean canSellAtGeneralStore() {
+            return minimumGeneralStoreUnitPrice > 0;
         }
     }
 
     private final Method method;
     private final MoneyRequirement requirement;
+    private final SaleRoute saleRoute;
 
     public MoneyMakingStrategy(Method method, MoneyRequirement requirement) {
+        this(method, requirement, SaleRoute.GRAND_EXCHANGE);
+    }
+
+    public MoneyMakingStrategy(Method method, MoneyRequirement requirement, SaleRoute saleRoute) {
         this.method = method;
         this.requirement = requirement;
+        this.saleRoute = saleRoute;
     }
 
     @Override
     public String name() {
-        return "MONEY_" + method.name();
+        return "MONEY_" + method.name() + "_" + saleRoute.name();
     }
 
     @Override
     public List<Requirement> requirements(AccountContext context) {
         switch (method.sourceType) {
             case COMBAT:
+                if (method == Method.CHICKEN_FEATHERS) {
+                    return Collections.emptyList();
+                }
                 CombatGear.GearItem weapon = CombatGear.findBestWeapon(context, true);
                 if (weapon != null) {
                     return Collections.singletonList(new ItemRequirement(weapon.name, 1));
@@ -142,6 +182,9 @@ public class MoneyMakingStrategy implements Strategy {
 
     @Override
     public boolean canExecute(AccountContext context) {
+        if (saleRoute == SaleRoute.GENERAL_STORE && !method.canSellAtGeneralStore()) {
+            return false;
+        }
         if (requirement.isSatisfied(context)) {
             return false;
         }
@@ -152,7 +195,7 @@ public class MoneyMakingStrategy implements Strategy {
         switch (method.sourceType) {
             case COMBAT:
                 int currentStrength = Math.max(1, context.getRealLevel(Skill.STRENGTH));
-                return new CombatStrategy(CombatStrategy.Monster.COWS, Skill.STRENGTH,
+                return new CombatStrategy(combatMonster(), Skill.STRENGTH,
                         currentStrength + 1, 0).canExecute(context);
             case FISHING:
                 return new FishingStrategy(FishingStrategy.Method.NET_SHRIMP).canExecute(context);
@@ -204,7 +247,9 @@ public class MoneyMakingStrategy implements Strategy {
 
     @Override
     public Task createTask(AccountContext context) {
-        return new MoneyMakingTask(method, requirement.getAmount());
+        int currentInventoryCoins = context.inventory().getCount("Coins");
+        int targetInventoryCoins = currentInventoryCoins + requirement.getMissingTotalCoins(context);
+        return new MoneyMakingTask(method, targetInventoryCoins, saleRoute);
     }
 
     @Override
@@ -228,13 +273,26 @@ public class MoneyMakingStrategy implements Strategy {
     }
 
     private int estimatedUnitPrice() {
-        int itemId = Rs2ItemManager.getItemIdByName(method.itemName, false);
-        if (itemId > 0) {
-            int offerPrice = Rs2GrandExchange.getOfferPrice(itemId);
-            if (offerPrice > 0) {
-                return offerPrice;
+        if (saleRoute == SaleRoute.GENERAL_STORE) {
+            return method.minimumGeneralStoreUnitPrice;
+        }
+        try {
+            int itemId = Rs2ItemManager.getItemIdByName(method.itemName, false);
+            if (itemId > 0) {
+                int offerPrice = Rs2GrandExchange.getOfferPrice(itemId);
+                if (offerPrice > 0) {
+                    return offerPrice;
+                }
             }
+        } catch (RuntimeException ignored) {
+            // Planning can run before the live item and bank caches are available.
         }
         return method.fallbackUnitPrice;
+    }
+
+    private CombatStrategy.Monster combatMonster() {
+        return method == Method.CHICKEN_FEATHERS
+                ? CombatStrategy.Monster.CHICKENS
+                : CombatStrategy.Monster.COWS;
     }
 }

@@ -76,7 +76,7 @@ public class FishingStrategy implements Strategy {
                 new ToolRequirement[]{
                         new ToolRequirement("Lobster pot", 1)
                 },
-                new WorldPoint(2674, 3161, 0) // TODO verify - placeholder
+                new WorldPoint(2924, 3178, 0)
         );
 
         public final int requiredLevel;
@@ -99,15 +99,56 @@ public class FishingStrategy implements Strategy {
         }
     }
 
+    /**
+     * Verified F2P fishing areas. Methods retain their default location above for callers
+     * that only need a representative route, while the planner evaluates every concrete
+     * method/location pair below.
+     */
+    public enum Location {
+        LUMBRIDGE_SWAMP_SHRIMP(Method.NET_SHRIMP, new WorldPoint(3242, 3149, 0)),
+        DRAYNOR_SHRIMP(Method.NET_SHRIMP, new WorldPoint(3084, 3231, 0)),
+        LUMBRIDGE_RIVER_FLY(Method.FLY_FISH_SALMON, new WorldPoint(3241, 3243, 0)),
+        BARBARIAN_VILLAGE_FLY(Method.FLY_FISH_SALMON, new WorldPoint(3107, 3432, 0)),
+        KARAMJA_LOBSTER(Method.CAGE_LOBSTER, new WorldPoint(2924, 3178, 0));
+
+        public final Method method;
+        public final WorldPoint point;
+
+        Location(Method method, WorldPoint point) {
+            this.method = method;
+            this.point = point;
+        }
+
+        public static Location defaultFor(Method method) {
+            for (Location location : values()) {
+                if (location.method == method) {
+                    return location;
+                }
+            }
+            throw new IllegalArgumentException("No fishing location for " + method);
+        }
+    }
+
     private final Method method;
+    private final Location location;
+    private final int locationVariation;
 
     public FishingStrategy(Method method) {
+        this(method, Location.defaultFor(method));
+    }
+
+    public FishingStrategy(Method method, Location location) {
+        if (location.method != method) {
+            throw new IllegalArgumentException("Fishing location does not support " + method);
+        }
         this.method = method;
+        this.location = location;
+        this.locationVariation = Rs2Random.betweenInclusive(0, 2);
     }
 
     @Override
     public String name() {
-        return method.name();
+        return method.name() + "_" + location.name();
     }
 
     @Override
@@ -175,12 +216,12 @@ public class FishingStrategy implements Strategy {
 
         score += convenienceTotal / method.toolRequirements.length;
 
-        return score;
+        return score + locationVariation;
     }
 
     @Override
     public WorldPoint preferredLocation(AccountContext context) {
-        return method.location;
+        return location.point;
     }
 
     @Override
@@ -190,7 +231,7 @@ public class FishingStrategy implements Strategy {
 
     @Override
     public Task createTask(AccountContext context) {
-        return new FishingTask(method);
+        return new FishingTask(method, location);
     }
 
     @Override

@@ -37,7 +37,11 @@ public class WoodcuttingActivity implements Activity {
                     && !method.logItemName.equalsIgnoreCase(((ItemRequirement) request.payload()).getItemName())) {
                 continue;
             }
-            strategies.add(new WoodcuttingStrategy(method));
+            for (WoodcuttingStrategy.Location location : WoodcuttingStrategy.Location.values()) {
+                if (location.method == method) {
+                    strategies.add(new WoodcuttingStrategy(method, location));
+                }
+            }
         }
         return strategies;
     }

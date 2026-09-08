@@ -24,30 +24,37 @@ public interface MntnBuilderConfig extends Config {
     String generalSection = "generalSection";
 
     @ConfigSection(
+            name = "Testing",
+            description = "Run one supported task directly without normal planner selection",
+            position = 1
+    )
+    String testingSection = "testingSection";
+
+    @ConfigSection(
             name = "Overlay",
             description = "In-game planner status display",
-            position = 1
+            position = 2
     )
     String overlaySection = "overlaySection";
 
     @ConfigSection(
             name = "Skill Targets",
             description = "Set a target to 0 to ignore that skill",
-            position = 2
+            position = 3
     )
     String skillTargetsSection = "skillTargetsSection";
 
     @ConfigSection(
             name = "Skill Weights",
             description = "Higher weights make unfinished skill goals more likely to be selected",
-            position = 3
+            position = 4
     )
     String skillWeightsSection = "skillWeightsSection";
 
     @ConfigSection(
             name = "Supply Policy",
             description = "Controls how the builder may acquire supplies",
-            position = 4
+            position = 5
     )
     String supplyPolicySection = "supplyPolicySection";
 
@@ -93,6 +100,29 @@ public interface MntnBuilderConfig extends Config {
     )
     default SessionFlavor sessionFlavor() {
         return SessionFlavor.BALANCED;
+    }
+
+    @ConfigItem(
+            keyName = "testOverride",
+            name = "Test override",
+            description = "Select a supported task to run directly. Choose Normal planner to return to account goals.",
+            section = "testingSection",
+            position = 1
+    )
+    default MntnBuilderTestOverride testOverride() {
+        return MntnBuilderTestOverride.NORMAL_PLANNER;
+    }
+
+    @Range(min = 1)
+    @ConfigItem(
+            keyName = "testCoinTarget",
+            name = "Test coin target",
+            description = "Money test modes stop after reaching this many coins in inventory.",
+            section = "testingSection",
+            position = 2
+    )
+    default int testCoinTarget() {
+        return 1000;
     }
 
     @ConfigItem(
@@ -228,7 +258,7 @@ public interface MntnBuilderConfig extends Config {
     @ConfigSection(
             name = "Money",
             description = "Coin goals for supplies and early account building",
-            position = 5
+            position = 6
     )
     String moneySection = "moneySection";
 
@@ -247,7 +277,7 @@ public interface MntnBuilderConfig extends Config {
     @ConfigSection(
             name = "Quests",
             description = "Quest goals for the builder to complete",
-            position = 6
+            position = 7
     )
     String questsSection = "questsSection";
 

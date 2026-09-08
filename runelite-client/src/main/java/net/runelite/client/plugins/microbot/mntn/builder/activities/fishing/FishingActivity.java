@@ -37,7 +37,11 @@ public class FishingActivity implements Activity {
                     && !method.fishItemName.equalsIgnoreCase(((ItemRequirement) request.payload()).getItemName())) {
                 continue;
             }
-            strategies.add(new FishingStrategy(method));
+            for (FishingStrategy.Location location : FishingStrategy.Location.values()) {
+                if (location.method == method) {
+                    strategies.add(new FishingStrategy(method, location));
+                }
+            }
         }
         return strategies;
     }

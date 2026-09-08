@@ -1,5 +1,6 @@
 package net.runelite.client.plugins.microbot.mntn.builder.core;
 
+import net.runelite.api.GameState;
 import net.runelite.api.Quest;
 import net.runelite.api.QuestState;
 import net.runelite.api.Skill;
@@ -10,18 +11,11 @@ import net.runelite.client.plugins.microbot.util.player.Rs2Player;
 import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
 
 /**
- * Thin read-through wrapper around live Microbot/RuneLite state.
+ * Small read-through wrapper around live Microbot/RuneLite state.
  *
- * The doc's version of this class snapshots state once per planning pass. For the vertical
- * slice it's simpler (and fine) to just read live values on every call - Tasks and Strategies
- * only ever call this during their own tick, never store it. Once you add real caching/
- * snapshotting later, this is the ONLY class that needs to change - nothing above it
- * (Goal/Requirement/Activity/Strategy) touches Microbot directly, which is the whole point
- * of having this layer.
- *
- * Inventory and bank are exposed as their own sub-views (context.inventory()/context.bank())
- * rather than flat methods here, since they're the two areas with many possible queries.
- * Everything else (skills, location) stays flat since there's only ever "one" of them.
+ * Builder code reads game state through this class so strategies and tasks do not need raw
+ * RuneLite client access. Values that belong to the client thread are read through the client
+ * thread helper; the planner remains a simple consumer of the resulting values.
  */
 public class AccountContext {
 
@@ -54,6 +48,21 @@ public class AccountContext {
         return Microbot.isLoggedIn();
     }
 
+    /**
+     * LoginManager can report success before the game has restored the local player. Tasks
+     * must not touch banks, walkers, or planners until this client-thread check is true.
+     */
+    public boolean isGameplayReady() {
+        if (!isLoggedIn() || Microbot.getClient() == null) {
+            return false;
+        }
+        return Microbot.getClientThread().runOnClientThreadOptional(() ->
+                Microbot.getClient() != null
+                        && Microbot.getClient().getGameState() == GameState.LOGGED_IN
+                        && Microbot.getClient().getLocalPlayer() != null
+        ).orElse(false);
+    }
+
     public AccountSnapshot snapshot() {
         return AccountSnapshot.capture(this);
     }
@@ -68,13 +77,31 @@ public class AccountContext {
     }
 
     public int getRealLevel(Skill skill) {
-        if (!isLoggedIn()) return 0;
-        return Microbot.getClient().getRealSkillLevel(skill);
+        return getSkillLevel(skill, false);
     }
 
     public int getBoostedLevel(Skill skill) {
-        if (!isLoggedIn()) return 0;
-        return Microbot.getClient().getBoostedSkillLevel(skill);
+        return getSkillLevel(skill, true);
+    }
+
+    public int getCombatLevel() {
+        if (!isLoggedIn() || Microbot.getClient() == null || Microbot.getClientThread() == null) {
+            return 3;
+        }
+        return Microbot.getClientThread().runOnClientThreadOptional(() ->
+                Microbot.getClient() != null && Microbot.getClient().getLocalPlayer() != null
+                        ? Microbot.getClient().getLocalPlayer().getCombatLevel()
+                        : 3
+        ).orElse(3);
+    }
+
+    public int getPlane() {
+        if (!isLoggedIn() || Microbot.getClient() == null || Microbot.getClientThread() == null) {
+            return 0;
+        }
+        return Microbot.getClientThread().runOnClientThreadOptional(() ->
+                Microbot.getClient() != null ? Microbot.getClient().getPlane() : 0
+        ).orElse(0);
     }
 
     public QuestState getQuestState(Quest quest) {
@@ -87,7 +114,25 @@ public class AccountContext {
     }
 
     public boolean isNear(WorldPoint location, int distance) {
-        int distanceTo = Rs2Walker.getDistanceBetween(Rs2Player.getWorldLocation(), location);
+        WorldPoint currentLocation = getLocation();
+        if (currentLocation == null || location == null) {
+            return false;
+        }
+        int distanceTo = Rs2Walker.getDistanceBetween(currentLocation, location);
         return distanceTo <= distance;
+    }
+
+    private int getSkillLevel(Skill skill, boolean boosted) {
+        if (!isLoggedIn() || skill == null || Microbot.getClient() == null || Microbot.getClientThread() == null) {
+            return 0;
+        }
+        return Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            if (Microbot.getClient() == null) {
+                return 0;
+            }
+            return boosted
+                    ? Microbot.getClient().getBoostedSkillLevel(skill)
+                    : Microbot.getClient().getRealSkillLevel(skill);
+        }).orElse(0);
     }
 }

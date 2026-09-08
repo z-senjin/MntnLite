@@ -37,7 +37,11 @@ public class MiningActivity implements Activity {
                     && !method.oreItemName.equalsIgnoreCase(((ItemRequirement) request.payload()).getItemName())) {
                 continue;
             }
-            strategies.add(new MiningStrategy(method));
+            for (MiningStrategy.Location location : MiningStrategy.Location.values()) {
+                if (location.method == method) {
+                    strategies.add(new MiningStrategy(method, location));
+                }
+            }
         }
         return strategies;
     }

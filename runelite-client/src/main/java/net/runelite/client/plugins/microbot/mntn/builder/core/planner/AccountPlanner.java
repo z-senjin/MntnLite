@@ -3,11 +3,16 @@ package net.runelite.client.plugins.microbot.mntn.builder.core.planner;
 import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.Activity;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.Strategy;
+import net.runelite.client.plugins.microbot.mntn.builder.activities.ActivityType;
+import net.runelite.client.plugins.microbot.mntn.builder.activities.combat.CombatStrategy;
+import net.runelite.client.plugins.microbot.mntn.builder.activities.supply.SupplyRouteType;
+import net.runelite.client.plugins.microbot.mntn.builder.activities.supply.SupplyStrategy;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountSnapshot;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AllowedContent;
 import net.runelite.client.plugins.microbot.mntn.builder.core.goals.Goal;
 import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.ActivityRequest;
+import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.ItemRequirement;
 import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.Requirement;
 
 import java.util.ArrayList;
@@ -68,32 +73,46 @@ public class AccountPlanner {
 
     public List<Plan> planAll(AccountContext context) {
         List<Plan> candidates = new ArrayList<>();
-        AccountSnapshot snapshot = context.snapshot();
-
-        debugLog("planAll: evaluating " + goals.size() + " goals");
+        AccountSnapshot snapshot = contentSnapshot(context);
+        int incompleteGoals = 0;
+        int unmetRequirements = 0;
+        int providerMatches = 0;
+        int strategiesConsidered = 0;
 
         for (Goal goal : goals) {
-            debugLog("  Goal: " + goal.name() + " (complete=" + goal.isComplete(context) + ")");
-            if (goal.isComplete(context)) {
-                debugLog("    -> skipping (complete)");
+            boolean goalComplete = goal.isComplete(context);
+            if (goalComplete) {
                 continue;
             }
+            incompleteGoals++;
             for (Requirement requirement : goal.requirements(context)) {
-
-                debugLog("    Requirement: " + requirement.description() + " (satisfied=" + requirement.isSatisfied(context) + ")");
-                if (requirement.isSatisfied(context)) {
-                    debugLog("      -> skipping (satisfied)");
+                boolean requirementSatisfied = requirement.isSatisfied(context);
+                if (requirementSatisfied) {
                     continue;
                 }
+                unmetRequirements++;
                 for (ActivityRequest request : requirement.getWaysToSatisfy(context)) {
-                    debugLog("      ActivityRequest: " + request.type().name());
                     for (Activity activity : activities) {
-                        debugLog("        Activity: " + activity.type().name() + " (canProvide=" + activity.canProvide(request, context) + ")");
-                        if (!activity.canProvide(request, context)) {
+                        boolean canProvide = activity.canProvide(request, context);
+                        if (!canProvide) {
                             continue;
                         }
+                        providerMatches++;
                         for (Strategy strategy : activity.getStrategies(context, request)) {
-                            addStrategyCandidate(candidates, goal, requirement, activity, strategy, context, snapshot, 0);
+                            strategiesConsidered++;
+                            addStrategyCandidate(
+                                    candidates,
+                                    goal,
+                                    requirement,
+                                    activity,
+                                    strategy,
+                                    context,
+                                    snapshot,
+                                    0,
+                                    requirement,
+                                    activity,
+                                    strategy
+                            );
                         }
                     }
                 }
@@ -101,7 +120,17 @@ public class AccountPlanner {
         }
 
         candidates.sort(Comparator.comparingDouble(Plan::score).reversed());
-        debugLog("planAll: " + candidates.size() + " candidates, top=" + (candidates.isEmpty() ? "none" : candidates.get(0).strategy().name() + " score=" + candidates.get(0).score()));
+        if (debugLogging) {
+            debugLog("pass: goals=" + goals.size()
+                    + ", incomplete=" + incompleteGoals
+                    + ", unmet=" + unmetRequirements
+                    + ", providers=" + providerMatches
+                    + ", strategies=" + strategiesConsidered
+                    + ", candidates=" + candidates.size()
+                    + ", top="
+                    + (candidates.isEmpty() ? "none" : candidates.get(0).strategy().name()
+                    + " score=" + candidates.get(0).score()));
+        }
         return candidates;
     }
 
@@ -110,8 +139,81 @@ public class AccountPlanner {
         return candidates.isEmpty() ? null : candidates.get(0);
     }
 
+    /**
+     * Advances a prerequisite chain without letting an unrelated strategy replace the
+     * original objective between individual supply steps.
+     */
+    public Plan continuePlan(Plan completedPlan, AccountContext context) {
+        if (completedPlan == null || !completedPlan.hasPendingObjective()
+                || completedPlan.goal().isComplete(context)) {
+            return null;
+        }
+
+        return planObjective(
+                completedPlan.goal(),
+                completedPlan.objectiveRequirement(),
+                completedPlan.objectiveActivity(),
+                completedPlan.objectiveStrategy(),
+                context
+        );
+    }
+
+    /**
+     * Returns the safest zero-supply combat task when normal prerequisite planning cannot
+     * produce a candidate. This gives a fresh F2P account a recovery route even when the
+     * bank cache or a supply route is temporarily unavailable.
+     */
+    public Plan planCombatBootstrap(AccountContext context) {
+        for (Goal goal : goals) {
+            if (goal.isComplete(context)) {
+                continue;
+            }
+
+            for (Requirement requirement : goal.requirements(context)) {
+                if (requirement.isSatisfied(context)) {
+                    continue;
+                }
+
+                for (ActivityRequest request : requirement.getWaysToSatisfy(context)) {
+                    if (request.type() != ActivityType.COMBAT) {
+                        continue;
+                    }
+
+                    for (Activity activity : activities) {
+                        if (activity.type() != ActivityType.COMBAT || !activity.canProvide(request, context)) {
+                            continue;
+                        }
+
+                        for (Strategy strategy : activity.getStrategies(context, request)) {
+                            if (!(strategy instanceof CombatStrategy)
+                                    || ((CombatStrategy) strategy).getMonster() != CombatStrategy.Monster.CHICKENS
+                                    || !allowedContent.allows(strategy.contentAccess())
+                                    || !strategy.canExecute(context)) {
+                                continue;
+                            }
+
+                            double score = scorer.score(
+                                    goal,
+                                    requirement,
+                                    activity.type(),
+                                    strategy,
+                                    context,
+                                    memory,
+                                    sessionFlavor
+                            );
+                            debugLog("Combat bootstrap selected " + strategy.name()
+                                    + " for " + goal.name());
+                            return new Plan(goal, requirement, activity, strategy, score);
+                        }
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
     public String diagnoseNoPlan(AccountContext context) {
-        AccountSnapshot snapshot = context.snapshot();
+        AccountSnapshot snapshot = contentSnapshot(context);
         int incompleteGoals = 0;
         String firstBlockedRequirement = null;
 
@@ -146,40 +248,158 @@ public class AccountPlanner {
         return "No runnable plan. Incomplete goals=" + incompleteGoals + ". First blocked: " + firstBlockedRequirement;
     }
 
+    /**
+     * F2P strategies are reachable without account-snapshot data. Snapshot capture
+     * reads every skill and quest state, so only do it when members strategies may
+     * be considered and need the members-world check.
+     */
+    private AccountSnapshot contentSnapshot(AccountContext context) {
+        return allowedContent == AllowedContent.ALL ? context.snapshot() : null;
+    }
+
+    private Plan planObjective(
+            Goal goal,
+            Requirement objectiveRequirement,
+            Activity objectiveActivity,
+            Strategy objectiveStrategy,
+            AccountContext context
+    ) {
+        AccountSnapshot snapshot = contentSnapshot(context);
+        if (!allowedContent.allows(objectiveStrategy.contentAccess())
+                || !objectiveStrategy.contentAccess().isCurrentlyReachable(snapshot)) {
+            return null;
+        }
+
+        Optional<Requirement> missingRequirement = objectiveStrategy.requirements(context)
+                .stream()
+                .filter(requirement -> !requirement.isSatisfied(context))
+                .findFirst();
+        if (missingRequirement.isPresent()) {
+            List<Plan> prerequisites = new ArrayList<>();
+            addRequirementCandidates(
+                    prerequisites,
+                    goal,
+                    missingRequirement.get(),
+                    context,
+                    snapshot,
+                    0,
+                    objectiveRequirement,
+                    objectiveActivity,
+                    objectiveStrategy
+            );
+            prerequisites.sort(Comparator.comparingDouble(Plan::score).reversed());
+            return prerequisites.isEmpty() ? null : prerequisites.get(0);
+        }
+
+        if (!objectiveStrategy.canExecute(context)) {
+            return null;
+        }
+
+        double score = scorer.score(
+                goal,
+                objectiveRequirement,
+                objectiveActivity.type(),
+                objectiveStrategy,
+                context,
+                memory,
+                sessionFlavor
+        );
+        return new Plan(
+                goal,
+                objectiveRequirement,
+                objectiveActivity,
+                objectiveStrategy,
+                score,
+                objectiveRequirement,
+                objectiveActivity,
+                objectiveStrategy
+        );
+    }
+
     private boolean addRequirementCandidates(
             List<Plan> candidates,
             Goal goal,
             Requirement missingRequirement,
             AccountContext context,
             AccountSnapshot snapshot,
-            int depth
+            int depth,
+            Requirement objectiveRequirement,
+            Activity objectiveActivity,
+            Strategy objectiveStrategy
     ) {
         if (depth > MAX_REQUIREMENT_DEPTH) {
-            debugLog("          Requirement depth exceeded for " + missingRequirement.description());
             return false;
         }
 
-        boolean added = false;
-        for (ActivityRequest supplyRequest : missingRequirement.getWaysToSatisfy(context)) {
-            for (Activity supplyActivity : activities) {
-                if (!supplyActivity.canProvide(supplyRequest, context)) {
-                    continue;
-                }
-                for (Strategy supplyStrategy : supplyActivity.getStrategies(context, supplyRequest)) {
-                    added |= addStrategyCandidate(
-                            candidates,
-                            goal,
-                            missingRequirement,
-                            supplyActivity,
-                            supplyStrategy,
-                            context,
-                            snapshot,
-                            depth
-                    );
+        for (int rank = 0; rank <= 3; rank++) {
+            List<Plan> rankedCandidates = new ArrayList<>();
+            for (ActivityRequest supplyRequest : missingRequirement.getWaysToSatisfy(context)) {
+                for (Activity supplyActivity : activities) {
+                    if (!supplyActivity.canProvide(supplyRequest, context)) {
+                        continue;
+                    }
+                    for (Strategy supplyStrategy : supplyActivity.getStrategies(context, supplyRequest)) {
+                        if (acquisitionRank(missingRequirement, supplyActivity, supplyStrategy) != rank) {
+                            continue;
+                        }
+                        addStrategyCandidate(
+                                rankedCandidates,
+                                goal,
+                                missingRequirement,
+                                supplyActivity,
+                                supplyStrategy,
+                                context,
+                                snapshot,
+                                depth,
+                                objectiveRequirement,
+                                objectiveActivity,
+                                objectiveStrategy
+                        );
+                    }
                 }
             }
+            if (!rankedCandidates.isEmpty()) {
+                candidates.addAll(rankedCandidates);
+                return true;
+            }
         }
-        return added;
+        return false;
+    }
+
+    /**
+     * Prefer resources the account already owns or can gather before spending coins.
+     * This keeps early accounts from funding a GE purchase when a usable skill route
+     * (for example, mining coal) is already available.
+     */
+    private int acquisitionRank(Requirement requirement, Activity activity, Strategy strategy) {
+        if (!(requirement instanceof ItemRequirement)) {
+            return 0;
+        }
+
+        if (strategy instanceof SupplyStrategy) {
+            SupplyRouteType routeType = ((SupplyStrategy) strategy).routeType();
+            switch (routeType) {
+                case BANK:
+                    return 0;
+                case GROUND_ITEM:
+                    return 1;
+                case SHOP:
+                    return 2;
+                case GRAND_EXCHANGE:
+                    return 3;
+                default:
+                    return 3;
+            }
+        }
+
+        switch (activity.type()) {
+            case MINING:
+            case WOODCUTTING:
+            case FISHING:
+                return 1;
+            default:
+                return 2;
+        }
     }
 
     private boolean addStrategyCandidate(
@@ -190,15 +410,15 @@ public class AccountPlanner {
             Strategy strategy,
             AccountContext context,
             AccountSnapshot snapshot,
-            int depth
+            int depth,
+            Requirement objectiveRequirement,
+            Activity objectiveActivity,
+            Strategy objectiveStrategy
     ) {
         if (!allowedContent.allows(strategy.contentAccess())) {
-            debugLog("          Strategy: " + strategy.name() + " skipped (content access="
-                    + strategy.contentAccess() + ", allowed=" + allowedContent + ")");
             return false;
         }
         if (!strategy.contentAccess().isCurrentlyReachable(snapshot)) {
-            debugLog("          Strategy: " + strategy.name() + " skipped (members world required)");
             return false;
         }
 
@@ -207,23 +427,38 @@ public class AccountPlanner {
                 .filter(strategyRequirement -> !strategyRequirement.isSatisfied(context))
                 .findFirst();
         if (missingStrategyRequirement.isPresent()) {
-            if (addRequirementCandidates(candidates, goal, missingStrategyRequirement.get(), context, snapshot, depth + 1)) {
+            if (addRequirementCandidates(
+                    candidates,
+                    goal,
+                    missingStrategyRequirement.get(),
+                    context,
+                    snapshot,
+                    depth + 1,
+                    objectiveRequirement,
+                    objectiveActivity,
+                    objectiveStrategy
+            )) {
                 return true;
             }
-            debugLog("          Strategy: " + strategy.name()
-                    + " has unmet requirement but no prerequisite candidate; evaluating task fallback");
+            return false;
         }
 
-        debugLog("          Strategy: " + strategy.name() + " (canExecute=" + strategy.canExecute(context) + ")");
-        if (!strategy.canExecute(context)) {
+        boolean canExecute = strategy.canExecute(context);
+        if (!canExecute) {
             return false;
         }
 
         double score = scorer.score(goal, requirement, activity.type(), strategy, context, memory, sessionFlavor);
-
-        debugLog("            -> Score: " + score + " (strategy=" + strategy.score(context)
-                + " + urgency=" + requirement.urgency(context) + " + priority=" + goal.priority(context) + ")");
-        candidates.add(new Plan(goal, requirement, activity, strategy, score));
+        candidates.add(new Plan(
+                goal,
+                requirement,
+                activity,
+                strategy,
+                score,
+                objectiveRequirement,
+                objectiveActivity,
+                objectiveStrategy
+        ));
         return true;
     }
 

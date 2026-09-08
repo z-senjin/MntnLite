@@ -18,6 +18,7 @@ import java.util.Map;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 
 public class CombatStrategyTest {
 
@@ -99,6 +100,63 @@ public class CombatStrategyTest {
         assertEquals(Skill.ATTACK, CombatStrategy.selectCombatStyleSkill(context, Skill.PRAYER));
     }
 
+    @Test
+    public void combatUpgradesKeepTheCoinReserve() {
+        TestContext context = new TestContext();
+        context.inventory.items.put("Coins", CombatGear.COMBAT_GEAR_COIN_RESERVE + 31);
+
+        assertNull(CombatGear.findNextPurchasableUpgrade(context, false));
+    }
+
+    @Test
+    public void combatBuysTheBestAffordableWeaponBeforeArmour() {
+        TestContext context = new TestContext();
+        context.realLevels.put(Skill.ATTACK, 5);
+        context.inventory.items.put("Coins", CombatGear.COMBAT_GEAR_COIN_RESERVE + 400);
+
+        CombatGear.PurchasableGear upgrade = CombatGear.findNextPurchasableUpgrade(context, true);
+
+        assertNotNull(upgrade);
+        assertEquals("Steel scimitar", upgrade.item.name);
+    }
+
+    @Test
+    public void combatEquipsOwnedWeaponBeforeBuyingAnUpgrade() {
+        TestContext context = new TestContext();
+        context.realLevels.put(Skill.ATTACK, 5);
+        context.inventory.items.put("Coins", CombatGear.COMBAT_GEAR_COIN_RESERVE + 400);
+        context.bank.items.put("Bronze dagger", 1);
+        CombatStrategy strategy = new CombatStrategy(CombatStrategy.Monster.CHICKENS, Skill.STRENGTH, 10, 0);
+
+        EquipmentRequirement requirement = strategy.requirements(context).stream()
+                .filter(EquipmentRequirement.class::isInstance)
+                .map(EquipmentRequirement.class::cast)
+                .findFirst()
+                .orElse(null);
+
+        assertNotNull(requirement);
+        assertEquals("Bronze dagger", requirement.getItemName());
+    }
+
+    @Test
+    public void combatBuysBodyArmourAfterWeaponIsEquippedForRiskyTargets() {
+        TestContext context = new TestContext();
+        context.realLevels.put(Skill.ATTACK, 5);
+        context.realLevels.put(Skill.DEFENCE, 5);
+        context.inventory.items.put("Coins", CombatGear.COMBAT_GEAR_COIN_RESERVE + 2000);
+        context.equipment.items.put("Steel scimitar", 1);
+        CombatStrategy strategy = new CombatStrategy(CombatStrategy.Monster.GOBLINS, Skill.STRENGTH, 20, 0);
+
+        EquipmentRequirement requirement = strategy.requirements(context).stream()
+                .filter(EquipmentRequirement.class::isInstance)
+                .map(EquipmentRequirement.class::cast)
+                .findFirst()
+                .orElse(null);
+
+        assertNotNull(requirement);
+        assertEquals("Steel platebody", requirement.getItemName());
+    }
+
     private static class TestContext extends AccountContext {
         private final TestInventoryView inventory = new TestInventoryView();
         private final TestBankView bank = new TestBankView();
@@ -166,9 +224,11 @@ public class CombatStrategyTest {
     }
 
     private static class TestEquipmentView extends EquipmentView {
+        private final Map<String, Integer> items = new HashMap<>();
+
         @Override
         public boolean hasItem(String itemName) {
-            return false;
+            return items.getOrDefault(itemName, 0) > 0;
         }
     }
 }

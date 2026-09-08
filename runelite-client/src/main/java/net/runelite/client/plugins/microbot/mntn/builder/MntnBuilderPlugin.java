@@ -54,6 +54,7 @@ public class MntnBuilderPlugin extends Plugin {
     @Subscribe
     public void onConfigChanged(ConfigChanged event) {
         if (MntnBuilderConfig.CONFIG_GROUP.equals(event.getGroup())) {
+            // The script queues this update and applies it from its own worker loop.
             script.onConfigChanged(config);
         }
     }

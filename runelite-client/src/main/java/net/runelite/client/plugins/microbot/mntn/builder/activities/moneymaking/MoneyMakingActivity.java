@@ -6,11 +6,23 @@ import net.runelite.client.plugins.microbot.mntn.builder.activities.Strategy;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.ActivityRequest;
 import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.MoneyRequirement;
+import net.runelite.client.plugins.microbot.mntn.builder.activities.supply.SupplyRoutePolicy;
+import net.runelite.client.plugins.microbot.mntn.builder.activities.supply.SupplyRouteType;
 
 import java.util.ArrayList;
 import java.util.List;
 
 public class MoneyMakingActivity implements Activity {
+
+    private final SupplyRoutePolicy routePolicy;
+
+    public MoneyMakingActivity() {
+        this(SupplyRoutePolicy.allowAll());
+    }
+
+    public MoneyMakingActivity(SupplyRoutePolicy routePolicy) {
+        this.routePolicy = routePolicy == null ? SupplyRoutePolicy.allowAll() : routePolicy;
+    }
 
     @Override
     public ActivityType type() {
@@ -32,7 +44,20 @@ public class MoneyMakingActivity implements Activity {
 
         MoneyRequirement requirement = (MoneyRequirement) request.payload();
         for (MoneyMakingStrategy.Method method : MoneyMakingStrategy.Method.values()) {
-            strategies.add(new MoneyMakingStrategy(method, requirement));
+            if (routePolicy.allows(SupplyRouteType.SHOP) && method.canSellAtGeneralStore()) {
+                strategies.add(new MoneyMakingStrategy(
+                        method,
+                        requirement,
+                        MoneyMakingStrategy.SaleRoute.GENERAL_STORE
+                ));
+            }
+            if (routePolicy.allows(SupplyRouteType.GRAND_EXCHANGE)) {
+                strategies.add(new MoneyMakingStrategy(
+                        method,
+                        requirement,
+                        MoneyMakingStrategy.SaleRoute.GRAND_EXCHANGE
+                ));
+            }
         }
         return strategies;
     }

@@ -12,14 +12,13 @@ import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.cooking.CookingStrategy;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
+import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskActionGuard;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStatus;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStopReason;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.banking.BankingTask;
 import net.runelite.client.plugins.microbot.util.widget.Rs2Widget;
 
 import java.awt.event.KeyEvent;
-
-import static net.runelite.client.plugins.microbot.util.Global.*;
 
 /**
  * Generic Cooking Task.
@@ -52,6 +51,12 @@ public class CookingTask implements Task {
 
     private BankingTask bankingTask;
     private TaskStopReason lastStopReason = TaskStopReason.NONE;
+    private final TaskActionGuard walkGuard = new TaskActionGuard(10, 30_000, 800);
+    private final TaskActionGuard cookingObjectGuard = new TaskActionGuard(8, 12_000, 800);
+    private final TaskActionGuard cameraGuard = new TaskActionGuard(4, 8_000, 700);
+    private final TaskActionGuard widgetGuard = new TaskActionGuard(4, 10_000, 900);
+    private final TaskActionGuard cookGuard = new TaskActionGuard(4, 12_000, 900);
+    private int rawItemsBeforeCook;
 
     public CookingTask(CookingStrategy.Method method) {
         this.method = method;
@@ -97,18 +102,27 @@ public class CookingTask implements Task {
 
         if(!context.inventory().hasItem(method.rawItemName)){
             debugLog(context, "Missing raw item in inventory, switching to BANKING phase");
+            resetActionGuards();
             phase = Phase.BANKING;
             return TaskStatus.RUNNING;
         }
 
         if (context.isNear(method.location, 10)) {
             debugLog(context, "Near cooking location, switching to COOKING phase");
+            walkGuard.reset();
             phase = Phase.COOKING;
             return TaskStatus.RUNNING;
         }
 
-        debugLog(context, "Not near cooking location, walking to " + method.location);
-        Rs2Walker.walkTo(method.location);
+        TaskActionGuard.Result walkResult = walkGuard.evaluate("walk to cooking " + method.name(), false);
+        if (walkResult == TaskActionGuard.Result.EXHAUSTED) {
+            return stop(TaskStatus.REPLAN, TaskStopReason.TRAVEL_FAILED);
+        }
+        if (walkResult == TaskActionGuard.Result.READY) {
+            debugLog(context, "Not near cooking location, walking to " + method.location);
+            Rs2Walker.walkTo(method.location);
+            walkGuard.recordAttempt();
+        }
 
         return TaskStatus.RUNNING;
     }
@@ -129,6 +143,7 @@ public class CookingTask implements Task {
             }
 
             debugLog(context, "Switching to BANKING phase to withdraw raw items");
+            resetActionGuards();
             phase = Phase.BANKING;
             return TaskStatus.RUNNING;
         }
@@ -137,56 +152,73 @@ public class CookingTask implements Task {
          * If we're currently animating,
          * we're probably already cooking.
          */
-        if (Microbot.getClient().getLocalPlayer() != null) {
-
-            boolean isMovingOrAnimating = Rs2Player.isAnimating() || Rs2Player.isMoving();
-
-            sleep(300, 1000);
-
-            boolean isMovingOrAnimatingAgain = Rs2Player.isAnimating() || Rs2Player.isMoving();
-
-
-            if (isMovingOrAnimating || isMovingOrAnimatingAgain) {
-                debugLog(context, "Already animating/moving, waiting");
-                return TaskStatus.RUNNING;
-            }
+        if (Rs2Player.isAnimating() || Rs2Player.isMoving()) {
+            debugLog(context, "Already animating/moving, waiting");
+            return TaskStatus.RUNNING;
         }
 
         debugLog(context, "Looking for cooking object: " + method.cookingObject);
 
         Rs2TileObjectModel cookingObject = Microbot.getRs2TileObjectCache().query().withId(method.cookingObject).nearest();
         if (cookingObject == null) {
-            debugLog(context, "Cooking object not found! Switching to WALK_TO_COOKING");
-            phase = Phase.WALK_TO_COOKING;
+            TaskActionGuard.Result findResult = cookingObjectGuard.evaluate("find cooking object " + method.name(), false);
+            if (findResult == TaskActionGuard.Result.EXHAUSTED) {
+                return stop(TaskStatus.REPLAN, TaskStopReason.RESOURCE_NOT_FOUND);
+            }
+            if (findResult == TaskActionGuard.Result.READY) {
+                cookingObjectGuard.recordAttempt();
+            }
+            debugLog(context, "Cooking object not found; waiting for a nearby object");
             return TaskStatus.RUNNING;
         }
+        cookingObjectGuard.reset();
 
         debugLog(context, "Found cooking object at " + cookingObject.getWorldLocation());
-        sleep(100, 300);
         if (!Rs2Camera.isTileOnScreen(cookingObject.getLocalLocation())) {
-            debugLog(context, "Cooking object not on screen, turning camera");
-            Rs2Camera.turnTo(cookingObject.getLocalLocation());
-
-            sleep(100, 2100);
+            TaskActionGuard.Result cameraResult = cameraGuard.evaluate(
+                    "turn to cooking object " + method.name(),
+                    false
+            );
+            if (cameraResult == TaskActionGuard.Result.EXHAUSTED) {
+                return stop(TaskStatus.REPLAN, TaskStopReason.ACTION_FAILED);
+            }
+            if (cameraResult == TaskActionGuard.Result.READY) {
+                debugLog(context, "Cooking object not on screen, turning camera");
+                Rs2Camera.turnTo(cookingObject.getLocalLocation());
+                cameraGuard.recordAttempt();
+            }
+            return TaskStatus.RUNNING;
         }
+        cameraGuard.reset();
 
-        sleepUntil(() -> cookingObject.click(method.action), 3000);
-
-        boolean productionWidgetOpen = Rs2Widget.isProductionWidgetOpen();
-        if (!productionWidgetOpen) {
-            productionWidgetOpen = sleepUntilTrue(Rs2Widget::isProductionWidgetOpen, 200, 12000);
+        if (!Rs2Widget.isProductionWidgetOpen()) {
+            TaskActionGuard.Result openResult = widgetGuard.evaluate("open cooking widget " + method.name(), false);
+            if (openResult == TaskActionGuard.Result.EXHAUSTED) {
+                return stop(TaskStatus.REPLAN, TaskStopReason.PRODUCTION_WIDGET_FAILED);
+            }
+            if (openResult == TaskActionGuard.Result.READY) {
+                cookingObject.click(method.action);
+                widgetGuard.recordAttempt();
+            }
+            return TaskStatus.RUNNING;
         }
+        widgetGuard.reset();
 
-        sleepUntilTrue(() -> !Rs2Player.isMoving(), 200, 8000);
-
-        if (productionWidgetOpen) {
+        int rawCount = context.inventory().getCount(method.rawItemName);
+        boolean cooked = rawItemsBeforeCook > 0 && rawCount < rawItemsBeforeCook;
+        TaskActionGuard.Result cookResult = cookGuard.evaluate("cook " + method.name(), cooked);
+        if (cookResult == TaskActionGuard.Result.EXHAUSTED) {
+            return stop(TaskStatus.REPLAN, TaskStopReason.PRODUCTION_WIDGET_FAILED);
+        }
+        if (cookResult == TaskActionGuard.Result.READY) {
             debugLog(context, "Production widget open, pressing SPACE to cook");
+            rawItemsBeforeCook = rawCount;
             Rs2Keyboard.keyPress(KeyEvent.VK_SPACE);
+            cookGuard.recordAttempt();
             Microbot.status = "Cooking " + method.rawItemName;
+            Rs2Antiban.actionCooldown();
+            Rs2Antiban.takeMicroBreakByChance();
         }
-
-        Rs2Antiban.actionCooldown();
-        Rs2Antiban.takeMicroBreakByChance();
 
         return TaskStatus.RUNNING;
     }
@@ -222,6 +254,7 @@ public class CookingTask implements Task {
         if (bankStatus == TaskStatus.COMPLETE) {
             debugLog(context, "Banking complete");
             bankingTask = null;
+            resetActionGuards();
             if (!context.inventory().hasItem(method.rawItemName)) {
                 debugLog(context, "Still no raw item in inventory after banking, returning REPLAN");
                 return stop(TaskStatus.REPLAN, TaskStopReason.MISSING_SUPPLIES);
@@ -230,7 +263,7 @@ public class CookingTask implements Task {
             phase = Phase.WALK_TO_COOKING;
         }
 
-        if (bankStatus == TaskStatus.FAILED || bankStatus == TaskStatus.REPLAN) {
+        if (bankStatus.isUnsuccessfulStop()) {
             return stop(bankStatus, TaskStopReason.BANK_FAILED);
         }
 
@@ -271,6 +304,15 @@ public class CookingTask implements Task {
     private TaskStatus stop(TaskStatus status, TaskStopReason reason) {
         lastStopReason = reason != null ? reason : TaskStopReason.UNKNOWN;
         return status;
+    }
+
+    private void resetActionGuards() {
+        walkGuard.reset();
+        cookingObjectGuard.reset();
+        cameraGuard.reset();
+        widgetGuard.reset();
+        cookGuard.reset();
+        rawItemsBeforeCook = 0;
     }
 
     @Override

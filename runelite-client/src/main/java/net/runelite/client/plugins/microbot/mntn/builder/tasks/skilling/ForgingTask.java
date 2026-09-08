@@ -6,15 +6,13 @@ import net.runelite.client.plugins.microbot.api.tileobject.models.Rs2TileObjectM
 import net.runelite.client.plugins.microbot.mntn.builder.activities.smithing.ForgingStrategy;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
+import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskActionGuard;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStatus;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStopReason;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.banking.BankingTask;
 import net.runelite.client.plugins.microbot.util.player.Rs2Player;
 import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
 import net.runelite.client.plugins.microbot.util.widget.Rs2Widget;
-
-import static net.runelite.client.plugins.microbot.util.Global.sleep;
-import static net.runelite.client.plugins.microbot.util.Global.sleepUntilTrue;
 
 public class ForgingTask implements Task {
 
@@ -28,6 +26,11 @@ public class ForgingTask implements Task {
     private Phase phase = Phase.WALK_TO_ANVIL;
     private BankingTask bankingTask;
     private TaskStopReason lastStopReason = TaskStopReason.NONE;
+    private final TaskActionGuard walkGuard = new TaskActionGuard(10, 30_000, 800);
+    private final TaskActionGuard anvilGuard = new TaskActionGuard(8, 12_000, 800);
+    private final TaskActionGuard widgetGuard = new TaskActionGuard(4, 10_000, 900);
+    private final TaskActionGuard forgeGuard = new TaskActionGuard(4, 12_000, 900);
+    private int barsBeforeForge;
 
     public ForgingTask(ForgingStrategy.BarType barType) {
         this.barType = barType;
@@ -66,18 +69,27 @@ public class ForgingTask implements Task {
 
         if (!hasHammerAndBars(context)) {
             debugLog(context, "Missing hammer or bars, switching to BANKING");
+            resetActionGuards();
             phase = Phase.BANKING;
             return TaskStatus.RUNNING;
         }
 
         if (context.isNear(ForgingStrategy.VARROCK_ANVIL, 10)) {
             debugLog(context, "Near anvil, switching to FORGING");
+            walkGuard.reset();
             phase = Phase.FORGING;
             return TaskStatus.RUNNING;
         }
 
-        debugLog(context, "Walking to anvil: " + ForgingStrategy.VARROCK_ANVIL);
-        Rs2Walker.walkTo(ForgingStrategy.VARROCK_ANVIL);
+        TaskActionGuard.Result walkResult = walkGuard.evaluate("walk to anvil " + barType.name(), false);
+        if (walkResult == TaskActionGuard.Result.EXHAUSTED) {
+            return stop(TaskStatus.REPLAN, TaskStopReason.TRAVEL_FAILED);
+        }
+        if (walkResult == TaskActionGuard.Result.READY) {
+            debugLog(context, "Walking to anvil: " + ForgingStrategy.VARROCK_ANVIL);
+            Rs2Walker.walkTo(ForgingStrategy.VARROCK_ANVIL);
+            walkGuard.recordAttempt();
+        }
         return TaskStatus.RUNNING;
     }
 
@@ -86,6 +98,7 @@ public class ForgingTask implements Task {
 
         if (!hasHammerAndBars(context)) {
             debugLog(context, "Missing hammer or bars, switching to BANKING");
+            resetActionGuards();
             phase = Phase.BANKING;
             return TaskStatus.RUNNING;
         }
@@ -101,44 +114,49 @@ public class ForgingTask implements Task {
                 .nearest();
 
         if (anvil == null) {
-            debugLog(context, "Anvil not found, switching to WALK_TO_ANVIL");
-            phase = Phase.WALK_TO_ANVIL;
+            TaskActionGuard.Result findResult = anvilGuard.evaluate("find anvil", false);
+            if (findResult == TaskActionGuard.Result.EXHAUSTED) {
+                return stop(TaskStatus.REPLAN, TaskStopReason.RESOURCE_NOT_FOUND);
+            }
+            if (findResult == TaskActionGuard.Result.READY) {
+                anvilGuard.recordAttempt();
+            }
+            debugLog(context, "Anvil not found; waiting for a nearby anvil");
             return TaskStatus.RUNNING;
         }
+        anvilGuard.reset();
 
-        if (Microbot.getClient().getLocalPlayer() != null) {
-
-            boolean isMovingOrAnimating = Rs2Player.isAnimating() || Rs2Player.isMoving();
-
-            sleep(300, 1000);
-
-            boolean isMovingOrAnimatingAgain = Rs2Player.isAnimating() || Rs2Player.isMoving();
-
-
-            if (isMovingOrAnimating || isMovingOrAnimatingAgain) {
-                debugLog(context, "Already animating/moving after sleep, waiting");
-                return TaskStatus.RUNNING;
-            } else {
-                if (!Rs2Widget.isSmithingWidgetOpen()) {
-                    debugLog(context, "Clicking anvil to open smithing widget");
-                    anvil.click("Smith");
-                    boolean open = sleepUntilTrue(Rs2Widget::isSmithingWidgetOpen, 200, 5000);
-                    if (!open) {
-                        debugLog(context, "Smithing widget did not open");
-                        return TaskStatus.RUNNING;
-                    }
-                }
+        if (!Rs2Widget.isSmithingWidgetOpen()) {
+            TaskActionGuard.Result openResult = widgetGuard.evaluate("open smithing widget", false);
+            if (openResult == TaskActionGuard.Result.EXHAUSTED) {
+                return stop(TaskStatus.REPLAN, TaskStopReason.PRODUCTION_WIDGET_FAILED);
             }
+            if (openResult == TaskActionGuard.Result.READY) {
+                debugLog(context, "Clicking anvil to open smithing widget");
+                anvil.click("Smith");
+                widgetGuard.recordAttempt();
+            }
+            return TaskStatus.RUNNING;
         }
+        widgetGuard.reset();
 
         int barCount = context.inventory().getCount(barType.barItemName);
         String targetItem = determineBestItemToForge(context, barCount);
-        if (targetItem != null) {
-            debugLog(context, "Clicking widget for: " + targetItem);
-            Rs2Widget.clickWidget(targetItem);
-            sleep(600, 1000);
+        if (targetItem == null) {
+            return stop(TaskStatus.REPLAN, TaskStopReason.LEVEL_TOO_LOW);
         }
 
+        boolean forged = barsBeforeForge > 0 && barCount < barsBeforeForge;
+        TaskActionGuard.Result forgeResult = forgeGuard.evaluate("forge " + targetItem, forged);
+        if (forgeResult == TaskActionGuard.Result.EXHAUSTED) {
+            return stop(TaskStatus.REPLAN, TaskStopReason.PRODUCTION_WIDGET_FAILED);
+        }
+        if (forgeResult == TaskActionGuard.Result.READY) {
+            debugLog(context, "Clicking widget for: " + targetItem);
+            barsBeforeForge = barCount;
+            Rs2Widget.clickWidget(targetItem);
+            forgeGuard.recordAttempt();
+        }
         return TaskStatus.RUNNING;
     }
 
@@ -170,6 +188,7 @@ public class ForgingTask implements Task {
         if (bankStatus == TaskStatus.COMPLETE) {
             debugLog(context, "Banking complete");
             bankingTask = null;
+            resetActionGuards();
 
             if (!hasHammerAndBars(context)) {
                 // Out of bars or missing hammer in bank
@@ -182,7 +201,7 @@ public class ForgingTask implements Task {
             return TaskStatus.RUNNING;
         }
 
-        if (bankStatus == TaskStatus.FAILED || bankStatus == TaskStatus.REPLAN) {
+        if (bankStatus.isUnsuccessfulStop()) {
             debugLog(context, "Banking failed/replan: " + bankStatus);
             bankingTask = null;
             return stop(bankStatus, TaskStopReason.BANK_FAILED);
@@ -238,6 +257,14 @@ public class ForgingTask implements Task {
             debugLog(context, "needsReplan: levelCheck=" + levelCheck + " (current=" + context.getRealLevel(Skill.SMITHING) + ", required=" + barType.requiredLevel + ")");
         }
         return levelCheck;
+    }
+
+    private void resetActionGuards() {
+        walkGuard.reset();
+        anvilGuard.reset();
+        widgetGuard.reset();
+        forgeGuard.reset();
+        barsBeforeForge = 0;
     }
 
     @Override

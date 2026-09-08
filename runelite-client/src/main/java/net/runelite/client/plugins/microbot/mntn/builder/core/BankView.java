@@ -13,7 +13,11 @@ import net.runelite.client.plugins.microbot.util.bank.Rs2Bank;
  */
 public class BankView {
 
+    private static final long OPEN_BANK_REFRESH_INTERVAL_MS = 250L;
+
     private final BankCache cache = new BankCache();
+    private long lastOpenRefreshAtMs;
+    private boolean bankWasOpen;
 
     public boolean isOpen() {
         return Rs2Bank.isOpen();
@@ -27,6 +31,8 @@ public class BankView {
      */
     public void refresh() {
         cache.refresh();
+        lastOpenRefreshAtMs = System.currentTimeMillis();
+        bankWasOpen = isOpen();
     }
 
     public boolean isCachePopulated() {
@@ -34,30 +40,39 @@ public class BankView {
     }
 
     public boolean hasItem(String itemName) {
-        if (isOpen()) {
-            refresh(); // opportunistic - keeps the cache honest any time we happen to be looking
-        }
+        refreshOpenBankIfNeeded();
         return cache.hasItem(itemName);
     }
 
     public boolean hasItem(int itemId) {
-        if (isOpen()) {
-            refresh();
-        }
+        refreshOpenBankIfNeeded();
         return cache.hasItem(itemId);
     }
 
     public int getCount(String itemName) {
-        if (isOpen()) {
-            refresh();
-        }
+        refreshOpenBankIfNeeded();
         return cache.getCount(itemName);
     }
 
     public int getCount(int itemId) {
-        if (isOpen()) {
+        refreshOpenBankIfNeeded();
+        return cache.getCount(itemId);
+    }
+
+    /**
+     * A planner pass can ask hundreds of bank questions. Refresh once when the bank opens,
+     * then share that fresh snapshot for a short interval; banking actions still call the
+     * public refresh() method explicitly after every completed deposit or withdrawal.
+     */
+    private void refreshOpenBankIfNeeded() {
+        if (!isOpen()) {
+            bankWasOpen = false;
+            return;
+        }
+
+        long nowMs = System.currentTimeMillis();
+        if (!bankWasOpen || nowMs - lastOpenRefreshAtMs >= OPEN_BANK_REFRESH_INTERVAL_MS) {
             refresh();
         }
-        return cache.getCount(itemId);
     }
 }

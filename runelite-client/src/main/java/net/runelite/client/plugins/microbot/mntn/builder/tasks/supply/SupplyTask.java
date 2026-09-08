@@ -10,6 +10,7 @@ import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.ItemR
 import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.MoneyRequirement;
 import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.Requirement;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
+import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskActionGuard;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStatus;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStopReason;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.banking.BankingTask;
@@ -18,8 +19,6 @@ import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
 import net.runelite.client.plugins.microbot.util.item.Rs2ItemManager;
 import net.runelite.client.plugins.microbot.util.shop.Rs2Shop;
 import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
-
-import static net.runelite.client.plugins.microbot.util.Global.sleepUntilTrue;
 
 /**
  * Route-aware supply task.
@@ -52,6 +51,16 @@ public class SupplyTask implements Task {
     private int beforeRouteInventoryCount;
     private TaskStopReason lastStopReason = TaskStopReason.NONE;
     private int geCollectAttempts;
+    private final TaskActionGuard shopWalkGuard = new TaskActionGuard(10, 30_000, 800);
+    private final TaskActionGuard groundWalkGuard = new TaskActionGuard(10, 30_000, 800);
+    private final TaskActionGuard shopOpenGuard = new TaskActionGuard(4, 12_000, 900);
+    private final TaskActionGuard shopBuyGuard = new TaskActionGuard(4, 12_000, 900);
+    private final TaskActionGuard groundFindGuard = new TaskActionGuard(8, 12_000, 900);
+    private final TaskActionGuard groundPickupGuard = new TaskActionGuard(4, 10_000, 900);
+    private final TaskActionGuard geCollectGuard = new TaskActionGuard(4, 12_000, 900);
+    private final TaskActionGuard equipGuard = new TaskActionGuard(4, 8_000, 700);
+    private boolean shopPurchasePending;
+    private boolean groundPickupPending;
 
     public SupplyTask(Requirement requirement) {
         this(requirement, SupplyRoute.bank(requirement.description(), 1));
@@ -109,7 +118,7 @@ public class SupplyTask implements Task {
     }
 
     private TaskStatus handleCheck(AccountContext context) {
-        if (requirement.isSatisfied(context)) {
+        if (isSupplied(context)) {
             phase = Phase.DONE;
             return TaskStatus.RUNNING;
         }
@@ -157,9 +166,6 @@ public class SupplyTask implements Task {
             if (!itemRequirement.isAvailableInBank(context)) {
                 return stop(TaskStatus.BLOCKED, TaskStopReason.MISSING_BANK_ITEM);
             }
-            if (context.inventory().isFull()) {
-                return stop(TaskStatus.BLOCKED, TaskStopReason.INVENTORY_FULL);
-            }
             phase = Phase.BANK;
             return TaskStatus.RUNNING;
         }
@@ -184,12 +190,7 @@ public class SupplyTask implements Task {
 
         int missingCoins = Math.max(0, coinsNeeded - context.inventory().getCount("Coins"));
         if (missingCoins > 0) {
-            bankingTask = new BankingTask(
-                    BankingTask.Mode.WITHDRAW,
-                    null,
-                    "Coins",
-                    missingCoins
-            );
+            bankingTask = createWithdrawalTask(context, "Coins", missingCoins);
             afterBankPhase = purchasePhase;
             phase = Phase.BANK;
             return TaskStatus.RUNNING;
@@ -237,12 +238,7 @@ public class SupplyTask implements Task {
                 lastStopReason = TaskStopReason.EQUIPMENT_MISSING;
                 return null;
             }
-            return new BankingTask(
-                    BankingTask.Mode.WITHDRAW,
-                    null,
-                    equipmentRequirement.getItemName(),
-                    1
-            );
+            return createWithdrawalTask(context, equipmentRequirement.getItemName(), 1);
         }
 
         if (requirement instanceof ItemRequirement) {
@@ -252,12 +248,7 @@ public class SupplyTask implements Task {
                 lastStopReason = TaskStopReason.MISSING_BANK_ITEM;
                 return null;
             }
-            return new BankingTask(
-                    BankingTask.Mode.WITHDRAW,
-                    null,
-                    itemRequirement.getItemName(),
-                    missing
-            );
+            return createWithdrawalTask(context, itemRequirement.getItemName(), missing);
         }
 
         if (requirement instanceof MoneyRequirement) {
@@ -267,20 +258,30 @@ public class SupplyTask implements Task {
                 lastStopReason = TaskStopReason.MISSING_COINS;
                 return null;
             }
-            return new BankingTask(
-                    BankingTask.Mode.WITHDRAW,
-                    null,
-                    moneyRequirement.getItemName(),
-                    missing
-            );
+            return createWithdrawalTask(context, moneyRequirement.getItemName(), missing);
         }
 
         lastStopReason = TaskStopReason.UNSUPPORTED_ROUTE;
         return null;
     }
 
+    private BankingTask createWithdrawalTask(AccountContext context, String itemName, int amount) {
+        return new BankingTask(
+                withdrawalModeFor(context.inventory().isFull()),
+                null,
+                itemName,
+                amount
+        );
+    }
+
+    static BankingTask.Mode withdrawalModeFor(boolean inventoryFull) {
+        return inventoryFull
+                ? BankingTask.Mode.DEPOSIT_ALL_AND_WITHDRAW
+                : BankingTask.Mode.WITHDRAW;
+    }
+
     private TaskStatus handleGrandExchangeBuy(AccountContext context) {
-        if (requirement.isSatisfied(context)) {
+        if (isSupplied(context)) {
             phase = Phase.DONE;
             return TaskStatus.RUNNING;
         }
@@ -309,12 +310,22 @@ public class SupplyTask implements Task {
             return stop(TaskStatus.BLOCKED, TaskStopReason.GE_COLLECT_FAILED);
         }
 
-        Rs2GrandExchange.collectAllToInventory();
-        sleepUntilTrue(
-                () -> requirement.isSatisfied(context) || desiredInventoryCount(context) > beforeRouteInventoryCount,
-                100,
-                5000
+        boolean collected = isSupplied(context) || desiredInventoryCount(context) > beforeRouteInventoryCount;
+        TaskActionGuard.Result collectResult = geCollectGuard.evaluate(
+                "collect " + route.getItemName(),
+                collected
         );
+        if (collectResult == TaskActionGuard.Result.EXHAUSTED) {
+            return stop(TaskStatus.BLOCKED, TaskStopReason.GE_COLLECT_FAILED);
+        }
+        if (collectResult == TaskActionGuard.Result.READY) {
+            Rs2GrandExchange.collectAllToInventory();
+            geCollectGuard.recordAttempt();
+            return TaskStatus.RUNNING;
+        }
+        if (collectResult == TaskActionGuard.Result.WAITING) {
+            return TaskStatus.RUNNING;
+        }
 
         if (requirement instanceof EquipmentRequirement && !requirement.isSatisfied(context)
                 && context.inventory().hasItem(route.getItemName())) {
@@ -322,8 +333,9 @@ public class SupplyTask implements Task {
             return TaskStatus.RUNNING;
         }
 
-        phase = requirement.isSatisfied(context) ? Phase.DONE : Phase.CHECK;
-        return requirement.isSatisfied(context)
+        boolean supplied = isSupplied(context);
+        phase = supplied ? Phase.DONE : Phase.CHECK;
+        return supplied
                 ? TaskStatus.RUNNING
                 : TaskStatus.RUNNING;
     }
@@ -333,31 +345,60 @@ public class SupplyTask implements Task {
             return stop(TaskStatus.BLOCKED, TaskStopReason.SHOP_ROUTE_INCOMPLETE);
         }
         if (context.isNear(route.getLocation(), route.getRange())) {
+            shopWalkGuard.reset();
             phase = Phase.SHOP_BUY;
             return TaskStatus.RUNNING;
         }
 
-        Rs2Walker.walkTo(route.getLocation(), route.getRange());
+        TaskActionGuard.Result walkResult = shopWalkGuard.evaluate("walk to shop " + route.getShopNpcName(), false);
+        if (walkResult == TaskActionGuard.Result.EXHAUSTED) {
+            return stop(TaskStatus.REPLAN, TaskStopReason.TRAVEL_FAILED);
+        }
+        if (walkResult == TaskActionGuard.Result.READY) {
+            Rs2Walker.walkTo(route.getLocation(), route.getRange());
+            shopWalkGuard.recordAttempt();
+        }
         return TaskStatus.RUNNING;
     }
 
     private TaskStatus handleShopBuy(AccountContext context) {
-        if (!Rs2Shop.isOpen() && !Rs2Shop.openShop(route.getShopNpcName(), false)) {
-            return stop(TaskStatus.BLOCKED, TaskStopReason.SHOP_UNAVAILABLE);
+        if (!Rs2Shop.isOpen()) {
+            TaskActionGuard.Result openResult = shopOpenGuard.evaluate("open shop " + route.getShopNpcName(), false);
+            if (openResult == TaskActionGuard.Result.EXHAUSTED) {
+                return stop(TaskStatus.BLOCKED, TaskStopReason.SHOP_UNAVAILABLE);
+            }
+            if (openResult == TaskActionGuard.Result.READY) {
+                Rs2Shop.openShop(route.getShopNpcName(), false);
+                shopOpenGuard.recordAttempt();
+            }
+            return TaskStatus.RUNNING;
         }
+        shopOpenGuard.reset();
+
         if (!Rs2Shop.hasStock(route.getItemName())) {
             Rs2Shop.closeShop();
             return stop(TaskStatus.BLOCKED, TaskStopReason.SHOP_OUT_OF_STOCK);
         }
 
-        beforeRouteInventoryCount = desiredInventoryCount(context);
-        Rs2Shop.buyItemOptimally(route.getItemName(), Math.max(1, missingDesiredQuantity(context)));
-        sleepUntilTrue(
-                () -> requirement.isSatisfied(context) || desiredInventoryCount(context) > beforeRouteInventoryCount,
-                100,
-                5000
-        );
-        Rs2Shop.closeShop();
+        boolean purchaseConfirmed = shopPurchasePending
+                && (isSupplied(context) || desiredInventoryCount(context) > beforeRouteInventoryCount);
+        TaskActionGuard.Result buyResult = shopBuyGuard.evaluate("buy " + route.getItemName(), purchaseConfirmed);
+        if (buyResult == TaskActionGuard.Result.CONFIRMED) {
+            shopPurchasePending = false;
+            Rs2Shop.closeShop();
+        } else if (buyResult == TaskActionGuard.Result.EXHAUSTED) {
+            shopPurchasePending = false;
+            Rs2Shop.closeShop();
+            return stop(TaskStatus.BLOCKED, TaskStopReason.SHOP_UNAVAILABLE);
+        } else if (buyResult == TaskActionGuard.Result.READY) {
+            beforeRouteInventoryCount = desiredInventoryCount(context);
+            shopPurchasePending = true;
+            Rs2Shop.buyItemOptimally(route.getItemName(), Math.max(1, missingDesiredQuantity(context)));
+            shopBuyGuard.recordAttempt();
+            return TaskStatus.RUNNING;
+        } else {
+            return TaskStatus.RUNNING;
+        }
 
         if (requirement instanceof EquipmentRequirement && !requirement.isSatisfied(context)
                 && context.inventory().hasItem(route.getItemName())) {
@@ -365,8 +406,9 @@ public class SupplyTask implements Task {
             return TaskStatus.RUNNING;
         }
 
-        phase = requirement.isSatisfied(context) ? Phase.DONE : Phase.CHECK;
-        return requirement.isSatisfied(context)
+        boolean supplied = isSupplied(context);
+        phase = supplied ? Phase.DONE : Phase.CHECK;
+        return supplied
                 ? TaskStatus.RUNNING
                 : stop(TaskStatus.BLOCKED, TaskStopReason.SHOP_UNAVAILABLE);
     }
@@ -376,27 +418,53 @@ public class SupplyTask implements Task {
             return stop(TaskStatus.BLOCKED, TaskStopReason.GROUND_ROUTE_INCOMPLETE);
         }
         if (context.isNear(route.getLocation(), route.getRange())) {
+            groundWalkGuard.reset();
             phase = Phase.GROUND_PICKUP;
             return TaskStatus.RUNNING;
         }
 
-        Rs2Walker.walkTo(route.getLocation(), route.getRange());
+        TaskActionGuard.Result walkResult = groundWalkGuard.evaluate("walk to ground item " + route.getItemName(), false);
+        if (walkResult == TaskActionGuard.Result.EXHAUSTED) {
+            return stop(TaskStatus.REPLAN, TaskStopReason.TRAVEL_FAILED);
+        }
+        if (walkResult == TaskActionGuard.Result.READY) {
+            Rs2Walker.walkTo(route.getLocation(), route.getRange());
+            groundWalkGuard.recordAttempt();
+        }
         return TaskStatus.RUNNING;
     }
 
     private TaskStatus handleGroundPickup(AccountContext context) {
         Rs2TileItemModel item = findGroundSupplyItem();
         if (item == null) {
-            return stop(TaskStatus.BLOCKED, TaskStopReason.GROUND_ITEM_NOT_FOUND);
+            TaskActionGuard.Result findResult = groundFindGuard.evaluate("find ground item " + route.getItemName(), false);
+            if (findResult == TaskActionGuard.Result.EXHAUSTED) {
+                return stop(TaskStatus.BLOCKED, TaskStopReason.GROUND_ITEM_NOT_FOUND);
+            }
+            if (findResult == TaskActionGuard.Result.READY) {
+                groundFindGuard.recordAttempt();
+            }
+            return TaskStatus.RUNNING;
         }
+        groundFindGuard.reset();
 
-        beforeRouteInventoryCount = desiredInventoryCount(context);
-        item.pickup();
-        sleepUntilTrue(
-                () -> requirement.isSatisfied(context) || desiredInventoryCount(context) > beforeRouteInventoryCount,
-                100,
-                5000
-        );
+        boolean pickupConfirmed = groundPickupPending
+                && (requirement.isSatisfied(context) || desiredInventoryCount(context) > beforeRouteInventoryCount);
+        TaskActionGuard.Result pickupResult = groundPickupGuard.evaluate("pick up " + route.getItemName(), pickupConfirmed);
+        if (pickupResult == TaskActionGuard.Result.CONFIRMED) {
+            groundPickupPending = false;
+        } else if (pickupResult == TaskActionGuard.Result.EXHAUSTED) {
+            groundPickupPending = false;
+            return stop(TaskStatus.BLOCKED, TaskStopReason.GROUND_PICKUP_FAILED);
+        } else if (pickupResult == TaskActionGuard.Result.READY) {
+            beforeRouteInventoryCount = desiredInventoryCount(context);
+            groundPickupPending = true;
+            item.pickup();
+            groundPickupGuard.recordAttempt();
+            return TaskStatus.RUNNING;
+        } else {
+            return TaskStatus.RUNNING;
+        }
 
         phase = requirement.isSatisfied(context) ? Phase.DONE : Phase.CHECK;
         return requirement.isSatisfied(context)
@@ -428,21 +496,22 @@ public class SupplyTask implements Task {
             return TaskStatus.RUNNING;
         }
 
-        if (!Rs2Inventory.wield(equipmentRequirement.getItemName())) {
-            return stop(TaskStatus.BLOCKED, TaskStopReason.EQUIP_FAILED);
-        }
-
-        boolean equipped = sleepUntilTrue(
-                () -> context.equipment().hasItem(equipmentRequirement.getItemName()),
-                100,
-                3000
+        TaskActionGuard.Result equipResult = equipGuard.evaluate(
+                "equip " + equipmentRequirement.getItemName(),
+                context.equipment().hasItem(equipmentRequirement.getItemName())
         );
-        if (equipped || context.equipment().hasItem(equipmentRequirement.getItemName())) {
+        if (equipResult == TaskActionGuard.Result.CONFIRMED) {
             phase = Phase.DONE;
             return TaskStatus.RUNNING;
         }
-
-        return stop(TaskStatus.REPLAN, TaskStopReason.EQUIP_FAILED);
+        if (equipResult == TaskActionGuard.Result.EXHAUSTED) {
+            return stop(TaskStatus.REPLAN, TaskStopReason.EQUIP_FAILED);
+        }
+        if (equipResult == TaskActionGuard.Result.READY) {
+            Rs2Inventory.wield(equipmentRequirement.getItemName());
+            equipGuard.recordAttempt();
+        }
+        return TaskStatus.RUNNING;
     }
 
     private int missingDesiredQuantity(AccountContext context) {
@@ -457,6 +526,12 @@ public class SupplyTask implements Task {
 
     private int desiredInventoryCount(AccountContext context) {
         return context.inventory().getCount(route.getItemName());
+    }
+
+    private boolean isSupplied(AccountContext context) {
+        return requirement.isSatisfied(context)
+                || (route.getItemName() != null
+                && context.inventory().getCount(route.getItemName()) >= route.getQuantity());
     }
 
     private int estimatedTotalPrice(AccountContext context) {

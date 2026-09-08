@@ -33,12 +33,18 @@ public class SupplyStrategy implements Strategy {
 
     @Override
     public String name() {
-        return "SUPPLY_" + route.getType().name() + "_" + requirement.description();
+        String source = route.getType() == SupplyRouteType.SHOP ? route.getShopNpcName() : route.describe();
+        return "SUPPLY_" + route.getType().name() + "_" + route.getItemName() + "_" + source
+                + "_" + requirement.description();
+    }
+
+    public SupplyRouteType routeType() {
+        return route.getType();
     }
 
     @Override
     public boolean canExecute(AccountContext context) {
-        if (requirement.isSatisfied(context)) {
+        if (requirement.isSatisfied(context) || routeItemIsAvailable(context)) {
             return true;
         }
 
@@ -164,22 +170,32 @@ public class SupplyStrategy implements Strategy {
             return route.getEstimatedUnitPrice();
         }
 
-        int itemId = Rs2ItemManager.getItemIdByName(route.getItemName(), false);
-        if (itemId <= 0) {
+        try {
+            int itemId = Rs2ItemManager.getItemIdByName(route.getItemName(), false);
+            if (itemId <= 0) {
+                return 100;
+            }
+
+            int offerPrice = Rs2GrandExchange.getOfferPrice(itemId);
+            if (offerPrice <= 0) {
+                return 100;
+            }
+
+            return (int) Math.ceil(offerPrice * route.getPriceMultiplier());
+        } catch (RuntimeException ignored) {
+            // The route catalog's fallback keeps early planning independent of live caches.
             return 100;
         }
-
-        int offerPrice = Rs2GrandExchange.getOfferPrice(itemId);
-        if (offerPrice <= 0) {
-            return 100;
-        }
-
-        return (int) Math.ceil(offerPrice * route.getPriceMultiplier());
     }
 
     private boolean hasEnoughCoins(AccountContext context, int coinsNeeded) {
         int inventoryCoins = context.inventory().getCount("Coins");
         int bankCoins = context.bank().getCount("Coins");
         return inventoryCoins + bankCoins >= coinsNeeded;
+    }
+
+    private boolean routeItemIsAvailable(AccountContext context) {
+        return route.getItemName() != null
+                && context.inventory().getCount(route.getItemName()) >= route.getQuantity();
     }
 }

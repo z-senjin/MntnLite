@@ -1,6 +1,12 @@
 package net.runelite.client.plugins.microbot.mntn.builder.tasks.combat;
 
+import net.runelite.api.EnumComposition;
+import net.runelite.api.EnumID;
+import net.runelite.api.ParamID;
 import net.runelite.api.Skill;
+import net.runelite.api.StructComposition;
+import net.runelite.api.gameval.VarPlayerID;
+import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.widgets.WidgetInfo;
 import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.api.npc.models.Rs2NpcModel;
@@ -9,9 +15,11 @@ import net.runelite.client.plugins.microbot.mntn.builder.activities.combat.Comba
 import net.runelite.client.plugins.microbot.mntn.builder.activities.combat.CombatStrategy;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
+import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskActionGuard;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStatus;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStopReason;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.banking.BankingTask;
+import net.runelite.client.plugins.microbot.util.bank.Rs2Bank;
 import net.runelite.client.plugins.microbot.util.combat.Rs2Combat;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
 import net.runelite.client.plugins.microbot.util.player.Rs2Player;
@@ -21,14 +29,11 @@ import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
 import java.util.ArrayList;
 import java.util.List;
 
-import static net.runelite.client.plugins.microbot.util.Global.sleep;
-import static net.runelite.client.plugins.microbot.util.Global.sleepUntilTrue;
-
 public class CombatTask implements Task {
 
     private static final int MAX_STYLE_ATTEMPTS = 3;
     private static final int MAX_TARGET_SEARCH_FAILURES = 25;
-    private static final int MAX_ATTACK_ATTEMPTS = 5;
+    private static final int MINIMUM_LOOT_STACK_VALUE = 100;
 
     private enum Phase {
         CHECK_STATUS,
@@ -41,20 +46,32 @@ public class CombatTask implements Task {
     private final Skill targetSkill;
     private final int targetLevel;
     private final int prayerTarget;
+    private final String requiredLootName;
 
     private Phase phase = Phase.CHECK_STATUS;
     private BankingTask bankingTask;
     private boolean styleConfigured = false;
     private TaskStopReason lastStopReason = TaskStopReason.NONE;
     private int styleAttempts;
+    private long lastStyleAttemptAtMs;
     private int targetSearchFailures;
-    private int attackAttempts;
+    private final TaskActionGuard walkGuard = new TaskActionGuard(10, 30_000, 800);
+    private final TaskActionGuard attackGuard = new TaskActionGuard(5, 12_000, 700);
 
     public CombatTask(CombatStrategy.Monster monster, Skill targetSkill, int targetLevel, int prayerTarget) {
+        this(monster, targetSkill, targetLevel, prayerTarget, null);
+    }
+
+    /**
+     * @param requiredLootName the active money-making drop, which may be collected below the normal value threshold
+     */
+    public CombatTask(CombatStrategy.Monster monster, Skill targetSkill, int targetLevel, int prayerTarget,
+                      String requiredLootName) {
         this.monster = monster;
         this.targetSkill = targetSkill;
         this.targetLevel = targetLevel;
         this.prayerTarget = prayerTarget;
+        this.requiredLootName = requiredLootName;
     }
 
     private void debugLog(AccountContext context, String message) {
@@ -70,6 +87,13 @@ public class CombatTask implements Task {
         if (!context.isLoggedIn()) {
             debugLog(context, "Not logged in, returning BLOCKED");
             return stop(TaskStatus.BLOCKED, TaskStopReason.NOT_LOGGED_IN);
+        }
+
+        // A completed prior withdrawal can leave the bank open. Combat widgets and
+        // movement are not reliable until that interface is dismissed.
+        if (phase != Phase.BANKING && Rs2Bank.isOpen()) {
+            Rs2Bank.closeBank();
+            return TaskStatus.RUNNING;
         }
 
         switch (phase) {
@@ -136,21 +160,22 @@ public class CombatTask implements Task {
         if (shouldBuryBones(context) && Rs2Inventory.contains("Bones")) {
             debugLog(context, "Burying bones for prayer training");
             Rs2Inventory.interact("Bones", "Bury");
-            sleep(600, 900);
+            return TaskStatus.RUNNING;
         }
 
         // Configure attack style if not done yet
         if (!styleConfigured) {
             Skill styleSkill = CombatStrategy.selectCombatStyleSkill(context, targetSkill);
             debugLog(context, "Configuring combat style for " + styleSkill.getName());
-            if (!configureCombatStyle(context, styleSkill)) {
-                styleAttempts++;
-                debugLog(context, "Failed to configure combat style attempt " + styleAttempts + "/" + MAX_STYLE_ATTEMPTS);
-                return styleAttempts >= MAX_STYLE_ATTEMPTS
+            CombatStyleResult styleResult = configureCombatStyle(context, styleSkill);
+            if (styleResult != CombatStyleResult.CONFIRMED) {
+                debugLog(context, "Combat style " + styleResult + " attempt " + styleAttempts + "/" + MAX_STYLE_ATTEMPTS);
+                return styleResult == CombatStyleResult.FAILED
                         ? stop(TaskStatus.REPLAN, TaskStopReason.ACTION_FAILED)
                         : TaskStatus.RUNNING;
             }
             styleAttempts = 0;
+            lastStyleAttemptAtMs = 0;
             styleConfigured = true;
         }
 
@@ -212,6 +237,7 @@ public class CombatTask implements Task {
             bankingTask = null;
 
             equipAvailableGear(context);
+            styleConfigured = false;
 
             CombatGear.GearItem equippedWeapon = CombatGear.findBestWeapon(context, false);
             if (equippedWeapon == null || !context.equipment().hasItem(equippedWeapon.name)) {
@@ -232,7 +258,7 @@ public class CombatTask implements Task {
             return TaskStatus.RUNNING;
         }
 
-        if (bankStatus == TaskStatus.FAILED || bankStatus == TaskStatus.REPLAN) {
+        if (bankStatus.isUnsuccessfulStop()) {
             debugLog(context, "Banking failed/replan: " + bankStatus);
             bankingTask = null;
             return stop(TaskStatus.REPLAN, TaskStopReason.BANK_FAILED);
@@ -253,13 +279,23 @@ public class CombatTask implements Task {
         }
 
         if (context.isNear(monster.location, 12)) {
+            walkGuard.reset();
             debugLog(context, "Near monster location, switching to FIGHTING");
             phase = Phase.FIGHTING;
             return TaskStatus.RUNNING;
         }
 
-        debugLog(context, "Walking to monster location: " + monster.location);
-        Rs2Walker.walkTo(monster.location);
+        TaskActionGuard.Result walkResult = walkGuard.evaluate("walk to " + monster.displayName, false);
+        if (walkResult == TaskActionGuard.Result.EXHAUSTED) {
+            debugLog(context, "Walk to monster exhausted after " + walkGuard.attempts() + " attempts");
+            return stop(TaskStatus.REPLAN, TaskStopReason.TRAVEL_FAILED);
+        }
+        if (walkResult == TaskActionGuard.Result.READY) {
+            debugLog(context, "Walking to monster location: " + monster.location
+                    + " attempt " + (walkGuard.attempts() + 1));
+            Rs2Walker.walkTo(monster.location);
+            walkGuard.recordAttempt();
+        }
         return TaskStatus.RUNNING;
     }
 
@@ -285,6 +321,7 @@ public class CombatTask implements Task {
 
         // Check if currently actively in combat - don't interrupt fighting to wander/loot
         if (Rs2Combat.inCombat() || (Rs2Player.isInteracting() && Rs2Player.isInCombat())) {
+            attackGuard.reset();
             if (Rs2Player.getHealthPercentage() <= 50) {
                 Rs2Player.eatAt(50);
             }
@@ -296,37 +333,34 @@ public class CombatTask implements Task {
         if (shouldBuryBones(context) && Rs2Inventory.contains("Bones")) {
             debugLog(context, "Burying bones for prayer");
             Rs2Inventory.interact("Bones", "Bury");
-            sleep(600, 900);
             return TaskStatus.RUNNING;
         }
 
-        // If inventory is full, bank loot
-        if (Rs2Inventory.isFull() && !Rs2Inventory.contains("Bones")) {
+        // If inventory is full, bank loot and return through CHECK_STATUS to resume this combat task.
+        if (Rs2Inventory.isFull()) {
             debugLog(context, "Inventory full, switching to BANKING");
             phase = Phase.BANKING;
             return TaskStatus.RUNNING;
         }
 
-        // Loot drops within 8 tiles - ONLY items owned by this player
-        if (!Rs2Inventory.isFull()) {
-            Rs2TileItemModel loot = Microbot.getRs2TileItemCache().query()
-                    .withNames(monster.lootNames)
-                    .within(8)
-                    .where(Rs2TileItemModel::isOwned)
-                    .nearest();
+        // Loot only this account's drops. Bones are exclusively for an unfinished Prayer goal;
+        // all other drops must be worth more than 100 gp per ground stack, except the active
+        // money-making drop which is deliberately gathered for sale.
+        Rs2TileItemModel loot = Microbot.getRs2TileItemCache().query()
+                .within(8)
+                .where(Rs2TileItemModel::isOwned)
+                .where(item -> shouldLoot(item, context))
+                .nearest();
 
-            if (loot != null) {
-                debugLog(context, "Picking up loot: " + loot.getName());
-                loot.pickup();
-                sleepUntilTrue(() -> !Rs2Player.isMoving(), 200, 3000);
-                targetSearchFailures = 0;
+        if (loot != null) {
+            debugLog(context, "Picking up loot: " + loot.getName());
+            loot.pickup();
+            targetSearchFailures = 0;
 
-                if (shouldBuryBones(context) && Rs2Inventory.contains("Bones")) {
-                    Rs2Inventory.interact("Bones", "Bury");
-                    sleep(600, 900);
-                }
-                return TaskStatus.RUNNING;
+            if (shouldBuryBones(context) && Rs2Inventory.contains("Bones")) {
+                Rs2Inventory.interact("Bones", "Bury");
             }
+            return TaskStatus.RUNNING;
         }
 
         // Find monster target:
@@ -360,18 +394,22 @@ public class CombatTask implements Task {
         }
 
         if (target != null) {
-            debugLog(context, "Attacking target: " + target.getName());
-            boolean clicked = target.click("Attack");
-            if (!clicked) {
-                attackAttempts++;
-                debugLog(context, "Failed to click attack attempt " + attackAttempts + "/" + MAX_ATTACK_ATTEMPTS);
-                return attackAttempts >= MAX_ATTACK_ATTEMPTS
-                        ? stop(TaskStatus.REPLAN, TaskStopReason.ACTION_FAILED)
-                        : TaskStatus.RUNNING;
+            String attackAction = "attack " + monster.displayName + "#" + target.getIndex();
+            TaskActionGuard.Result attackResult = attackGuard.evaluate(attackAction, false);
+            if (attackResult == TaskActionGuard.Result.EXHAUSTED) {
+                debugLog(context, "Attack action exhausted after " + attackGuard.attempts() + " attempts");
+                return stop(TaskStatus.REPLAN, TaskStopReason.ACTION_FAILED);
             }
-            attackAttempts = 0;
+            if (attackResult == TaskActionGuard.Result.READY) {
+                debugLog(context, "Attacking target: " + target.getName()
+                        + " attempt " + (attackGuard.attempts() + 1));
+                boolean clicked = target.click("Attack");
+                attackGuard.recordAttempt();
+                if (!clicked) {
+                    debugLog(context, "Attack click was not accepted");
+                }
+            }
             targetSearchFailures = 0;
-            sleep(600, 1000);
         } else {
             // If no monster is nearby, re-center on the spawn area
             if (!context.isNear(monster.location, 10)) {
@@ -395,7 +433,6 @@ public class CombatTask implements Task {
         if (bestWeapon != null && !context.equipment().hasItem(bestWeapon.name) && context.inventory().hasItem(bestWeapon.name)) {
             debugLog(context, "Equipping weapon: " + bestWeapon.name);
             Rs2Inventory.wield(bestWeapon.name);
-            sleep(300, 600);
         }
 
         boolean usingTwoHanded = (bestWeapon != null && CombatGear.isTwoHanded(bestWeapon));
@@ -405,7 +442,6 @@ public class CombatTask implements Task {
             if (bestShield != null && !context.equipment().hasItem(bestShield.name) && context.inventory().hasItem(bestShield.name)) {
                 debugLog(context, "Equipping shield: " + bestShield.name);
                 Rs2Inventory.wield(bestShield.name);
-                sleep(300, 600);
             }
         }
 
@@ -413,54 +449,134 @@ public class CombatTask implements Task {
         if (bestHelm != null && !context.equipment().hasItem(bestHelm.name) && context.inventory().hasItem(bestHelm.name)) {
             debugLog(context, "Equipping helm: " + bestHelm.name);
             Rs2Inventory.wield(bestHelm.name);
-            sleep(300, 600);
         }
 
         CombatGear.GearItem bestBody = CombatGear.findBestArmor(context, CombatGear.BODIES, false);
         if (bestBody != null && !context.equipment().hasItem(bestBody.name) && context.inventory().hasItem(bestBody.name)) {
             debugLog(context, "Equipping body: " + bestBody.name);
             Rs2Inventory.wield(bestBody.name);
-            sleep(300, 600);
         }
 
         CombatGear.GearItem bestLegs = CombatGear.findBestArmor(context, CombatGear.LEGS, false);
         if (bestLegs != null && !context.equipment().hasItem(bestLegs.name) && context.inventory().hasItem(bestLegs.name)) {
             debugLog(context, "Equipping legs: " + bestLegs.name);
             Rs2Inventory.wield(bestLegs.name);
-            sleep(300, 600);
         }
     }
 
-    private boolean configureCombatStyle(AccountContext context, Skill styleSkill) {
-        debugLog(context, "Configuring combat style for " + styleSkill.getName());
-        Rs2Tab.switchToCombatOptionsTab();
-        sleep(200, 400);
+    private enum CombatStyleResult {
+        CONFIRMED,
+        WAITING,
+        FAILED
+    }
 
-        boolean autoRetaliateSet = Rs2Combat.setAutoRetaliate(true);
-
-        WidgetInfo styleWidget;
-        switch (styleSkill) {
-            case ATTACK:
-                styleWidget = WidgetInfo.COMBAT_STYLE_ONE;
-                break;
-            case DEFENCE:
-                styleWidget = WidgetInfo.COMBAT_STYLE_FOUR;
-                break;
-            case STRENGTH:
-            default:
-                styleWidget = WidgetInfo.COMBAT_STYLE_TWO;
-                break;
+    private CombatStyleResult configureCombatStyle(AccountContext context, Skill styleSkill) {
+        int styleIndex = findExclusiveStyleIndex(styleSkill);
+        if (styleIndex < 0) {
+            debugLog(context, "No exact " + styleSkill.getName() + " style is available for the equipped weapon");
+            return CombatStyleResult.FAILED;
         }
 
-        boolean styleSet = Rs2Combat.setAttackStyle(styleWidget);
-        sleep(200, 400);
+        if (Microbot.getVarbitPlayerValue(VarPlayerID.COM_MODE) == styleIndex) {
+            Rs2Tab.switchToInventoryTab();
+            return CombatStyleResult.CONFIRMED;
+        }
 
-        Rs2Tab.switchToInventoryTab();
-        return autoRetaliateSet && styleSet;
+        if (styleAttempts >= MAX_STYLE_ATTEMPTS) {
+            return CombatStyleResult.FAILED;
+        }
+
+        long now = System.currentTimeMillis();
+        if (lastStyleAttemptAtMs != 0 && now - lastStyleAttemptAtMs < 600) {
+            return CombatStyleResult.WAITING;
+        }
+
+        Rs2Tab.switchToCombatOptionsTab();
+        boolean autoRetaliateSet = Rs2Combat.setAutoRetaliate(true);
+        WidgetInfo styleWidget = combatStyleWidget(styleIndex);
+        boolean styleSet = styleWidget != null && Rs2Combat.setAttackStyle(styleWidget);
+        styleAttempts++;
+        lastStyleAttemptAtMs = now;
+        debugLog(context, "Requested " + styleSkill.getName() + " style index=" + styleIndex
+                + " accepted=" + styleSet + " autoRetaliate=" + autoRetaliateSet);
+        return CombatStyleResult.WAITING;
+    }
+
+    private int findExclusiveStyleIndex(Skill targetSkill) {
+        EnumComposition weaponStyleLookup = Microbot.getEnum(EnumID.WEAPON_STYLES);
+        if (weaponStyleLookup == null) {
+            return -1;
+        }
+
+        int weaponType = Microbot.getVarbitValue(VarbitID.COMBAT_WEAPON_CATEGORY);
+        int weaponStyleEnumId = weaponStyleLookup.getIntValue(weaponType);
+        if (weaponStyleEnumId < 0) {
+            return -1;
+        }
+
+        EnumComposition weaponStyles = Microbot.getEnum(weaponStyleEnumId);
+        int[] styleStructIds = weaponStyles != null ? weaponStyles.getIntVals() : null;
+        if (styleStructIds == null) {
+            return -1;
+        }
+
+        for (int index = 0; index < styleStructIds.length; index++) {
+            StructComposition style = Microbot.getStructComposition(styleStructIds[index]);
+            if (style != null && trainsOnly(style.getStringValue(ParamID.ATTACK_STYLE_NAME), targetSkill)) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    static boolean trainsOnly(String styleName, Skill targetSkill) {
+        if (styleName == null || targetSkill == null) {
+            return false;
+        }
+        switch (styleName) {
+            case "Accurate":
+                return targetSkill == Skill.ATTACK;
+            case "Aggressive":
+                return targetSkill == Skill.STRENGTH;
+            case "Defensive":
+                return targetSkill == Skill.DEFENCE;
+            default:
+                return false;
+        }
+    }
+
+    static WidgetInfo combatStyleWidget(int styleIndex) {
+        switch (styleIndex) {
+            case 0:
+                return WidgetInfo.COMBAT_STYLE_ONE;
+            case 1:
+                return WidgetInfo.COMBAT_STYLE_TWO;
+            case 2:
+                return WidgetInfo.COMBAT_STYLE_THREE;
+            case 3:
+                return WidgetInfo.COMBAT_STYLE_FOUR;
+            default:
+                return null;
+        }
     }
 
     private boolean shouldBuryBones(AccountContext context) {
         return prayerTarget > 0 && context.getRealLevel(Skill.PRAYER) < prayerTarget;
+    }
+
+    private boolean shouldLoot(Rs2TileItemModel item, AccountContext context) {
+        String itemName = item.getName();
+        if ("Bones".equalsIgnoreCase(itemName)) {
+            return shouldBuryBones(context);
+        }
+        if (requiredLootName != null && requiredLootName.equalsIgnoreCase(itemName)) {
+            return true;
+        }
+        return exceedsLootValueThreshold(item.getTotalValue());
+    }
+
+    static boolean exceedsLootValueThreshold(int totalValue) {
+        return totalValue > MINIMUM_LOOT_STACK_VALUE;
     }
 
     @Override

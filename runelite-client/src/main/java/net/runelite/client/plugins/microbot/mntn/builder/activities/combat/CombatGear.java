@@ -8,6 +8,9 @@ import java.util.List;
 
 public class CombatGear {
 
+    /** Keep an early account able to pay for food, tools, and the next basic supply route. */
+    public static final int COMBAT_GEAR_COIN_RESERVE = 1_000;
+
     public static class GearItem {
         public final String name;
         public final int requiredLevel;
@@ -19,6 +22,34 @@ public class CombatGear {
             this.skill = skill;
         }
     }
+
+    /**
+     * A deliberately small, verified F2P purchase list. The larger gear arrays above
+     * describe what can be equipped; this list describes what the builder may buy.
+     */
+    public static class PurchasableGear {
+        public final GearItem item;
+        public final int shopPrice;
+
+        private PurchasableGear(String name, int requiredLevel, Skill skill, int shopPrice) {
+            this.item = new GearItem(name, requiredLevel, skill);
+            this.shopPrice = shopPrice;
+        }
+    }
+
+    private static final PurchasableGear[] PURCHASED_WEAPONS = {
+            new PurchasableGear("Mithril scimitar", 20, Skill.ATTACK, 1040),
+            new PurchasableGear("Steel scimitar", 5, Skill.ATTACK, 400),
+            new PurchasableGear("Iron scimitar", 1, Skill.ATTACK, 112),
+            new PurchasableGear("Bronze scimitar", 1, Skill.ATTACK, 32)
+    };
+
+    private static final PurchasableGear[] PURCHASED_BODIES = {
+            new PurchasableGear("Mithril platebody", 20, Skill.DEFENCE, 5200),
+            new PurchasableGear("Steel platebody", 5, Skill.DEFENCE, 2000),
+            new PurchasableGear("Iron platebody", 1, Skill.DEFENCE, 560),
+            new PurchasableGear("Bronze platebody", 1, Skill.DEFENCE, 160)
+    };
 
     /*
      * Weapons ordered by tier descending (Rune -> Adamant -> Mithril -> Black -> Steel -> Iron -> Bronze)
@@ -274,5 +305,69 @@ public class CombatGear {
         for (GearItem l : LEGS) names.add(l.name);
         for (GearItem s : SHIELDS) names.add(s.name);
         return names;
+    }
+
+    /**
+     * Returns one affordable improvement, preferring a weapon. Existing bank gear is
+     * always equipped before this is considered, and the reserve is never spendable.
+     */
+    public static PurchasableGear findNextPurchasableUpgrade(AccountContext context, boolean includeArmor) {
+        GearItem currentWeapon = findBestWeapon(context, true);
+        if (currentWeapon != null && !context.equipment().hasItem(currentWeapon.name)) {
+            return null;
+        }
+
+        PurchasableGear weapon = findAffordableUpgrade(context, PURCHASED_WEAPONS, currentWeapon, WEAPONS);
+        if (weapon != null) {
+            return weapon;
+        }
+
+        if (!includeArmor) {
+            return null;
+        }
+
+        GearItem currentBody = findBestArmor(context, BODIES, true);
+        if (currentBody != null && !context.equipment().hasItem(currentBody.name)) {
+            return null;
+        }
+        return findAffordableUpgrade(context, PURCHASED_BODIES, currentBody, BODIES);
+    }
+
+    private static PurchasableGear findAffordableUpgrade(
+            AccountContext context,
+            PurchasableGear[] candidates,
+            GearItem current,
+            GearItem[] slotItems
+    ) {
+        int spendableCoins = totalCoins(context) - COMBAT_GEAR_COIN_RESERVE;
+        for (PurchasableGear candidate : candidates) {
+            if (context.getRealLevel(candidate.item.skill) < candidate.item.requiredLevel
+                    || candidate.shopPrice > spendableCoins
+                    || !isUpgrade(candidate.item, current, slotItems)) {
+                continue;
+            }
+            return candidate;
+        }
+        return null;
+    }
+
+    private static boolean isUpgrade(GearItem candidate, GearItem current, GearItem[] slotItems) {
+        if (current == null) {
+            return true;
+        }
+        return indexOf(slotItems, candidate.name) < indexOf(slotItems, current.name);
+    }
+
+    private static int indexOf(GearItem[] items, String itemName) {
+        for (int index = 0; index < items.length; index++) {
+            if (items[index].name.equals(itemName)) {
+                return index;
+            }
+        }
+        return Integer.MAX_VALUE;
+    }
+
+    private static int totalCoins(AccountContext context) {
+        return context.inventory().getCount("Coins") + context.bank().getCount("Coins");
     }
 }

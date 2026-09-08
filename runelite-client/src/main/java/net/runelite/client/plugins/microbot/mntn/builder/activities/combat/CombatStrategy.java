@@ -2,7 +2,6 @@ package net.runelite.client.plugins.microbot.mntn.builder.activities.combat;
 
 import net.runelite.api.Skill;
 import net.runelite.api.coords.WorldPoint;
-import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.Strategy;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.EquipmentRequirement;
@@ -130,8 +129,14 @@ public class CombatStrategy implements Strategy {
     public List<Requirement> requirements(AccountContext context) {
         List<Requirement> requirements = new ArrayList<>();
 
+        CombatGear.PurchasableGear upgrade = CombatGear.findNextPurchasableUpgrade(
+                context,
+                !canFightUnarmed(monster)
+        );
         CombatGear.GearItem weapon = selectedWeapon(context);
-        if (weapon != null) {
+        if (upgrade != null) {
+            requirements.add(new EquipmentRequirement(upgrade.item.name));
+        } else if (weapon != null) {
             requirements.add(new EquipmentRequirement(weapon.name));
         } else if (!canFightUnarmed(monster)) {
             requirements.add(new EquipmentRequirement(STARTER_WEAPON));
@@ -322,10 +327,7 @@ public class CombatStrategy implements Strategy {
     }
 
     private static int getCombatLevel(AccountContext context) {
-        if (!context.isLoggedIn() || Microbot.getClient() == null || Microbot.getClient().getLocalPlayer() == null) {
-            return 3;
-        }
-        return Microbot.getClient().getLocalPlayer().getCombatLevel();
+        return context.getCombatLevel();
     }
 
     public Monster getMonster() {

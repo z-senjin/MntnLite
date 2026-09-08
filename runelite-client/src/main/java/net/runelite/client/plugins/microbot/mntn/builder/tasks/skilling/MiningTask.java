@@ -6,14 +6,13 @@ import net.runelite.client.plugins.microbot.api.tileobject.models.Rs2TileObjectM
 import net.runelite.client.plugins.microbot.mntn.builder.activities.mining.MiningStrategy;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
+import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskActionGuard;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStatus;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStopReason;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.banking.BankingTask;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
 import net.runelite.client.plugins.microbot.util.player.Rs2Player;
 import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
-
-import static net.runelite.client.plugins.microbot.util.Global.sleep;
 
 public class MiningTask implements Task {
 
@@ -22,12 +21,24 @@ public class MiningTask implements Task {
     }
 
     private final MiningStrategy.Method method;
+    private final MiningStrategy.Location location;
     private Phase phase = Phase.WALK_TO_MINE;
     private BankingTask bankingTask;
     private TaskStopReason lastStopReason = TaskStopReason.NONE;
+    private final TaskActionGuard walkGuard = new TaskActionGuard(10, 30_000, 800);
+    private final TaskActionGuard mineGuard = new TaskActionGuard(5, 12_000, 900);
+    private final TaskActionGuard rockGuard = new TaskActionGuard(8, 12_000, 900);
 
     public MiningTask(MiningStrategy.Method method) {
+        this(method, MiningStrategy.Location.defaultFor(method));
+    }
+
+    public MiningTask(MiningStrategy.Method method, MiningStrategy.Location location) {
+        if (location.method != method) {
+            throw new IllegalArgumentException("Mining location does not support " + method);
+        }
         this.method = method;
+        this.location = location;
     }
 
     private void debugLog(AccountContext context, String message) {
@@ -69,14 +80,22 @@ public class MiningTask implements Task {
 
         tryEquipPickaxe(context, pickaxe);
 
-        if (context.isNear(method.location, 12)) {
+        if (context.isNear(location.point, 12)) {
+            walkGuard.reset();
             debugLog(context, "Near mining location, switching to MINING");
             phase = Phase.MINING;
             return TaskStatus.RUNNING;
         }
 
-        debugLog(context, "Walking to mining location: " + method.location);
-        Rs2Walker.walkTo(method.location);
+        TaskActionGuard.Result walkResult = walkGuard.evaluate("walk to mine " + method.name(), false);
+        if (walkResult == TaskActionGuard.Result.EXHAUSTED) {
+            return stop(TaskStatus.REPLAN, TaskStopReason.TRAVEL_FAILED);
+        }
+        if (walkResult == TaskActionGuard.Result.READY) {
+            debugLog(context, "Walking to mining location: " + location.point);
+            Rs2Walker.walkTo(location.point);
+            walkGuard.recordAttempt();
+        }
         return TaskStatus.RUNNING;
     }
 
@@ -98,26 +117,40 @@ public class MiningTask implements Task {
 
         tryEquipPickaxe(context, pickaxe);
 
-        if (Microbot.getClient().getLocalPlayer() != null) {
-            boolean isMovingOrAnimating = Rs2Player.isAnimating() || Rs2Player.isMoving();
-            if (isMovingOrAnimating) {
-                debugLog(context, "Already animating/moving, waiting");
-                return TaskStatus.RUNNING;
-            }
+        boolean isMovingOrAnimating = Rs2Player.isAnimating() || Rs2Player.isMoving();
+        if (isMovingOrAnimating) {
+            mineGuard.reset();
+            debugLog(context, "Already animating/moving, waiting");
+            return TaskStatus.RUNNING;
+        }
 
-            Rs2TileObjectModel rock = findNearestRock();
-            if (rock == null) {
-                debugLog(context, "No rock found nearby");
-                if (!context.isNear(method.location, 15)) {
-                    debugLog(context, "Not near mining location, switching to WALK_TO_MINE");
-                    phase = Phase.WALK_TO_MINE;
-                }
-                return TaskStatus.RUNNING;
+        Rs2TileObjectModel rock = findNearestRock();
+        if (rock == null) {
+            TaskActionGuard.Result rockResult = rockGuard.evaluate("find rock " + location.name(), false);
+            if (rockResult == TaskActionGuard.Result.EXHAUSTED) {
+                return stop(TaskStatus.REPLAN, TaskStopReason.RESOURCE_NOT_FOUND);
             }
+            if (rockResult == TaskActionGuard.Result.READY) {
+                rockGuard.recordAttempt();
+            }
+            debugLog(context, "No rock found nearby");
+            if (!context.isNear(location.point, 15)) {
+                debugLog(context, "Not near mining location, switching to WALK_TO_MINE");
+                phase = Phase.WALK_TO_MINE;
+            }
+            return TaskStatus.RUNNING;
+        }
 
+        TaskActionGuard.Result mineResult = mineGuard.evaluate("mine " + method.name(), false);
+        if (mineResult == TaskActionGuard.Result.EXHAUSTED) {
+            return stop(TaskStatus.REPLAN, TaskStopReason.ACTION_FAILED);
+        }
+
+        rockGuard.reset();
+        if (mineResult == TaskActionGuard.Result.READY) {
             debugLog(context, "Clicking rock: " + rock.getWorldLocation() + " with action: " + method.action);
             rock.click(method.action);
-            sleep(300, 600);
+            mineGuard.recordAttempt();
         }
 
         return TaskStatus.RUNNING;
@@ -184,7 +217,7 @@ public class MiningTask implements Task {
             return TaskStatus.RUNNING;
         }
 
-        if (bankStatus == TaskStatus.FAILED || bankStatus == TaskStatus.REPLAN) {
+        if (bankStatus.isUnsuccessfulStop()) {
             debugLog(context, "Banking failed/replan: " + bankStatus);
             bankingTask = null;
             return stop(bankStatus, TaskStopReason.BANK_FAILED);
@@ -258,6 +291,6 @@ public class MiningTask implements Task {
 
     @Override
     public String describe() {
-        return "Mining (" + method.name() + ") - " + phase;
+        return "Mining (" + method.name() + " at " + location.name() + ") - " + phase;
     }
 }

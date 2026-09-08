@@ -85,15 +85,57 @@ public class MiningStrategy implements Strategy {
         }
     }
 
+    /** F2P mine areas evaluated independently by the planner. */
+    public enum Location {
+        VARROCK_EAST_TIN(Method.TIN_ORE, new WorldPoint(3285, 3365, 0)),
+        LUMBRIDGE_SWAMP_TIN(Method.TIN_ORE, new WorldPoint(3227, 3148, 0)),
+        RIMMINGTON_TIN(Method.TIN_ORE, new WorldPoint(2970, 3247, 0)),
+        VARROCK_EAST_COPPER(Method.COPPER_ORE, new WorldPoint(3288, 3363, 0)),
+        LUMBRIDGE_SWAMP_COPPER(Method.COPPER_ORE, new WorldPoint(3227, 3148, 0)),
+        RIMMINGTON_COPPER(Method.COPPER_ORE, new WorldPoint(2970, 3247, 0)),
+        VARROCK_EAST_IRON(Method.IRON_ORE, new WorldPoint(3286, 3369, 0)),
+        AL_KHARID_IRON(Method.IRON_ORE, new WorldPoint(3297, 3317, 0)),
+        RIMMINGTON_IRON(Method.IRON_ORE, new WorldPoint(2970, 3247, 0)),
+        FALADOR_NORTH_COAL(Method.COAL_ORE, new WorldPoint(3082, 3423, 0));
+
+        public final Method method;
+        public final WorldPoint point;
+
+        Location(Method method, WorldPoint point) {
+            this.method = method;
+            this.point = point;
+        }
+
+        public static Location defaultFor(Method method) {
+            for (Location location : values()) {
+                if (location.method == method) {
+                    return location;
+                }
+            }
+            throw new IllegalArgumentException("No mining location for " + method);
+        }
+    }
+
     private final Method method;
+    private final Location location;
+    private final int locationVariation;
 
     public MiningStrategy(Method method) {
+        this(method, Location.defaultFor(method));
+    }
+
+    public MiningStrategy(Method method, Location location) {
+        if (location.method != method) {
+            throw new IllegalArgumentException("Mining location does not support " + method);
+        }
         this.method = method;
+        this.location = location;
+        this.locationVariation = Rs2Random.betweenInclusive(0, 2);
     }
 
     @Override
     public String name() {
-        return method.name();
+        return method.name() + "_" + location.name();
     }
 
     @Override
@@ -109,7 +151,7 @@ public class MiningStrategy implements Strategy {
     public List<Requirement> requirements(AccountContext context) {
         Pickaxe pickaxe = findBestPickaxe(context, false);
         if (pickaxe == null) {
-            return Collections.emptyList();
+            return Collections.singletonList(new ItemRequirement(Pickaxe.BRONZE.itemName, 1));
         }
         return Collections.singletonList(new ItemRequirement(pickaxe.itemName, 1));
     }
@@ -137,12 +179,12 @@ public class MiningStrategy implements Strategy {
             }
         }
 
-        return score;
+        return score + locationVariation;
     }
 
     @Override
     public WorldPoint preferredLocation(AccountContext context) {
-        return method.location;
+        return location.point;
     }
 
     @Override
@@ -190,7 +232,7 @@ public class MiningStrategy implements Strategy {
 
     @Override
     public Task createTask(AccountContext context) {
-        return new MiningTask(method);
+        return new MiningTask(method, location);
     }
 
     @Override

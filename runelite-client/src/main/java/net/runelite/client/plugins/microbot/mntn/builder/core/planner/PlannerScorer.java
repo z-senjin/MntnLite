@@ -73,8 +73,11 @@ public class PlannerScorer {
                 return 0;
             case MISSING_COINS:
                 return 90;
+            case MANUAL_SKIP:
+                return 80;
             case SHOP_OUT_OF_STOCK:
             case SHOP_UNAVAILABLE:
+            case SHOP_ZERO_VALUE:
             case GE_OFFER_FAILED:
                 return 75;
             case MISSING_BANK_ITEM:
@@ -92,6 +95,7 @@ public class PlannerScorer {
             case BANK_FAILED:
             case GE_COLLECT_FAILED:
             case TASK_REQUESTED_REPLAN:
+            case TASK_CREATION_FAILED:
             case PRODUCTION_WIDGET_FAILED:
             case ACTION_FAILED:
             case QUEST_STEP_FAILED:

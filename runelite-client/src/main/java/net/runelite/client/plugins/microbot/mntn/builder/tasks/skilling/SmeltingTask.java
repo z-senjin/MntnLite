@@ -6,6 +6,7 @@ import net.runelite.client.plugins.microbot.api.tileobject.models.Rs2TileObjectM
 import net.runelite.client.plugins.microbot.mntn.builder.activities.smithing.SmeltingStrategy;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
+import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskActionGuard;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStatus;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStopReason;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.banking.BankingTask;
@@ -15,9 +16,6 @@ import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
 import net.runelite.client.plugins.microbot.util.widget.Rs2Widget;
 
 import java.awt.event.KeyEvent;
-
-import static net.runelite.client.plugins.microbot.util.Global.sleep;
-import static net.runelite.client.plugins.microbot.util.Global.sleepUntilTrue;
 
 public class SmeltingTask implements Task {
 
@@ -31,6 +29,11 @@ public class SmeltingTask implements Task {
     private Phase phase = Phase.WALK_TO_FURNACE;
     private BankingTask bankingTask;
     private TaskStopReason lastStopReason = TaskStopReason.NONE;
+    private final TaskActionGuard walkGuard = new TaskActionGuard(10, 30_000, 800);
+    private final TaskActionGuard furnaceGuard = new TaskActionGuard(8, 12_000, 800);
+    private final TaskActionGuard widgetGuard = new TaskActionGuard(4, 10_000, 900);
+    private final TaskActionGuard smeltGuard = new TaskActionGuard(4, 12_000, 900);
+    private int ingredientsBeforeSmelt;
 
     public SmeltingTask(SmeltingStrategy.Bar bar) {
         this.bar = bar;
@@ -69,18 +72,27 @@ public class SmeltingTask implements Task {
 
         if (!hasAllIngredients(context)) {
             debugLog(context, "Missing ingredients, switching to BANKING");
+            resetActionGuards();
             phase = Phase.BANKING;
             return TaskStatus.RUNNING;
         }
 
         if (context.isNear(bar.furnaceLocation, 10)) {
             debugLog(context, "Near furnace, switching to SMELTING");
+            walkGuard.reset();
             phase = Phase.SMELTING;
             return TaskStatus.RUNNING;
         }
 
-        debugLog(context, "Walking to furnace: " + bar.furnaceLocation);
-        Rs2Walker.walkTo(bar.furnaceLocation);
+        TaskActionGuard.Result walkResult = walkGuard.evaluate("walk to furnace " + bar.name(), false);
+        if (walkResult == TaskActionGuard.Result.EXHAUSTED) {
+            return stop(TaskStatus.REPLAN, TaskStopReason.TRAVEL_FAILED);
+        }
+        if (walkResult == TaskActionGuard.Result.READY) {
+            debugLog(context, "Walking to furnace: " + bar.furnaceLocation);
+            Rs2Walker.walkTo(bar.furnaceLocation);
+            walkGuard.recordAttempt();
+        }
         return TaskStatus.RUNNING;
     }
 
@@ -89,6 +101,7 @@ public class SmeltingTask implements Task {
 
         if (!hasAllIngredients(context)) {
             debugLog(context, "Missing ingredients, switching to BANKING");
+            resetActionGuards();
             phase = Phase.BANKING;
             return TaskStatus.RUNNING;
         }
@@ -104,38 +117,43 @@ public class SmeltingTask implements Task {
                 .nearest();
 
         if (furnace == null) {
-            debugLog(context, "Furnace not found, switching to WALK_TO_FURNACE");
-            phase = Phase.WALK_TO_FURNACE;
+            TaskActionGuard.Result findResult = furnaceGuard.evaluate("find furnace " + bar.name(), false);
+            if (findResult == TaskActionGuard.Result.EXHAUSTED) {
+                return stop(TaskStatus.REPLAN, TaskStopReason.RESOURCE_NOT_FOUND);
+            }
+            if (findResult == TaskActionGuard.Result.READY) {
+                furnaceGuard.recordAttempt();
+            }
+            debugLog(context, "Furnace not found; waiting for a nearby furnace");
             return TaskStatus.RUNNING;
         }
+        furnaceGuard.reset();
 
-        if (Microbot.getClient().getLocalPlayer() != null) {
-
-            boolean isMovingOrAnimating = Rs2Player.isAnimating() || Rs2Player.isMoving();
-
-            sleep(300, 1000);
-
-            boolean isMovingOrAnimatingAgain = Rs2Player.isAnimating() || Rs2Player.isMoving();
-
-
-            if (isMovingOrAnimating || isMovingOrAnimatingAgain) {
-                debugLog(context, "Already animating/moving after sleep, waiting");
-                return TaskStatus.RUNNING;
-            } else {
-                debugLog(context, "Clicking furnace to smelt");
-                furnace.click("Smelt");
+        if (!Rs2Widget.isProductionWidgetOpen()) {
+            TaskActionGuard.Result openResult = widgetGuard.evaluate("open furnace " + bar.name(), false);
+            if (openResult == TaskActionGuard.Result.EXHAUSTED) {
+                return stop(TaskStatus.REPLAN, TaskStopReason.PRODUCTION_WIDGET_FAILED);
             }
+            if (openResult == TaskActionGuard.Result.READY) {
+                debugLog(context, "Clicking furnace to open smelting widget");
+                furnace.click("Smelt");
+                widgetGuard.recordAttempt();
+            }
+            return TaskStatus.RUNNING;
         }
+        widgetGuard.reset();
 
-
-        boolean open = sleepUntilTrue(Rs2Widget::isProductionWidgetOpen, 200, 6000);
-        if (open) {
+        boolean smelted = ingredientsBeforeSmelt > 0 && ingredientCount(context) < ingredientsBeforeSmelt;
+        TaskActionGuard.Result smeltResult = smeltGuard.evaluate("smelt " + bar.name(), smelted);
+        if (smeltResult == TaskActionGuard.Result.EXHAUSTED) {
+            return stop(TaskStatus.REPLAN, TaskStopReason.PRODUCTION_WIDGET_FAILED);
+        }
+        if (smeltResult == TaskActionGuard.Result.READY) {
+            ingredientsBeforeSmelt = ingredientCount(context);
             debugLog(context, "Production widget open, pressing SPACE");
-            sleep(300, 600);
             Rs2Keyboard.keyPress(KeyEvent.VK_SPACE);
-            sleep(600, 1000);
+            smeltGuard.recordAttempt();
         }
-
         return TaskStatus.RUNNING;
     }
 
@@ -158,6 +176,7 @@ public class SmeltingTask implements Task {
         if (bankStatus == TaskStatus.COMPLETE) {
             debugLog(context, "Banking complete");
             bankingTask = null;
+            resetActionGuards();
 
             if (!hasAllIngredients(context)) {
                 // Not enough ores left in bank to continue smelting this bar
@@ -170,7 +189,7 @@ public class SmeltingTask implements Task {
             return TaskStatus.RUNNING;
         }
 
-        if (bankStatus == TaskStatus.FAILED || bankStatus == TaskStatus.REPLAN) {
+        if (bankStatus.isUnsuccessfulStop()) {
             debugLog(context, "Banking failed/replan: " + bankStatus);
             bankingTask = null;
             return stop(bankStatus, TaskStopReason.BANK_FAILED);
@@ -186,6 +205,22 @@ public class SmeltingTask implements Task {
             }
         }
         return true;
+    }
+
+    private int ingredientCount(AccountContext context) {
+        int count = 0;
+        for (SmeltingStrategy.OreRequirement requirement : bar.ingredients) {
+            count += context.inventory().getCount(requirement.itemName);
+        }
+        return count;
+    }
+
+    private void resetActionGuards() {
+        walkGuard.reset();
+        furnaceGuard.reset();
+        widgetGuard.reset();
+        smeltGuard.reset();
+        ingredientsBeforeSmelt = 0;
     }
 
     @Override

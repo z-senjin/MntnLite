@@ -64,21 +64,21 @@ public class WoodcuttingStrategy implements Strategy {
                 new int[]{1276, 1278},
                 "Chop down",
                 "Logs",
-                new WorldPoint(3181, 3259, 0) // TODO verify - placeholder
+                new WorldPoint(3225, 3216, 0)
         ),
         OAK_TREE(
                 15, 37.5,
                 new int[]{10820}, // TODO verify - placeholders
                 "Chop down",
                 "Oak logs",
-                new WorldPoint(3157, 3259, 0) // TODO verify - placeholder
+                new WorldPoint(3181, 3421, 0)
         ),
         WILLOW_TREE(
                 30, 67.5,
                 new int[]{10831, 10833, 10819}, // TODO verify - placeholders
                 "Chop down",
                 "Willow logs",
-                new WorldPoint(3163, 3266, 0) // TODO verify - placeholder
+                new WorldPoint(3086, 3228, 0)
         );
 
         public final int requiredLevel;
@@ -99,15 +99,56 @@ public class WoodcuttingStrategy implements Strategy {
         }
     }
 
+    /** F2P tree areas evaluated independently by the planner. */
+    public enum Location {
+        LUMBRIDGE_CASTLE_NORMAL(Method.NORMAL_TREE, new WorldPoint(3225, 3216, 0)),
+        VARROCK_GRAND_EXCHANGE_NORMAL(Method.NORMAL_TREE, new WorldPoint(3160, 3383, 0)),
+        DRAYNOR_MANOR_NORMAL(Method.NORMAL_TREE, new WorldPoint(3100, 3355, 0)),
+        VARROCK_WEST_BANK_OAK(Method.OAK_TREE, new WorldPoint(3181, 3421, 0)),
+        DRAYNOR_OAK(Method.OAK_TREE, new WorldPoint(3093, 3245, 0)),
+        LUMBRIDGE_GENERAL_STORE_OAK(Method.OAK_TREE, new WorldPoint(3212, 3244, 0)),
+        DRAYNOR_WILLOW(Method.WILLOW_TREE, new WorldPoint(3086, 3228, 0)),
+        EDGEVILLE_WILLOW(Method.WILLOW_TREE, new WorldPoint(3094, 3491, 0)),
+        PORT_SARIM_WILLOW(Method.WILLOW_TREE, new WorldPoint(3048, 3235, 0));
+
+        public final Method method;
+        public final WorldPoint point;
+
+        Location(Method method, WorldPoint point) {
+            this.method = method;
+            this.point = point;
+        }
+
+        public static Location defaultFor(Method method) {
+            for (Location location : values()) {
+                if (location.method == method) {
+                    return location;
+                }
+            }
+            throw new IllegalArgumentException("No woodcutting location for " + method);
+        }
+    }
+
     private final Method method;
+    private final Location location;
+    private final int locationVariation;
 
     public WoodcuttingStrategy(Method method) {
+        this(method, Location.defaultFor(method));
+    }
+
+    public WoodcuttingStrategy(Method method, Location location) {
+        if (location.method != method) {
+            throw new IllegalArgumentException("Woodcutting location does not support " + method);
+        }
         this.method = method;
+        this.location = location;
+        this.locationVariation = Rs2Random.betweenInclusive(0, 2);
     }
 
     @Override
     public String name() {
-        return method.name();
+        return method.name() + "_" + location.name();
     }
 
     @Override
@@ -124,7 +165,7 @@ public class WoodcuttingStrategy implements Strategy {
     public List<Requirement> requirements(AccountContext context) {
         String axe = findBestAxe(context, false);
         if (axe == null) {
-            return Collections.emptyList();
+            return Collections.singletonList(new ItemRequirement(Axe.BRONZE.itemName, 1));
         }
         return Collections.singletonList(new ItemRequirement(axe, 1));
     }
@@ -155,12 +196,12 @@ public class WoodcuttingStrategy implements Strategy {
             }
         }
 
-        return score;
+        return score + locationVariation;
     }
 
     @Override
     public WorldPoint preferredLocation(AccountContext context) {
-        return method.location;
+        return location.point;
     }
 
     @Override
@@ -206,7 +247,7 @@ public class WoodcuttingStrategy implements Strategy {
 
     @Override
     public Task createTask(AccountContext context) {
-        return new WoodcuttingTask(method);
+        return new WoodcuttingTask(method, location);
     }
 
     @Override

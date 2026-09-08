@@ -9,6 +9,7 @@ import net.runelite.client.plugins.microbot.api.tileobject.models.Rs2TileObjectM
 import net.runelite.client.plugins.microbot.mntn.builder.activities.mining.MiningStrategy;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
+import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskActionGuard;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStatus;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStopReason;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.banking.BankingTask;
@@ -19,8 +20,6 @@ import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
 
 import java.util.ArrayList;
 import java.util.List;
-
-import static net.runelite.client.plugins.microbot.util.Global.sleep;
 
 /**
  * Doric's Quest task.
@@ -75,6 +74,11 @@ public class DoricQuestTask implements Task {
     private boolean hasBanked = false;
     private BankingTask bankingTask;
     private TaskStopReason lastStopReason = TaskStopReason.NONE;
+    private final TaskActionGuard walkGuard = new TaskActionGuard(10, 30_000, 800);
+    private final TaskActionGuard resourceGuard = new TaskActionGuard(8, 12_000, 800);
+    private final TaskActionGuard mineGuard = new TaskActionGuard(4, 12_000, 900);
+    private final TaskActionGuard talkGuard = new TaskActionGuard(4, 12_000, 900);
+    private final TaskActionGuard dialogueGuard = new TaskActionGuard(12, 30_000, 700);
 
     private void debugLog(AccountContext context, String message) {
         if (context.isDebugLogging()) {
@@ -315,12 +319,21 @@ public class DoricQuestTask implements Task {
         debugLog(context, "mineOre: nearMine=" + context.isNear(mineLocation, 12) + ", animating=" + Rs2Player.isAnimating() + ", moving=" + Rs2Player.isMoving());
 
         if (!context.isNear(mineLocation, 12)) {
-            debugLog(context, "Walking to mine: " + mineLocation);
-            Rs2Walker.walkTo(mineLocation);
+            TaskActionGuard.Result walkResult = walkGuard.evaluate("walk to mine " + mineLocation, false);
+            if (walkResult == TaskActionGuard.Result.EXHAUSTED) {
+                return stop(TaskStatus.REPLAN, TaskStopReason.TRAVEL_FAILED);
+            }
+            if (walkResult == TaskActionGuard.Result.READY) {
+                debugLog(context, "Walking to mine: " + mineLocation);
+                Rs2Walker.walkTo(mineLocation);
+                walkGuard.recordAttempt();
+            }
             return TaskStatus.RUNNING;
         }
+        walkGuard.reset();
 
         if (Rs2Player.isAnimating() || Rs2Player.isMoving()) {
+            mineGuard.reset();
             debugLog(context, "Already animating/moving, waiting");
             return TaskStatus.RUNNING;
         }
@@ -331,11 +344,25 @@ public class DoricQuestTask implements Task {
                 .nearest();
 
         if (rock != null) {
-            debugLog(context, "Clicking rock: " + rock.getWorldLocation());
-            rock.click("Mine");
-            sleep(300, 600);
+            resourceGuard.reset();
+            TaskActionGuard.Result mineResult = mineGuard.evaluate("mine quest ore " + mineLocation, false);
+            if (mineResult == TaskActionGuard.Result.EXHAUSTED) {
+                return stop(TaskStatus.REPLAN, TaskStopReason.ACTION_FAILED);
+            }
+            if (mineResult == TaskActionGuard.Result.READY) {
+                debugLog(context, "Clicking rock: " + rock.getWorldLocation());
+                rock.click("Mine");
+                mineGuard.recordAttempt();
+            }
         } else {
-            debugLog(context, "No rock found nearby");
+            TaskActionGuard.Result resourceResult = resourceGuard.evaluate("find quest ore " + mineLocation, false);
+            if (resourceResult == TaskActionGuard.Result.EXHAUSTED) {
+                return stop(TaskStatus.REPLAN, TaskStopReason.RESOURCE_NOT_FOUND);
+            }
+            if (resourceResult == TaskActionGuard.Result.READY) {
+                resourceGuard.recordAttempt();
+            }
+            debugLog(context, "No rock found nearby; waiting for respawn");
         }
 
         return TaskStatus.RUNNING;
@@ -345,12 +372,27 @@ public class DoricQuestTask implements Task {
         debugLog(context, "handleTalkToDoric: nearDoric=" + context.isNear(DORIC_LOCATION, 8) + ", inDialogue=" + Rs2Dialogue.isInDialogue());
 
         if (!context.isNear(DORIC_LOCATION, 8)) {
-            debugLog(context, "Walking to Doric: " + DORIC_LOCATION);
-            Rs2Walker.walkTo(DORIC_LOCATION);
+            TaskActionGuard.Result walkResult = walkGuard.evaluate("walk to Doric", false);
+            if (walkResult == TaskActionGuard.Result.EXHAUSTED) {
+                return stop(TaskStatus.REPLAN, TaskStopReason.TRAVEL_FAILED);
+            }
+            if (walkResult == TaskActionGuard.Result.READY) {
+                debugLog(context, "Walking to Doric: " + DORIC_LOCATION);
+                Rs2Walker.walkTo(DORIC_LOCATION);
+                walkGuard.recordAttempt();
+            }
             return TaskStatus.RUNNING;
         }
+        walkGuard.reset();
 
         if (Rs2Dialogue.isInDialogue()) {
+            TaskActionGuard.Result dialogueResult = dialogueGuard.evaluate(
+                    "advance Doric dialogue",
+                    context.getQuestState(Quest.DORICS_QUEST) == QuestState.FINISHED
+            );
+            if (dialogueResult == TaskActionGuard.Result.EXHAUSTED) {
+                return stop(TaskStatus.REPLAN, TaskStopReason.QUEST_STEP_FAILED);
+            }
             if (Rs2Dialogue.hasSelectAnOption()) {
                 debugLog(context, "Selecting dialogue option");
                 Rs2Dialogue.clickOption(
@@ -363,8 +405,9 @@ public class DoricQuestTask implements Task {
                 debugLog(context, "Clicking continue");
                 Rs2Dialogue.clickContinue();
             }
-            sleep(400, 800);
-
+            if (dialogueResult == TaskActionGuard.Result.READY) {
+                dialogueGuard.recordAttempt();
+            }
             if (context.getQuestState(Quest.DORICS_QUEST) == QuestState.FINISHED) {
                 debugLog(context, "Quest finished!");
                 return TaskStatus.COMPLETE;
@@ -383,10 +426,23 @@ public class DoricQuestTask implements Task {
                 .nearest();
 
         if (doric != null) {
-            debugLog(context, "Talking to Doric");
-            doric.click("Talk-to");
-            sleep(600, 1200);
+            TaskActionGuard.Result talkResult = talkGuard.evaluate("talk to Doric", Rs2Dialogue.isInDialogue());
+            if (talkResult == TaskActionGuard.Result.EXHAUSTED) {
+                return stop(TaskStatus.REPLAN, TaskStopReason.QUEST_STEP_FAILED);
+            }
+            if (talkResult == TaskActionGuard.Result.READY) {
+                debugLog(context, "Talking to Doric");
+                doric.click("Talk-to");
+                talkGuard.recordAttempt();
+            }
         } else {
+            TaskActionGuard.Result findResult = resourceGuard.evaluate("find Doric", false);
+            if (findResult == TaskActionGuard.Result.EXHAUSTED) {
+                return stop(TaskStatus.REPLAN, TaskStopReason.QUEST_STEP_FAILED);
+            }
+            if (findResult == TaskActionGuard.Result.READY) {
+                resourceGuard.recordAttempt();
+            }
             debugLog(context, "Doric not found nearby");
         }
 
@@ -425,6 +481,7 @@ public class DoricQuestTask implements Task {
         if (context.getQuestState(Quest.DORICS_QUEST) == QuestState.FINISHED) {
             return TaskStopReason.REQUIREMENT_SATISFIED;
         }
+        dialogueGuard.reset();
         return TaskStopReason.TASK_REQUESTED_REPLAN;
     }
 
