@@ -31,6 +31,7 @@ import net.runelite.client.plugins.microbot.mntn.builder.core.planner.AccountMem
 import net.runelite.client.plugins.microbot.mntn.builder.core.planner.AccountPlanner;
 import net.runelite.client.plugins.microbot.mntn.builder.core.planner.Plan;
 import net.runelite.client.plugins.microbot.mntn.builder.core.planner.SessionFlavor;
+import net.runelite.client.plugins.microbot.mntn.builder.core.planner.StartupPlanCache;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskActionGuard;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskManager;
@@ -409,6 +410,9 @@ public class MntnBuilderScript extends Script {
                     debugLog("Running first normal replan after startup banking");
                     postStartupReplanPending = false;
                     showPlanningState("Selecting first task after bank cache");
+                    if (applyCachedStartupPlan()) {
+                        return;
+                    }
                     replan();
                     return;
                 }
@@ -947,6 +951,9 @@ public class MntnBuilderScript extends Script {
         debugTaskStartTime = java.time.Instant.now();
         debugScore = plan.score();
         memory.recordSelected(plan);
+        if (config != null && !config.testOverride().isActive()) {
+            StartupPlanCache.remember(plannerConfigFingerprint(config), plan);
+        }
 
         debugLog("Applied new plan: goal=" + debugGoal + ", requirement=" + debugRequirement
                 + ", activity=" + debugActivity + ", strategy=" + debugStrategy
@@ -956,6 +963,36 @@ public class MntnBuilderScript extends Script {
         System.out.println(selectedMessage);
         Microbot.log(selectedMessage);
         return true;
+    }
+
+    private boolean applyCachedStartupPlan() {
+        if (config == null || config.testOverride().isActive()) {
+            return false;
+        }
+
+        context.beginPlanningSnapshot();
+        try {
+            Plan cached = StartupPlanCache.takeIfUsable(plannerConfigFingerprint(config), context);
+            if (cached == null) {
+                return false;
+            }
+            Microbot.log("[MntnBuilder] Reusing validated startup plan: " + cached.strategy().name());
+            return applyPlan(cached);
+        } finally {
+            context.endPlanningSnapshot();
+        }
+    }
+
+    private String plannerConfigFingerprint(MntnBuilderConfig cfg) {
+        return cfg.fishingTarget() + ":" + cfg.cookingTarget() + ":" + cfg.woodcuttingTarget() + ":"
+                + cfg.miningTarget() + ":" + cfg.smithingTarget() + ":" + cfg.attackTarget() + ":"
+                + cfg.strengthTarget() + ":" + cfg.defenceTarget() + ":" + cfg.prayerTarget() + ":"
+                + cfg.fishingWeight() + ":" + cfg.cookingWeight() + ":" + cfg.woodcuttingWeight() + ":"
+                + cfg.miningWeight() + ":" + cfg.smithingWeight() + ":" + cfg.attackWeight() + ":"
+                + cfg.strengthWeight() + ":" + cfg.defenceWeight() + ":" + cfg.prayerWeight() + ":"
+                + cfg.moneyTarget() + ":" + cfg.enableCooksAssistant() + ":" + cfg.enableDoricsQuest() + ":"
+                + cfg.allowedContent() + ":" + cfg.sessionFlavor() + ":" + cfg.allowGrandExchange() + ":"
+                + cfg.allowShops() + ":" + cfg.allowGroundPickups();
     }
 
     private boolean recoverFromTaskCreationFailure(Plan plan, String detail) {

@@ -383,3 +383,23 @@ Ideas to adopt:
 - [x] Quest metadata unit test covers supported quest requirements and rewards.
 - [ ] Runtime tests validate combat banking, supply acquisition, target selection, and task recovery.
 - [ ] Retest startup bank warming on a fresh F2P account after the banking recovery fix.
+
+## Next: Bounded Startup Planning
+
+### Runtime Evidence (2026-09-08)
+
+- [x] Observed a live startup for three minutes through the Agent Server. The account was logged in and unpaused, startup banking had completed, and the builder remained at `Planning / Selecting first task after bank cache` with no task or plan selected.
+- [x] Confirmed the preceding planner pass took 408,325 ms. The client log contained repeated GE Tracker connection timeouts during the pass.
+- [x] Identified synchronous live price fetching in `MoneyMakingStrategy` and zero-price `SupplyStrategy` routes. `Rs2GrandExchange.getOfferPrice` waits on an HTTP request with a 10-second timeout and is currently called while the planner scores candidates.
+- [x] Identified repeated synchronous client-thread reads from strategy/goal evaluation as a secondary startup cost. Each read may wait up to 10 seconds when the client thread is unavailable.
+
+### Implementation Plan
+
+- [x] Make every planner `canExecute`, `requirements`, `score`, and estimate calculation local and bounded. Builder planning no longer calls the GE Tracker; remaining game reads use one client-thread snapshot per planner operation.
+- [x] Replace live GE values in planner-time money and supply scoring with conservative Builder catalog values. The same bounded estimates now seed Builder GE offers, removing GE Tracker HTTP waits from tasks as well.
+- [x] Add a small builder-owned, in-memory planning snapshot captured once per pass: relevant skill levels, combat level, and location. Reuse it for that pass instead of repeatedly crossing to the client thread. It remains F2P-focused; the old full quest snapshot is still avoided on F2P passes.
+- [x] Add a one-entry last-good-plan cache that survives plugin disable/enable within the same client session. It only reuses a candidate when the planner config fingerprint, goal, requirement, and strategy checks remain valid.
+- [x] Add aggregate timing diagnostics for snapshot capture and candidate evaluation, emitted only when a stage exceeds 250 ms. Per-candidate debug logs remain disabled.
+- [x] Add unit coverage for local price estimates and startup-plan cache reuse/rejection. Focused Builder planner, script, guard, cache, and price tests pass with `:client:compileJava`.
+- [x] Replace smelting's implicit `SPACE` action with an explicit click on the selected bar's production widget entry. The existing action guard retries and replans after bounded failed confirmations.
+- [ ] Re-run the live Agent Server startup trace. Acceptance target: a visible task/goal selection within two script ticks after bank warming, including when the GE Tracker is unreachable.

@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 /**
  * Straight implementation of the doc's planner outline (section 14). No caching, no
@@ -72,6 +73,10 @@ public class AccountPlanner {
     }
 
     public List<Plan> planAll(AccountContext context) {
+        return withPlanningSnapshot(context, "candidate evaluation", () -> planAllInSnapshot(context));
+    }
+
+    private List<Plan> planAllInSnapshot(AccountContext context) {
         List<Plan> candidates = new ArrayList<>();
         AccountSnapshot snapshot = contentSnapshot(context);
         int incompleteGoals = 0;
@@ -144,6 +149,11 @@ public class AccountPlanner {
      * original objective between individual supply steps.
      */
     public Plan continuePlan(Plan completedPlan, AccountContext context) {
+        return withPlanningSnapshot(context, "objective continuation",
+                () -> continuePlanInSnapshot(completedPlan, context));
+    }
+
+    private Plan continuePlanInSnapshot(Plan completedPlan, AccountContext context) {
         if (completedPlan == null || !completedPlan.hasPendingObjective()
                 || completedPlan.goal().isComplete(context)) {
             return null;
@@ -164,6 +174,10 @@ public class AccountPlanner {
      * bank cache or a supply route is temporarily unavailable.
      */
     public Plan planCombatBootstrap(AccountContext context) {
+        return withPlanningSnapshot(context, "combat bootstrap", () -> planCombatBootstrapInSnapshot(context));
+    }
+
+    private Plan planCombatBootstrapInSnapshot(AccountContext context) {
         for (Goal goal : goals) {
             if (goal.isComplete(context)) {
                 continue;
@@ -213,6 +227,10 @@ public class AccountPlanner {
     }
 
     public String diagnoseNoPlan(AccountContext context) {
+        return withPlanningSnapshot(context, "no-plan diagnosis", () -> diagnoseNoPlanInSnapshot(context));
+    }
+
+    private String diagnoseNoPlanInSnapshot(AccountContext context) {
         AccountSnapshot snapshot = contentSnapshot(context);
         int incompleteGoals = 0;
         String firstBlockedRequirement = null;
@@ -255,6 +273,26 @@ public class AccountPlanner {
      */
     private AccountSnapshot contentSnapshot(AccountContext context) {
         return allowedContent == AllowedContent.ALL ? context.snapshot() : null;
+    }
+
+    private <T> T withPlanningSnapshot(AccountContext context, String operation, Supplier<T> action) {
+        long snapshotStartedAt = System.nanoTime();
+        context.beginPlanningSnapshot();
+        long evaluationStartedAt = System.nanoTime();
+        try {
+            return action.get();
+        } finally {
+            logSlowStage("snapshot capture", evaluationStartedAt - snapshotStartedAt);
+            logSlowStage(operation, System.nanoTime() - evaluationStartedAt);
+            context.endPlanningSnapshot();
+        }
+    }
+
+    private void logSlowStage(String stage, long elapsedNanos) {
+        long elapsedMs = elapsedNanos / 1_000_000L;
+        if (elapsedMs >= 250L) {
+            Microbot.log("[MntnBuilder] Planner " + stage + " took " + elapsedMs + "ms");
+        }
     }
 
     private Plan planObjective(

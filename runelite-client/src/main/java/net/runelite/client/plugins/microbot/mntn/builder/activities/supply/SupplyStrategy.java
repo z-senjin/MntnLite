@@ -2,6 +2,7 @@ package net.runelite.client.plugins.microbot.mntn.builder.activities.supply;
 
 import net.runelite.client.plugins.microbot.mntn.builder.activities.Strategy;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
+import net.runelite.client.plugins.microbot.mntn.builder.core.BuilderItemPrices;
 import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.EquipmentRequirement;
 import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.ItemRequirement;
 import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.MoneyRequirement;
@@ -9,8 +10,6 @@ import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.Requi
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.supply.SupplyTask;
 import net.runelite.api.coords.WorldPoint;
-import net.runelite.client.plugins.microbot.util.grandexchange.Rs2GrandExchange;
-import net.runelite.client.plugins.microbot.util.item.Rs2ItemManager;
 import net.runelite.client.plugins.microbot.util.math.Rs2Random;
 
 import java.time.Duration;
@@ -166,26 +165,9 @@ public class SupplyStrategy implements Strategy {
     }
 
     private int estimatedUnitPrice() {
-        if (route.getEstimatedUnitPrice() > 0) {
-            return route.getEstimatedUnitPrice();
-        }
-
-        try {
-            int itemId = Rs2ItemManager.getItemIdByName(route.getItemName(), false);
-            if (itemId <= 0) {
-                return 100;
-            }
-
-            int offerPrice = Rs2GrandExchange.getOfferPrice(itemId);
-            if (offerPrice <= 0) {
-                return 100;
-            }
-
-            return (int) Math.ceil(offerPrice * route.getPriceMultiplier());
-        } catch (RuntimeException ignored) {
-            // The route catalog's fallback keeps early planning independent of live caches.
-            return 100;
-        }
+        int fallback = route.getEstimatedUnitPrice() > 0 ? route.getEstimatedUnitPrice() : 100;
+        return (int) Math.ceil(BuilderItemPrices.estimate(route.getItemName(), fallback)
+                * route.getPriceMultiplier());
     }
 
     private boolean hasEnoughCoins(AccountContext context, int coinsNeeded) {

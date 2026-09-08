@@ -15,8 +15,6 @@ import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.Money
 import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.Requirement;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.moneymaking.MoneyMakingTask;
-import net.runelite.client.plugins.microbot.util.grandexchange.Rs2GrandExchange;
-import net.runelite.client.plugins.microbot.util.item.Rs2ItemManager;
 import net.runelite.client.plugins.microbot.util.math.Rs2Random;
 
 import java.time.Duration;
@@ -276,17 +274,7 @@ public class MoneyMakingStrategy implements Strategy {
         if (saleRoute == SaleRoute.GENERAL_STORE) {
             return method.minimumGeneralStoreUnitPrice;
         }
-        try {
-            int itemId = Rs2ItemManager.getItemIdByName(method.itemName, false);
-            if (itemId > 0) {
-                int offerPrice = Rs2GrandExchange.getOfferPrice(itemId);
-                if (offerPrice > 0) {
-                    return offerPrice;
-                }
-            }
-        } catch (RuntimeException ignored) {
-            // Planning can run before the live item and bank caches are available.
-        }
+        // Candidate scoring must not wait on a market HTTP request.
         return method.fallbackUnitPrice;
     }
 

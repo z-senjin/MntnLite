@@ -10,6 +10,9 @@ import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.util.player.Rs2Player;
 import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
 
+import java.util.EnumMap;
+import java.util.Map;
+
 /**
  * Small read-through wrapper around live Microbot/RuneLite state.
  *
@@ -23,6 +26,7 @@ public class AccountContext {
     private final BankView bank = new BankView();
     private final EquipmentView equipment = new EquipmentView();
     private boolean debugLogging = false;
+    private PlanningSnapshot planningSnapshot;
 
     public InventoryView inventory() {
         return inventory;
@@ -68,6 +72,9 @@ public class AccountContext {
     }
 
     public boolean isMembersWorld() {
+        if (planningSnapshot != null) {
+            return planningSnapshot.membersWorld;
+        }
         if (!isLoggedIn() || Microbot.getClient() == null) {
             return false;
         }
@@ -85,6 +92,9 @@ public class AccountContext {
     }
 
     public int getCombatLevel() {
+        if (planningSnapshot != null) {
+            return planningSnapshot.combatLevel;
+        }
         if (!isLoggedIn() || Microbot.getClient() == null || Microbot.getClientThread() == null) {
             return 3;
         }
@@ -96,6 +106,9 @@ public class AccountContext {
     }
 
     public int getPlane() {
+        if (planningSnapshot != null) {
+            return planningSnapshot.plane;
+        }
         if (!isLoggedIn() || Microbot.getClient() == null || Microbot.getClientThread() == null) {
             return 0;
         }
@@ -110,6 +123,9 @@ public class AccountContext {
     }
 
     public WorldPoint getLocation() {
+        if (planningSnapshot != null) {
+            return planningSnapshot.location;
+        }
         return Rs2Player.getWorldLocation();
     }
 
@@ -123,6 +139,10 @@ public class AccountContext {
     }
 
     private int getSkillLevel(Skill skill, boolean boosted) {
+        if (planningSnapshot != null) {
+            return (boosted ? planningSnapshot.boostedLevels : planningSnapshot.realLevels)
+                    .getOrDefault(skill, 0);
+        }
         if (!isLoggedIn() || skill == null || Microbot.getClient() == null || Microbot.getClientThread() == null) {
             return 0;
         }
@@ -134,5 +154,56 @@ public class AccountContext {
                     ? Microbot.getClient().getBoostedSkillLevel(skill)
                     : Microbot.getClient().getRealSkillLevel(skill);
         }).orElse(0);
+    }
+
+    /** Captures repeated planner reads once; tasks continue to use live state. */
+    public void beginPlanningSnapshot() {
+        if (planningSnapshot != null || !isLoggedIn() || Microbot.getClient() == null
+                || Microbot.getClientThread() == null) {
+            return;
+        }
+
+        planningSnapshot = Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            Map<Skill, Integer> realLevels = new EnumMap<>(Skill.class);
+            Map<Skill, Integer> boostedLevels = new EnumMap<>(Skill.class);
+            for (Skill skill : Skill.values()) {
+                realLevels.put(skill, Microbot.getClient().getRealSkillLevel(skill));
+                boostedLevels.put(skill, Microbot.getClient().getBoostedSkillLevel(skill));
+            }
+
+            return new PlanningSnapshot(
+                    Microbot.getClient().getWorldType().contains(WorldType.MEMBERS),
+                    Microbot.getClient().getLocalPlayer() != null
+                            ? Microbot.getClient().getLocalPlayer().getCombatLevel() : 3,
+                    Microbot.getClient().getPlane(),
+                    Microbot.getClient().getLocalPlayer() != null
+                            ? Microbot.getClient().getLocalPlayer().getWorldLocation() : null,
+                    realLevels,
+                    boostedLevels
+            );
+        }).orElse(null);
+    }
+
+    public void endPlanningSnapshot() {
+        planningSnapshot = null;
+    }
+
+    private static final class PlanningSnapshot {
+        private final boolean membersWorld;
+        private final int combatLevel;
+        private final int plane;
+        private final WorldPoint location;
+        private final Map<Skill, Integer> realLevels;
+        private final Map<Skill, Integer> boostedLevels;
+
+        private PlanningSnapshot(boolean membersWorld, int combatLevel, int plane, WorldPoint location,
+                                 Map<Skill, Integer> realLevels, Map<Skill, Integer> boostedLevels) {
+            this.membersWorld = membersWorld;
+            this.combatLevel = combatLevel;
+            this.plane = plane;
+            this.location = location;
+            this.realLevels = realLevels;
+            this.boostedLevels = boostedLevels;
+        }
     }
 }

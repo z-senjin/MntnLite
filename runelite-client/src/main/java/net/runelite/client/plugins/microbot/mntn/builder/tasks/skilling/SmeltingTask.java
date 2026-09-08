@@ -10,12 +10,9 @@ import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskActionGuard;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStatus;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStopReason;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.banking.BankingTask;
-import net.runelite.client.plugins.microbot.util.keyboard.Rs2Keyboard;
 import net.runelite.client.plugins.microbot.util.player.Rs2Player;
 import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
 import net.runelite.client.plugins.microbot.util.widget.Rs2Widget;
-
-import java.awt.event.KeyEvent;
 
 public class SmeltingTask implements Task {
 
@@ -150,8 +147,9 @@ public class SmeltingTask implements Task {
         }
         if (smeltResult == TaskActionGuard.Result.READY) {
             ingredientsBeforeSmelt = ingredientCount(context);
-            debugLog(context, "Production widget open, pressing SPACE");
-            Rs2Keyboard.keyPress(KeyEvent.VK_SPACE);
+            boolean clicked = Rs2Widget.clickWidget(bar.barItemName);
+            debugLog(context, "Production widget open, selecting " + bar.barItemName
+                    + " (clicked=" + clicked + ")");
             smeltGuard.recordAttempt();
         }
         return TaskStatus.RUNNING;

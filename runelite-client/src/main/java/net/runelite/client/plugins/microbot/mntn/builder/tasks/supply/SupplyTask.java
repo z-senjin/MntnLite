@@ -5,6 +5,7 @@ import net.runelite.client.plugins.microbot.api.tileitem.models.Rs2TileItemModel
 import net.runelite.client.plugins.microbot.mntn.builder.activities.supply.SupplyRoute;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.supply.SupplyRouteType;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
+import net.runelite.client.plugins.microbot.mntn.builder.core.BuilderItemPrices;
 import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.EquipmentRequirement;
 import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.ItemRequirement;
 import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.MoneyRequirement;
@@ -16,7 +17,6 @@ import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStopReason;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.banking.BankingTask;
 import net.runelite.client.plugins.microbot.util.grandexchange.Rs2GrandExchange;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
-import net.runelite.client.plugins.microbot.util.item.Rs2ItemManager;
 import net.runelite.client.plugins.microbot.util.shop.Rs2Shop;
 import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
 
@@ -539,21 +539,9 @@ public class SupplyTask implements Task {
     }
 
     private int estimatedUnitPrice() {
-        if (route.getEstimatedUnitPrice() > 0) {
-            return route.getEstimatedUnitPrice();
-        }
-
-        int itemId = Rs2ItemManager.getItemIdByName(route.getItemName(), false);
-        if (itemId <= 0) {
-            return 100;
-        }
-
-        int offerPrice = Rs2GrandExchange.getOfferPrice(itemId);
-        if (offerPrice <= 0) {
-            return 100;
-        }
-
-        return (int) Math.ceil(offerPrice * route.getPriceMultiplier());
+        int fallback = route.getEstimatedUnitPrice() > 0 ? route.getEstimatedUnitPrice() : 100;
+        return (int) Math.ceil(BuilderItemPrices.estimate(route.getItemName(), fallback)
+                * route.getPriceMultiplier());
     }
 
     private boolean hasEnoughTotalCoins(AccountContext context, int coinsNeeded) {

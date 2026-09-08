@@ -23,7 +23,6 @@ import net.runelite.client.plugins.microbot.mntn.builder.tasks.skilling.Woodcutt
 import net.runelite.client.plugins.microbot.util.grandexchange.Rs2GrandExchange;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2ItemModel;
-import net.runelite.client.plugins.microbot.util.item.Rs2ItemManager;
 import net.runelite.client.plugins.microbot.util.math.Rs2Random;
 import net.runelite.client.plugins.microbot.util.shop.Rs2Shop;
 import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
@@ -413,18 +412,8 @@ public class MoneyMakingTask implements Task {
     }
 
     private int estimatedSellPrice() {
-        int itemId = Rs2ItemManager.getItemIdByName(method.itemName, false);
-        if (itemId <= 0) {
-            return method.fallbackUnitPrice;
-        }
-
-        int price = Rs2GrandExchange.getOfferPrice(itemId);
-        if (price <= 0) {
-            return method.fallbackUnitPrice;
-        }
-
         double multiplier = Rs2Random.between(90, 98) / 100.0;
-        return Math.max(1, (int) Math.floor(price * multiplier));
+        return Math.max(1, (int) Math.floor(method.fallbackUnitPrice * multiplier));
     }
 
     private Phase salePhase() {
