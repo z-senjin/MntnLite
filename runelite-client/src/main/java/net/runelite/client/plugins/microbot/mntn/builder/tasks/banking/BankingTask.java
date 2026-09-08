@@ -116,6 +116,12 @@ public class BankingTask implements Task {
         FAILED
     }
 
+    private enum WithdrawOutcome {
+        COMPLETE,
+        WAITING,
+        FAILED
+    }
+
     private final Mode mode;
 
     public static class ItemWithdrawal {
@@ -166,6 +172,10 @@ public class BankingTask implements Task {
     private int closeAttempts;
     private int bankResolveAttempts;
     private int bankResolveCooldownTicks;
+    private int withdrawalIndex;
+    private boolean withdrawalPending;
+    private int pendingWithdrawalInventoryCount;
+    private long pendingWithdrawalAtMs;
     private BankLocation cachedTargetBank;
     private final Set<BankLocation> avoidedBanks = new HashSet<>();
     private final TaskActionGuard equipmentDepositGuard = new TaskActionGuard(4, 8_000, 700);
@@ -390,7 +400,11 @@ public class BankingTask implements Task {
                     return TaskStatus.RUNNING;
                 }
 
-                if (!performWithdraw(context)) {
+                WithdrawOutcome withdrawOutcome = performWithdraw(context);
+                if (withdrawOutcome == WithdrawOutcome.WAITING) {
+                    return TaskStatus.RUNNING;
+                }
+                if (withdrawOutcome == WithdrawOutcome.FAILED) {
                     withdrawAttempts++;
                     debugLog(context, "Withdraw failed attempt " + withdrawAttempts + "/" + MAX_WITHDRAW_ATTEMPTS);
                     if (withdrawAttempts >= MAX_WITHDRAW_ATTEMPTS) {
@@ -646,40 +660,74 @@ public class BankingTask implements Task {
     /**
      * Perform the configured withdrawal.
      */
-    private boolean performWithdraw(AccountContext context) {
+    private WithdrawOutcome performWithdraw(AccountContext context) {
         debugLog(context, "performWithdraw: withdrawals=" + (withdrawals != null ? withdrawals.length : 0) + ", withdrawItemName=" + withdrawItemName + ", withdrawAmount=" + withdrawAmount);
-        if (withdrawals != null && withdrawals.length > 0) {
-            boolean success = true;
-            for (ItemWithdrawal withdrawal : withdrawals) {
-                if (withdrawal == null || withdrawal.itemName == null) continue;
-                if (withdrawal.amount == -1) {
-                    debugLog(context, "Withdrawing all: " + withdrawal.itemName);
-                    success &= Rs2Bank.withdrawAll(withdrawal.itemName);
-                } else {
-                    debugLog(context, "Withdrawing " + withdrawal.amount + " x " + withdrawal.itemName);
-                    success &= Rs2Bank.withdrawX(withdrawal.itemName, withdrawal.amount);
-                }
+        if (withdrawals == null || withdrawals.length == 0) {
+            return WithdrawOutcome.COMPLETE;
+        }
+
+        if (withdrawalPending) {
+            ItemWithdrawal pendingWithdrawal = withdrawals[withdrawalIndex];
+            if (isWithdrawalSatisfied(context, pendingWithdrawal, pendingWithdrawalInventoryCount)) {
+                debugLog(context, "Confirmed withdrawal: " + pendingWithdrawal.itemName);
+                withdrawalPending = false;
+                withdrawalIndex++;
+                return withdrawalIndex >= withdrawals.length
+                        ? WithdrawOutcome.COMPLETE
+                        : WithdrawOutcome.WAITING;
             }
-            return success;
+            if (System.currentTimeMillis() - pendingWithdrawalAtMs < 3_000) {
+                return WithdrawOutcome.WAITING;
+            }
+            withdrawalPending = false;
+            return WithdrawOutcome.FAILED;
         }
 
-        if (withdrawItemName == null) {
-            debugLog(context, "No item to withdraw");
-            return true;
+        while (withdrawalIndex < withdrawals.length) {
+            ItemWithdrawal withdrawal = withdrawals[withdrawalIndex];
+            if (withdrawal == null || withdrawal.itemName == null) {
+                withdrawalIndex++;
+                continue;
+            }
+
+            int inventoryCount = context.inventory().getCount(withdrawal.itemName);
+            if (withdrawal.amount != -1 && inventoryCount >= withdrawal.amount) {
+                withdrawalIndex++;
+                continue;
+            }
+
+            boolean requested;
+            if (withdrawal.amount == -1) {
+                debugLog(context, "Withdrawing all: " + withdrawal.itemName);
+                requested = Rs2Bank.withdrawAll(withdrawal.itemName);
+            } else {
+                int amountNeeded = withdrawal.amount - inventoryCount;
+                debugLog(context, "Withdrawing " + amountNeeded + " x " + withdrawal.itemName);
+                requested = Rs2Bank.withdrawX(withdrawal.itemName, amountNeeded);
+            }
+
+            if (!requested) {
+                return WithdrawOutcome.FAILED;
+            }
+
+            withdrawalPending = true;
+            pendingWithdrawalInventoryCount = inventoryCount;
+            pendingWithdrawalAtMs = System.currentTimeMillis();
+            return WithdrawOutcome.WAITING;
         }
 
-        if (withdrawAmount == -1) {
-            debugLog(context, "Withdrawing all: " + withdrawItemName);
-            return Rs2Bank.withdrawAll(
-                    withdrawItemName
-            );
-        }
+        return WithdrawOutcome.COMPLETE;
+    }
 
-        debugLog(context, "Withdrawing " + withdrawAmount + " x " + withdrawItemName);
-        return Rs2Bank.withdrawX(
-                withdrawItemName,
-                withdrawAmount
-        );
+    private boolean isWithdrawalSatisfied(
+            AccountContext context,
+            ItemWithdrawal withdrawal,
+            int inventoryCountBeforeRequest
+    ) {
+        int currentInventoryCount = context.inventory().getCount(withdrawal.itemName);
+        return withdrawal.amount == -1
+                ? currentInventoryCount > inventoryCountBeforeRequest
+                : currentInventoryCount >= withdrawal.amount;
     }
 
     @Override

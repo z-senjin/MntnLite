@@ -27,6 +27,9 @@ import net.runelite.client.plugins.microbot.mntn.builder.core.goals.Goal;
 import net.runelite.client.plugins.microbot.mntn.builder.core.goals.MoneyGoal;
 import net.runelite.client.plugins.microbot.mntn.builder.core.goals.QuestGoal;
 import net.runelite.client.plugins.microbot.mntn.builder.core.goals.SkillGoal;
+import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.EquipmentRequirement;
+import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.ItemRequirement;
+import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.Requirement;
 import net.runelite.client.plugins.microbot.mntn.builder.core.planner.AccountMemory;
 import net.runelite.client.plugins.microbot.mntn.builder.core.planner.AccountPlanner;
 import net.runelite.client.plugins.microbot.mntn.builder.core.planner.Plan;
@@ -34,6 +37,7 @@ import net.runelite.client.plugins.microbot.mntn.builder.core.planner.SessionFla
 import net.runelite.client.plugins.microbot.mntn.builder.core.planner.StartupPlanCache;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskActionGuard;
+import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskInventoryPreparationTask;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskManager;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStatus;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStopReason;
@@ -44,14 +48,14 @@ import net.runelite.client.plugins.microbot.util.antiban.enums.ActivityIntensity
 import net.runelite.client.plugins.microbot.util.bank.Rs2Bank;
 import net.runelite.client.plugins.microbot.util.dialogues.Rs2Dialogue;
 import net.runelite.client.plugins.microbot.util.equipment.Rs2Equipment;
-import net.runelite.client.plugins.microbot.util.math.Rs2Random;
+import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
 
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -69,6 +73,8 @@ public class MntnBuilderScript extends Script {
     private static final long CONFIG_CHANGE_DEBOUNCE_MS = 750L;
     private static final long SLOW_PLANNER_PASS_MS = 250L;
     private static final int LOGIN_READY_TICKS_REQUIRED = 2;
+    private static final double PROFILE_GOAL_PRIORITY_BASE = 50.0;
+    private static final int PROFILE_GOAL_PRIORITY_VARIATION = 5;
 
     private final AccountContext context = new AccountContext();
     private final TaskManager taskManager = new TaskManager();
@@ -76,8 +82,6 @@ public class MntnBuilderScript extends Script {
     private AccountPlanner planner;
     private Plan currentPlan;
     private MntnBuilderConfig config;
-
-    private final Map<Quest, Integer> questPriorities = new HashMap<>();
 
     // Cached config snapshot to detect modifications even without event triggers
     private int lastFishingTarget;
@@ -89,15 +93,6 @@ public class MntnBuilderScript extends Script {
     private int lastStrengthTarget;
     private int lastDefenceTarget;
     private int lastPrayerTarget;
-    private int lastFishingWeight;
-    private int lastCookingWeight;
-    private int lastWoodcuttingWeight;
-    private int lastMiningWeight;
-    private int lastSmithingWeight;
-    private int lastAttackWeight;
-    private int lastStrengthWeight;
-    private int lastDefenceWeight;
-    private int lastPrayerWeight;
     private int lastMoneyTarget;
     private boolean lastCooksAssistant;
     private boolean lastDoricsQuest;
@@ -134,48 +129,54 @@ public class MntnBuilderScript extends Script {
     public double debugScore = 0;
 
     public List<Goal> buildGoals(MntnBuilderConfig cfg) {
+        return buildGoalsForProfile(cfg, startupCacheProfileId());
+    }
+
+    List<Goal> buildGoalsForProfile(MntnBuilderConfig cfg, String profileId) {
         List<Goal> goals = new ArrayList<>();
 
-        addSkillGoal(goals, Skill.FISHING, cfg.fishingTarget(), cfg.fishingWeight());
-        addSkillGoal(goals, Skill.COOKING, cfg.cookingTarget(), cfg.cookingWeight());
-        addSkillGoal(goals, Skill.WOODCUTTING, cfg.woodcuttingTarget(), cfg.woodcuttingWeight());
-        addSkillGoal(goals, Skill.MINING, cfg.miningTarget(), cfg.miningWeight());
-        addSkillGoal(goals, Skill.SMITHING, cfg.smithingTarget(), cfg.smithingWeight());
-        addSkillGoal(goals, Skill.ATTACK, cfg.attackTarget(), cfg.attackWeight());
-        addSkillGoal(goals, Skill.STRENGTH, cfg.strengthTarget(), cfg.strengthWeight());
-        addSkillGoal(goals, Skill.DEFENCE, cfg.defenceTarget(), cfg.defenceWeight());
-        addSkillGoal(goals, Skill.PRAYER, cfg.prayerTarget(), cfg.prayerWeight());
+        addSkillGoal(goals, Skill.FISHING, cfg.fishingTarget(), profileId);
+        addSkillGoal(goals, Skill.COOKING, cfg.cookingTarget(), profileId);
+        addSkillGoal(goals, Skill.WOODCUTTING, cfg.woodcuttingTarget(), profileId);
+        addSkillGoal(goals, Skill.MINING, cfg.miningTarget(), profileId);
+        addSkillGoal(goals, Skill.SMITHING, cfg.smithingTarget(), profileId);
+        addSkillGoal(goals, Skill.ATTACK, cfg.attackTarget(), profileId);
+        addSkillGoal(goals, Skill.STRENGTH, cfg.strengthTarget(), profileId);
+        addSkillGoal(goals, Skill.DEFENCE, cfg.defenceTarget(), profileId);
+        addSkillGoal(goals, Skill.PRAYER, cfg.prayerTarget(), profileId);
 
         if (cfg.moneyTarget() > 0) {
             goals.add(new MoneyGoal(cfg.moneyTarget(), 45));
         }
 
         if (cfg.enableCooksAssistant()) {
-            addQuestGoal(goals, Quest.COOKS_ASSISTANT);
+            addQuestGoal(goals, Quest.COOKS_ASSISTANT, profileId);
         }
 
         if (cfg.enableDoricsQuest()) {
-            addQuestGoal(goals, Quest.DORICS_QUEST);
+            addQuestGoal(goals, Quest.DORICS_QUEST, profileId);
         }
 
         return goals;
     }
 
-    private void addSkillGoal(List<Goal> goals, Skill skill, int targetLevel, int weight) {
+    private void addSkillGoal(List<Goal> goals, Skill skill, int targetLevel, String profileId) {
         if (targetLevel <= 0) {
             return;
         }
-        goals.add(new SkillGoal(skill, targetLevel, priorityFromWeight(weight)));
+        goals.add(new SkillGoal(skill, targetLevel, profileGoalPriority(profileId, skill.name())));
     }
 
-    private double priorityFromWeight(int weight) {
-        int clamped = Math.max(1, Math.min(9, weight));
-        return clamped * 10.0;
+    static double profileGoalPriority(String profileId, String goalKey) {
+        String stableProfileId = profileId == null || profileId.isBlank() ? "default" : profileId;
+        int range = PROFILE_GOAL_PRIORITY_VARIATION * 2 + 1;
+        int variation = Math.floorMod((stableProfileId + ":" + goalKey).hashCode(), range)
+                - PROFILE_GOAL_PRIORITY_VARIATION;
+        return PROFILE_GOAL_PRIORITY_BASE + variation;
     }
 
-    private void addQuestGoal(List<Goal> goals, Quest quest) {
-        int priority = questPriorities.computeIfAbsent(quest, q -> Rs2Random.between(40, 60));
-        goals.add(new QuestGoal(quest, priority));
+    private void addQuestGoal(List<Goal> goals, Quest quest, String profileId) {
+        goals.add(new QuestGoal(quest, profileGoalPriority(profileId, quest.name())));
     }
 
     private void updateConfigSnapshot(MntnBuilderConfig cfg) {
@@ -188,15 +189,6 @@ public class MntnBuilderScript extends Script {
         lastStrengthTarget = cfg.strengthTarget();
         lastDefenceTarget = cfg.defenceTarget();
         lastPrayerTarget = cfg.prayerTarget();
-        lastFishingWeight = cfg.fishingWeight();
-        lastCookingWeight = cfg.cookingWeight();
-        lastWoodcuttingWeight = cfg.woodcuttingWeight();
-        lastMiningWeight = cfg.miningWeight();
-        lastSmithingWeight = cfg.smithingWeight();
-        lastAttackWeight = cfg.attackWeight();
-        lastStrengthWeight = cfg.strengthWeight();
-        lastDefenceWeight = cfg.defenceWeight();
-        lastPrayerWeight = cfg.prayerWeight();
         lastMoneyTarget = cfg.moneyTarget();
         lastCooksAssistant = cfg.enableCooksAssistant();
         lastDoricsQuest = cfg.enableDoricsQuest();
@@ -222,15 +214,6 @@ public class MntnBuilderScript extends Script {
                 || cfg.strengthTarget() != lastStrengthTarget
                 || cfg.defenceTarget() != lastDefenceTarget
                 || cfg.prayerTarget() != lastPrayerTarget
-                || cfg.fishingWeight() != lastFishingWeight
-                || cfg.cookingWeight() != lastCookingWeight
-                || cfg.woodcuttingWeight() != lastWoodcuttingWeight
-                || cfg.miningWeight() != lastMiningWeight
-                || cfg.smithingWeight() != lastSmithingWeight
-                || cfg.attackWeight() != lastAttackWeight
-                || cfg.strengthWeight() != lastStrengthWeight
-                || cfg.defenceWeight() != lastDefenceWeight
-                || cfg.prayerWeight() != lastPrayerWeight
                 || cfg.moneyTarget() != lastMoneyTarget
                 || cfg.enableCooksAssistant() != lastCooksAssistant
                 || cfg.enableDoricsQuest() != lastDoricsQuest
@@ -324,11 +307,6 @@ public class MntnBuilderScript extends Script {
                     + ", smithingTarget=" + config.smithingTarget() + ", attackTarget=" + config.attackTarget()
                     + ", strengthTarget=" + config.strengthTarget() + ", defenceTarget=" + config.defenceTarget()
                     + ", prayerTarget=" + config.prayerTarget()
-                    + ", fishingWeight=" + config.fishingWeight() + ", cookingWeight=" + config.cookingWeight()
-                    + ", woodcuttingWeight=" + config.woodcuttingWeight() + ", miningWeight=" + config.miningWeight()
-                    + ", smithingWeight=" + config.smithingWeight() + ", attackWeight=" + config.attackWeight()
-                    + ", strengthWeight=" + config.strengthWeight() + ", defenceWeight=" + config.defenceWeight()
-                    + ", prayerWeight=" + config.prayerWeight()
                     + ", moneyTarget=" + config.moneyTarget()
                     + ", cooksAssistant=" + config.enableCooksAssistant() + ", doricsQuest=" + config.enableDoricsQuest()
                     + ", antibanIntensity=" + config.antibanIntensity()
@@ -445,6 +423,9 @@ public class MntnBuilderScript extends Script {
                 if (status.needsPlannerDecision()) {
                     if (status == TaskStatus.COMPLETE && continueSatisfiedRequirement()) {
                         return;
+                    }
+                    if (taskManager.getLastStopReason() == TaskStopReason.TRAVEL_FAILED) {
+                        Rs2Walker.clearWalkingRoute("MntnBuilder task travel failed");
                     }
                     debugLog("Task status requires replan: " + status
                             + " (reason=" + taskManager.getLastStopReason() + ")");
@@ -726,7 +707,8 @@ public class MntnBuilderScript extends Script {
         return initialBankDone
                 && currentPlan == null
                 && !taskManager.hasTask()
-                && (postStartupReplanPending || "Planning".equals(debugGoal));
+                && !postStartupReplanPending
+                && "Planning".equals(debugGoal);
     }
 
     private void showPlanningState(String requirement) {
@@ -932,6 +914,7 @@ public class MntnBuilderScript extends Script {
         Task task;
         try {
             task = plan.strategy().createTask(context);
+            task = prepareTaskInventory(plan, task);
         } catch (RuntimeException ex) {
             return recoverFromTaskCreationFailure(plan, ex.getClass().getSimpleName());
         }
@@ -939,6 +922,8 @@ public class MntnBuilderScript extends Script {
             return recoverFromTaskCreationFailure(plan, "returned null");
         }
 
+        // A completed, skipped, or failed task must not leave its route active for the next one.
+        Rs2Walker.clearWalkingRoute("MntnBuilder plan transition");
         currentPlan = plan;
         updateAntibanActivity(plan);
         taskManager.setTask(task);
@@ -952,7 +937,7 @@ public class MntnBuilderScript extends Script {
         debugScore = plan.score();
         memory.recordSelected(plan);
         if (config != null && !config.testOverride().isActive()) {
-            StartupPlanCache.remember(plannerConfigFingerprint(config), plan);
+            StartupPlanCache.remember(startupCacheProfileId(), plannerConfigFingerprint(config), plan);
         }
 
         debugLog("Applied new plan: goal=" + debugGoal + ", requirement=" + debugRequirement
@@ -965,31 +950,64 @@ public class MntnBuilderScript extends Script {
         return true;
     }
 
+    private Task prepareTaskInventory(Plan plan, Task task) {
+        if (task == null || !requiresInventoryPreparation(plan.activity().type())) {
+            return task;
+        }
+
+        Set<String> keepItems = new LinkedHashSet<>();
+        for (Requirement requirement : plan.strategy().requirements(context)) {
+            if (requirement instanceof ItemRequirement) {
+                keepItems.add(((ItemRequirement) requirement).getItemName());
+            } else if (requirement instanceof EquipmentRequirement) {
+                keepItems.add(((EquipmentRequirement) requirement).getItemName());
+            }
+        }
+        return new TaskInventoryPreparationTask(task, keepItems.toArray(new String[0]));
+    }
+
+    private boolean requiresInventoryPreparation(ActivityType activityType) {
+        return activityType == ActivityType.FISHING
+                || activityType == ActivityType.COOKING
+                || activityType == ActivityType.WOODCUTTING
+                || activityType == ActivityType.MINING
+                || activityType == ActivityType.SMITHING;
+    }
+
     private boolean applyCachedStartupPlan() {
         if (config == null || config.testOverride().isActive()) {
             return false;
         }
 
-        context.beginPlanningSnapshot();
-        try {
-            Plan cached = StartupPlanCache.takeIfUsable(plannerConfigFingerprint(config), context);
-            if (cached == null) {
-                return false;
-            }
-            Microbot.log("[MntnBuilder] Reusing validated startup plan: " + cached.strategy().name());
-            return applyPlan(cached);
-        } finally {
-            context.endPlanningSnapshot();
+        StartupPlanCache.Direction direction = StartupPlanCache.takeIfUsable(
+                startupCacheProfileId(),
+                plannerConfigFingerprint(config)
+        );
+        if (direction == null) {
+            return false;
         }
+
+        Plan nextPlan = planner.planForGoal(direction.goalName(), context);
+        if (nextPlan == null) {
+            Microbot.log("[MntnBuilder] Cached startup direction is no longer runnable; using full planner");
+            return false;
+        }
+        Microbot.log("[MntnBuilder] Resuming cached startup direction: " + direction.goalName()
+                + " -> " + nextPlan.strategy().name());
+        return applyPlan(nextPlan);
+    }
+
+    private String startupCacheProfileId() {
+        if (Microbot.getConfigManager() == null || Microbot.getConfigManager().getProfile() == null) {
+            return null;
+        }
+        return String.valueOf(Microbot.getConfigManager().getProfile().getId());
     }
 
     private String plannerConfigFingerprint(MntnBuilderConfig cfg) {
         return cfg.fishingTarget() + ":" + cfg.cookingTarget() + ":" + cfg.woodcuttingTarget() + ":"
                 + cfg.miningTarget() + ":" + cfg.smithingTarget() + ":" + cfg.attackTarget() + ":"
                 + cfg.strengthTarget() + ":" + cfg.defenceTarget() + ":" + cfg.prayerTarget() + ":"
-                + cfg.fishingWeight() + ":" + cfg.cookingWeight() + ":" + cfg.woodcuttingWeight() + ":"
-                + cfg.miningWeight() + ":" + cfg.smithingWeight() + ":" + cfg.attackWeight() + ":"
-                + cfg.strengthWeight() + ":" + cfg.defenceWeight() + ":" + cfg.prayerWeight() + ":"
                 + cfg.moneyTarget() + ":" + cfg.enableCooksAssistant() + ":" + cfg.enableDoricsQuest() + ":"
                 + cfg.allowedContent() + ":" + cfg.sessionFlavor() + ":" + cfg.allowGrandExchange() + ":"
                 + cfg.allowShops() + ":" + cfg.allowGroundPickups();
@@ -1167,7 +1185,6 @@ public class MntnBuilderScript extends Script {
     public void shutdown() {
         debugLog("Shutting down MntnBuilderScript");
         super.shutdown();
-        questPriorities.clear();
         memory.clear();
         currentPlan = null;
         taskManager.setTask(null);

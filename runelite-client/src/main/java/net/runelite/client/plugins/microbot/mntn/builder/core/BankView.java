@@ -18,6 +18,7 @@ public class BankView {
     private final BankCache cache = new BankCache();
     private long lastOpenRefreshAtMs;
     private boolean bankWasOpen;
+    private int planningReadDepth;
 
     public boolean isOpen() {
         return Rs2Bank.isOpen();
@@ -60,11 +61,26 @@ public class BankView {
     }
 
     /**
+     * Planner decisions use the bank snapshot warmed by BankingTask. Rechecking the live
+     * bank widget for every candidate can block the script worker behind the client thread.
+     */
+    void beginPlanningRead() {
+        planningReadDepth++;
+    }
+
+    void endPlanningRead() {
+        planningReadDepth = Math.max(0, planningReadDepth - 1);
+    }
+
+    /**
      * A planner pass can ask hundreds of bank questions. Refresh once when the bank opens,
      * then share that fresh snapshot for a short interval; banking actions still call the
      * public refresh() method explicitly after every completed deposit or withdrawal.
      */
     private void refreshOpenBankIfNeeded() {
+        if (planningReadDepth > 0) {
+            return;
+        }
         if (!isOpen()) {
             bankWasOpen = false;
             return;

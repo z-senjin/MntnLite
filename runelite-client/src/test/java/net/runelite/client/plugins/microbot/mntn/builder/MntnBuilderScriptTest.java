@@ -36,7 +36,7 @@ public class MntnBuilderScriptTest {
     }
 
     @Test
-    public void skillWeightsBecomeGoalPriority() {
+    public void profileGoalPrioritiesAreStableAndBounded() {
         TestConfig config = new TestConfig();
         config.fishingTarget = 20;
         config.cookingTarget = 0;
@@ -47,19 +47,20 @@ public class MntnBuilderScriptTest {
         config.strengthTarget = 0;
         config.defenceTarget = 0;
         config.prayerTarget = 0;
-        config.fishingWeight = 8;
-
-        List<Goal> goals = new MntnBuilderScript().buildGoals(config);
+        MntnBuilderScript script = new MntnBuilderScript();
+        List<Goal> goals = script.buildGoalsForProfile(config, "profile-a");
 
         assertEquals(1, goals.size());
         assertEquals("Fishing 20", goals.get(0).name());
-        assertEquals(80.0, goals.get(0).priority(new AccountContext()), 0.01);
+        assertEquals(MntnBuilderScript.profileGoalPriority("profile-a", "FISHING"),
+                goals.get(0).priority(new AccountContext()), 0.01);
+        assertTrue(goals.get(0).priority(new AccountContext()) >= 45.0);
+        assertTrue(goals.get(0).priority(new AccountContext()) <= 55.0);
     }
 
     @Test
-    public void skillWeightsAreClampedBeforePriority() {
+    public void profileGoalPrioritiesSurviveScriptRecreation() {
         TestConfig config = new TestConfig();
-        config.fishingTarget = 20;
         config.cookingTarget = 0;
         config.woodcuttingTarget = 0;
         config.miningTarget = 0;
@@ -68,12 +69,14 @@ public class MntnBuilderScriptTest {
         config.strengthTarget = 0;
         config.defenceTarget = 0;
         config.prayerTarget = 0;
-        config.fishingWeight = 99;
 
-        List<Goal> goals = new MntnBuilderScript().buildGoals(config);
+        double first = new MntnBuilderScript().buildGoalsForProfile(config, "profile-a")
+                .get(0).priority(new AccountContext());
+        double second = new MntnBuilderScript().buildGoalsForProfile(config, "profile-a")
+                .get(0).priority(new AccountContext());
 
-        assertFalse(goals.isEmpty());
-        assertEquals(90.0, goals.get(0).priority(new AccountContext()), 0.01);
+        assertEquals(first, second, 0.01);
+        assertTrue(first != MntnBuilderScript.profileGoalPriority("profile-b", "FISHING"));
     }
 
     @Test
@@ -165,7 +168,6 @@ public class MntnBuilderScriptTest {
         private int strengthTarget = 20;
         private int defenceTarget = 20;
         private int prayerTarget = 20;
-        private int fishingWeight = 5;
 
         @Override
         public int fishingTarget() {
@@ -210,11 +212,6 @@ public class MntnBuilderScriptTest {
         @Override
         public int prayerTarget() {
             return prayerTarget;
-        }
-
-        @Override
-        public int fishingWeight() {
-            return fishingWeight;
         }
 
         @Override

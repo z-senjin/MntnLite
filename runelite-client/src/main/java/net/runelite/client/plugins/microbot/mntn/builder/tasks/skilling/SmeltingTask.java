@@ -10,13 +10,20 @@ import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskActionGuard;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStatus;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStopReason;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.banking.BankingTask;
+import net.runelite.client.plugins.microbot.util.keyboard.Rs2Keyboard;
 import net.runelite.client.plugins.microbot.util.player.Rs2Player;
 import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
 import net.runelite.client.plugins.microbot.util.widget.Rs2Widget;
 
+import java.awt.event.KeyEvent;
+
+import static net.runelite.client.plugins.microbot.util.Global.sleep;
+import static net.runelite.client.plugins.microbot.util.Global.sleepUntil;
+
 public class SmeltingTask implements Task {
 
     private static final int[] FURNACE_OBJECT_IDS = {24009};
+    private static final int MAX_PRODUCTION_FAILURES = 3;
 
     private enum Phase {
         WALK_TO_FURNACE, SMELTING, BANKING
@@ -28,9 +35,8 @@ public class SmeltingTask implements Task {
     private TaskStopReason lastStopReason = TaskStopReason.NONE;
     private final TaskActionGuard walkGuard = new TaskActionGuard(10, 30_000, 800);
     private final TaskActionGuard furnaceGuard = new TaskActionGuard(8, 12_000, 800);
-    private final TaskActionGuard widgetGuard = new TaskActionGuard(4, 10_000, 900);
-    private final TaskActionGuard smeltGuard = new TaskActionGuard(4, 12_000, 900);
-    private int ingredientsBeforeSmelt;
+    private int failedWidgetOpens;
+    private int failedSmeltAttempts;
 
     public SmeltingTask(SmeltingStrategy.Bar bar) {
         this.bar = bar;
@@ -108,6 +114,14 @@ public class SmeltingTask implements Task {
             return TaskStatus.RUNNING;
         }
 
+        // Smelting animation can briefly report idle between bars. Verify that the
+        // player did not resume before opening the furnace or pressing SPACE again.
+        sleep(400, 800);
+        if (Rs2Player.isAnimating() || Rs2Player.isMoving()) {
+            debugLog(context, "Smelting resumed during idle check, waiting");
+            return TaskStatus.RUNNING;
+        }
+
         Rs2TileObjectModel furnace = Microbot.getRs2TileObjectCache().query()
                 .withIds(FURNACE_OBJECT_IDS)
                 .within(15)
@@ -127,30 +141,31 @@ public class SmeltingTask implements Task {
         furnaceGuard.reset();
 
         if (!Rs2Widget.isProductionWidgetOpen()) {
-            TaskActionGuard.Result openResult = widgetGuard.evaluate("open furnace " + bar.name(), false);
-            if (openResult == TaskActionGuard.Result.EXHAUSTED) {
+            debugLog(context, "Clicking furnace to open smelting widget");
+            furnace.click("Smelt");
+            if (sleepUntil(Rs2Widget::isProductionWidgetOpen, 5_000)) {
+                failedWidgetOpens = 0;
+                debugLog(context, "Smelting widget opened");
+            } else if (++failedWidgetOpens >= MAX_PRODUCTION_FAILURES) {
                 return stop(TaskStatus.REPLAN, TaskStopReason.PRODUCTION_WIDGET_FAILED);
-            }
-            if (openResult == TaskActionGuard.Result.READY) {
-                debugLog(context, "Clicking furnace to open smelting widget");
-                furnace.click("Smelt");
-                widgetGuard.recordAttempt();
+            } else {
+                debugLog(context, "Smelting widget did not open after furnace click (attempt "
+                        + failedWidgetOpens + ")");
             }
             return TaskStatus.RUNNING;
         }
-        widgetGuard.reset();
 
-        boolean smelted = ingredientsBeforeSmelt > 0 && ingredientCount(context) < ingredientsBeforeSmelt;
-        TaskActionGuard.Result smeltResult = smeltGuard.evaluate("smelt " + bar.name(), smelted);
-        if (smeltResult == TaskActionGuard.Result.EXHAUSTED) {
+        failedWidgetOpens = 0;
+        int ingredientsBeforeSmelt = ingredientCount(context);
+        sleep(800, 3000);
+        Rs2Keyboard.keyPress(KeyEvent.VK_SPACE);
+        if (sleepUntil(() -> ingredientCount(context) < ingredientsBeforeSmelt, 7_000)) {
+            failedSmeltAttempts = 0;
+            debugLog(context, "Smelted " + bar.barItemName);
+        } else if (++failedSmeltAttempts >= MAX_PRODUCTION_FAILURES) {
             return stop(TaskStatus.REPLAN, TaskStopReason.PRODUCTION_WIDGET_FAILED);
-        }
-        if (smeltResult == TaskActionGuard.Result.READY) {
-            ingredientsBeforeSmelt = ingredientCount(context);
-            boolean clicked = Rs2Widget.clickWidget(bar.barItemName);
-            debugLog(context, "Production widget open, selecting " + bar.barItemName
-                    + " (clicked=" + clicked + ")");
-            smeltGuard.recordAttempt();
+        } else {
+            debugLog(context, "SPACE did not consume ingredients (attempt " + failedSmeltAttempts + ")");
         }
         return TaskStatus.RUNNING;
     }
@@ -216,9 +231,8 @@ public class SmeltingTask implements Task {
     private void resetActionGuards() {
         walkGuard.reset();
         furnaceGuard.reset();
-        widgetGuard.reset();
-        smeltGuard.reset();
-        ingredientsBeforeSmelt = 0;
+        failedWidgetOpens = 0;
+        failedSmeltAttempts = 0;
     }
 
     @Override

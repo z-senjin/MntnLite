@@ -1,16 +1,22 @@
 package net.runelite.client.plugins.microbot.mntn.builder.core;
 
 import net.runelite.api.GameState;
+import net.runelite.api.Item;
+import net.runelite.api.ItemComposition;
+import net.runelite.api.ItemContainer;
 import net.runelite.api.Quest;
 import net.runelite.api.QuestState;
 import net.runelite.api.Skill;
 import net.runelite.api.WorldType;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.gameval.InventoryID;
 import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.util.player.Rs2Player;
 import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
 
 import java.util.EnumMap;
+import java.util.Arrays;
+import java.util.HashMap;
 import java.util.Map;
 
 /**
@@ -158,6 +164,7 @@ public class AccountContext {
 
     /** Captures repeated planner reads once; tasks continue to use live state. */
     public void beginPlanningSnapshot() {
+        bank.beginPlanningRead();
         if (planningSnapshot != null || !isLoggedIn() || Microbot.getClient() == null
                 || Microbot.getClientThread() == null) {
             return;
@@ -171,6 +178,29 @@ public class AccountContext {
                 boostedLevels.put(skill, Microbot.getClient().getBoostedSkillLevel(skill));
             }
 
+            Map<String, Integer> inventoryByName = new HashMap<>();
+            Map<Integer, Integer> inventoryById = new HashMap<>();
+            boolean hasFood = false;
+            int occupiedSlots = 0;
+            ItemContainer inventoryContainer = Microbot.getClient().getItemContainer(InventoryID.INV);
+            if (inventoryContainer != null) {
+                for (Item item : inventoryContainer.getItems()) {
+                    if (item == null || item.getId() == -1) {
+                        continue;
+                    }
+                    occupiedSlots++;
+                    int quantity = Math.max(0, item.getQuantity());
+                    inventoryById.merge(item.getId(), quantity, Integer::sum);
+                    ItemComposition definition = Microbot.getClient().getItemDefinition(item.getId());
+                    if (definition == null) {
+                        continue;
+                    }
+                    inventoryByName.merge(definition.getName(), quantity, Integer::sum);
+                    hasFood |= Arrays.stream(definition.getInventoryActions())
+                            .anyMatch(action -> "Eat".equalsIgnoreCase(action));
+                }
+            }
+
             return new PlanningSnapshot(
                     Microbot.getClient().getWorldType().contains(WorldType.MEMBERS),
                     Microbot.getClient().getLocalPlayer() != null
@@ -179,13 +209,27 @@ public class AccountContext {
                     Microbot.getClient().getLocalPlayer() != null
                             ? Microbot.getClient().getLocalPlayer().getWorldLocation() : null,
                     realLevels,
-                    boostedLevels
+                    boostedLevels,
+                    inventoryByName,
+                    inventoryById,
+                    occupiedSlots >= 28,
+                    hasFood
             );
         }).orElse(null);
+        if (planningSnapshot != null) {
+            inventory.beginPlanningRead(
+                    planningSnapshot.inventoryByName,
+                    planningSnapshot.inventoryById,
+                    planningSnapshot.inventoryFull,
+                    planningSnapshot.inventoryHasFood
+            );
+        }
     }
 
     public void endPlanningSnapshot() {
         planningSnapshot = null;
+        inventory.endPlanningRead();
+        bank.endPlanningRead();
     }
 
     private static final class PlanningSnapshot {
@@ -195,15 +239,25 @@ public class AccountContext {
         private final WorldPoint location;
         private final Map<Skill, Integer> realLevels;
         private final Map<Skill, Integer> boostedLevels;
+        private final Map<String, Integer> inventoryByName;
+        private final Map<Integer, Integer> inventoryById;
+        private final boolean inventoryFull;
+        private final boolean inventoryHasFood;
 
         private PlanningSnapshot(boolean membersWorld, int combatLevel, int plane, WorldPoint location,
-                                 Map<Skill, Integer> realLevels, Map<Skill, Integer> boostedLevels) {
+                                 Map<Skill, Integer> realLevels, Map<Skill, Integer> boostedLevels,
+                                 Map<String, Integer> inventoryByName, Map<Integer, Integer> inventoryById,
+                                 boolean inventoryFull, boolean inventoryHasFood) {
             this.membersWorld = membersWorld;
             this.combatLevel = combatLevel;
             this.plane = plane;
             this.location = location;
             this.realLevels = realLevels;
             this.boostedLevels = boostedLevels;
+            this.inventoryByName = inventoryByName;
+            this.inventoryById = inventoryById;
+            this.inventoryFull = inventoryFull;
+            this.inventoryHasFood = inventoryHasFood;
         }
     }
 }

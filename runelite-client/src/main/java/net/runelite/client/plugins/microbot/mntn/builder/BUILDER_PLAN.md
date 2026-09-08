@@ -29,7 +29,7 @@ This document tracks the work to turn the builder into a simple, well-defined ac
 - The planner now sees content access, account snapshots, supply requirements, and session-local memory.
 - The planner can recursively resolve prerequisite chains up to a bounded depth, so a combat task can request gear/food, supply can request coins, and money-making can become the chosen next step.
 - Config is grouped into General, Overlay, Skill Targets, Money, and Quests sections. Skill target `0` now means that skill goal is ignored.
-- Skill Weights are configurable from 1-9 and directly drive skill goal priority, matching the useful public pattern from Aeglen-style account-builder interfaces while keeping behavior explicit.
+- Skill targets are the only progression controls. Each local Microbot profile receives a stable, small `45-55` goal-preference variation so accounts can take different routes without exposing per-skill weights or letting preferences outweigh method value.
 - Supply Policy config can enable or disable Grand Exchange, shop, and ground-pickup routes, which lets fresh-F2P testing run with self-contained acquisition rules.
 - Overlay visibility/detail is configurable, and the overlay now renders from a single read-only script state instead of loose debug fields.
 - The overlay shows the active runner state, activity, strategy, commitment time, task status, stop reason, content mode, session flavor, goal, requirement, and score when detailed mode is enabled.
@@ -175,7 +175,7 @@ Public references used for product inspiration:
 Ideas to adopt:
 
 - [x] Toggle skills by setting target `0`.
-- [x] Add 1-9 skill weights to bias account progression.
+- [x] Replace configurable skill weights with stable per-profile goal-preference variation.
 - [x] Add route policy toggles for Grand Exchange, shops, and ground pickups.
 - [x] Keep requirements visible in planner/overlay instead of hidden inside task code.
 - [x] Keep explicit supported supply, gear, quest, and method catalogs.
@@ -293,7 +293,7 @@ Ideas to adopt:
 - [x] Add overlay visibility and detailed/compact controls.
 - [x] Add level ranges to skill target settings.
 - [x] Treat skill target `0` as disabled in goal building.
-- [x] Add 1-9 skill weights and use them as explicit skill goal priorities.
+- [x] Remove per-skill weight controls. Build each configured skill and quest goal with a deterministic profile-specific priority in a narrow range, so user targets drive progression and route quality remains dominant.
 - [x] Add route policy controls for GE, shops, and ground pickups.
 - [x] Add a read-only `MntnBuilderOverlayState` so overlay rendering does not depend on loose script fields.
 - [x] Queue and debounce config changes so planner/cache work runs only on the script worker, not RuneLite's config UI thread.
@@ -344,7 +344,7 @@ Ideas to adopt:
 - [x] `:client:compileJava` passes after task stop-reason expansion, bar money-making methods, and F2P catalog expansion.
 - [x] `:client:compileJava` passes after recursive prerequisite planning and combat task/policy fixes.
 - [x] `:client:compileJava` passes after config grouping and overlay state cleanup.
-- [x] `:client:compileJava` passes after Aeglen-style skill weights.
+- [x] `:client:compileJava` passes after replacing skill weights with profile goal preferences.
 - [x] `:client:compileJava` passes after fresh-F2P supply route policy controls.
 - [x] `:client:compileJava` passes after immediate startup replan and no-gear chicken bootstrap.
 - [x] `:client:compileJava` passes after no-runnable-plan diagnostics.
@@ -352,7 +352,7 @@ Ideas to adopt:
 - [x] Focused `:client:runUnitTests --tests net.runelite.client.plugins.microbot.mntn.builder.core.planner.AccountPlannerTest --tests net.runelite.client.plugins.microbot.mntn.builder.activities.questing.QuestCatalogTest` passes.
 - [x] Focused `:client:runUnitTests --tests net.runelite.client.plugins.microbot.mntn.builder.core.planner.AccountPlannerTest --tests net.runelite.client.plugins.microbot.mntn.builder.activities.questing.QuestCatalogTest --tests net.runelite.client.plugins.microbot.mntn.builder.activities.combat.CombatStrategyTest` passes.
 - [x] Focused planner, quest catalog, and combat strategy tests pass after config/overlay cleanup.
-- [x] Focused builder script, planner, quest catalog, and combat strategy tests pass after skill weights.
+- [x] Focused builder script, planner, quest catalog, and combat strategy tests pass after profile goal preferences.
 - [x] Focused builder script, planner, quest catalog, combat strategy, and supply route policy tests pass after fresh-F2P route policy controls.
 - [x] Focused builder script, planner, quest catalog, combat strategy, and supply route policy tests pass after immediate startup replan and no-gear chicken bootstrap.
 - [x] Focused builder script, planner, quest catalog, combat strategy, and supply route policy tests pass after no-runnable-plan diagnostics.
@@ -360,7 +360,7 @@ Ideas to adopt:
 - [x] Planner unit tests cover fresh-F2P combat targets selecting unarmed chickens when no gear/coins are available.
 - [x] Planner unit tests cover the banked-bronze-axe/31-coin fresh-account combat bootstrap fallback.
 - [x] `TaskActionGuard` unit tests cover retry cooldowns, attempt exhaustion, and confirmation reset behavior.
-- [x] Builder script tests cover skill target disabling and weight-to-priority behavior.
+- [x] Builder script tests cover skill target disabling and deterministic, bounded profile goal preferences.
 - [x] Supply activity tests cover disabling GE and ground-pickup routes by policy.
 - [x] Combat strategy unit tests cover no-gear chicken bootstrap, banked weapon requirements, risk-based starter food requirements, missing-food quantities, and prayer melee-style selection.
 - [x] Focused combat and money-making unit tests pass after self-owned value-filtered loot, Prayer-only bones, and full-inventory combat banking changes.
@@ -398,8 +398,18 @@ Ideas to adopt:
 - [x] Make every planner `canExecute`, `requirements`, `score`, and estimate calculation local and bounded. Builder planning no longer calls the GE Tracker; remaining game reads use one client-thread snapshot per planner operation.
 - [x] Replace live GE values in planner-time money and supply scoring with conservative Builder catalog values. The same bounded estimates now seed Builder GE offers, removing GE Tracker HTTP waits from tasks as well.
 - [x] Add a small builder-owned, in-memory planning snapshot captured once per pass: relevant skill levels, combat level, and location. Reuse it for that pass instead of repeatedly crossing to the client thread. It remains F2P-focused; the old full quest snapshot is still avoided on F2P passes.
-- [x] Add a one-entry last-good-plan cache that survives plugin disable/enable within the same client session. It only reuses a candidate when the planner config fingerprint, goal, requirement, and strategy checks remain valid.
+- [x] Persist one last-known broad goal per local Microbot profile in `~/.runelite/microbot/mntn-builder/`, so startup direction survives plugin, client, and IntelliJ debug restarts. The record contains only a configuration fingerprint, goal name, and timestamp; it expires after 30 days.
+- [x] After bank warming, resolve the next valid step for the remembered goal before considering unrelated goals. The targeted evaluation retains normal prerequisite handling (for example, buy or withdraw a missing tool); if the goal is complete, blocked, stale, or incompatible with the current config, immediately use the full planner.
 - [x] Add aggregate timing diagnostics for snapshot capture and candidate evaluation, emitted only when a stage exceeds 250 ms. Per-candidate debug logs remain disabled.
-- [x] Add unit coverage for local price estimates and startup-plan cache reuse/rejection. Focused Builder planner, script, guard, cache, and price tests pass with `:client:compileJava`.
-- [x] Replace smelting's implicit `SPACE` action with an explicit click on the selected bar's production widget entry. The existing action guard retries and replans after bounded failed confirmations.
-- [ ] Re-run the live Agent Server startup trace. Acceptance target: a visible task/goal selection within two script ticks after bank warming, including when the GE Tracker is unreachable.
+- [x] Add unit coverage for local price estimates and durable startup-direction cache reuse/rejection, including mismatched profile/configuration protection. Focused Builder planner, script, guard, bank-view, cache, and supply tests pass with `:client:compileJava`.
+- [x] Simplify smelting to one verified production flow: interact with a reachable furnace, wait up to five seconds for the furnace interface, pause for a randomized `800-3000 ms`, press `SPACE`, and wait for an ingredient count reduction. Live Agent Server tracing showed the generic action guard could remain in `WAITING` while the production interface was closed, so smelting now owns two local, explicit recovery counters instead: three failed interface opens or three failed production confirmations replan. This avoids an indefinite `RUNNING` state while preserving bounded recovery.
+- [x] Multi-item bank withdrawals now request and confirm one item at a time while keeping the bank open. A copper/tin loadout no longer starts both asynchronous withdrawals in the same tick or closes between items; it advances only after each requested amount is visible in inventory.
+- [x] Add a shared pre-task inventory preparation step for fishing, mining, woodcutting, cooking, and smelting. Before travel, it keeps only the selected strategy's declared inputs and uses the bounded banking task to deposit unrelated inventory items. Full inventories are always prepared even if an inventory cache is briefly stale; equipment is intentionally left unchanged.
+- [x] Smelting performs a short second animation/movement check after an idle observation before it reopens the furnace or presses `SPACE`. This absorbs brief gaps between bars without interrupting active production.
+- [x] Freeze the warmed `BankView` cache for each planner pass. The live thread dump showed recursive candidate scoring repeatedly waiting in `Rs2Bank.isOpen()` through a client-thread bank-pin widget read; planner bank counts are now cache-only, while banking tasks retain explicit refreshes after every bank action.
+- [x] Add a `BankView` regression test proving planner reads do not probe the live bank widget. `:client:compileJava` and focused Builder planner, script, bank-view, and guard tests pass.
+- [x] Freeze inventory counts, occupied slots, and food presence in the same client-thread snapshot as planner skills and location. Live thread inspection showed a planner stuck in `Rs2Inventory.itemQuantity()` while recursively evaluating money prerequisites; planner-time inventory reads are now map lookups and cannot trigger a second client-thread inventory query.
+- [x] Clear Web Walker state when a Builder task ends with `TRAVEL_FAILED` and before every new Builder plan begins. A stale route can no longer bleed from a failed, skipped, or completed task into the next activity; the next task starts a fresh walker route while existing task-level bounded travel guards still decide when to replan.
+- [x] Add an `InventoryView` regression test for the frozen planner inventory read.
+- [x] Add unit coverage for task-inventory preparation decisions: a matching loadout starts immediately, while unrelated or full inventory enters banking before the productive task starts.
+- [ ] Re-run the live Agent Server startup trace. Acceptance target: on a matching cached direction, a visible task/goal selection within two script ticks after bank warming; when it cannot produce a valid next step, one full planner pass follows without a planning loop.

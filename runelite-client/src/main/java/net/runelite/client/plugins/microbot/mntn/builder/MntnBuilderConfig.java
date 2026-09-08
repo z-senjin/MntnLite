@@ -45,13 +45,6 @@ public interface MntnBuilderConfig extends Config {
     String skillTargetsSection = "skillTargetsSection";
 
     @ConfigSection(
-            name = "Skill Weights",
-            description = "Higher weights make unfinished skill goals more likely to be selected",
-            position = 4
-    )
-    String skillWeightsSection = "skillWeightsSection";
-
-    @ConfigSection(
             name = "Supply Policy",
             description = "Controls how the builder may acquire supplies",
             position = 5
@@ -312,114 +305,6 @@ public interface MntnBuilderConfig extends Config {
     )
     default boolean allowGroundPickups() {
         return true;
-    }
-
-    @Range(min = 1, max = 9)
-    @ConfigItem(
-            keyName = "fishingWeight",
-            name = "Fishing weight",
-            description = "Priority weight for Fishing goals",
-            section = "skillWeightsSection",
-            position = 1
-    )
-    default int fishingWeight() {
-        return 5;
-    }
-
-    @Range(min = 1, max = 9)
-    @ConfigItem(
-            keyName = "cookingWeight",
-            name = "Cooking weight",
-            description = "Priority weight for Cooking goals",
-            section = "skillWeightsSection",
-            position = 2
-    )
-    default int cookingWeight() {
-        return 5;
-    }
-
-    @Range(min = 1, max = 9)
-    @ConfigItem(
-            keyName = "woodcuttingWeight",
-            name = "Woodcutting weight",
-            description = "Priority weight for Woodcutting goals",
-            section = "skillWeightsSection",
-            position = 3
-    )
-    default int woodcuttingWeight() {
-        return 5;
-    }
-
-    @Range(min = 1, max = 9)
-    @ConfigItem(
-            keyName = "miningWeight",
-            name = "Mining weight",
-            description = "Priority weight for Mining goals",
-            section = "skillWeightsSection",
-            position = 4
-    )
-    default int miningWeight() {
-        return 5;
-    }
-
-    @Range(min = 1, max = 9)
-    @ConfigItem(
-            keyName = "smithingWeight",
-            name = "Smithing weight",
-            description = "Priority weight for Smithing goals",
-            section = "skillWeightsSection",
-            position = 5
-    )
-    default int smithingWeight() {
-        return 5;
-    }
-
-    @Range(min = 1, max = 9)
-    @ConfigItem(
-            keyName = "attackWeight",
-            name = "Attack weight",
-            description = "Priority weight for Attack goals",
-            section = "skillWeightsSection",
-            position = 6
-    )
-    default int attackWeight() {
-        return 5;
-    }
-
-    @Range(min = 1, max = 9)
-    @ConfigItem(
-            keyName = "strengthWeight",
-            name = "Strength weight",
-            description = "Priority weight for Strength goals",
-            section = "skillWeightsSection",
-            position = 7
-    )
-    default int strengthWeight() {
-        return 5;
-    }
-
-    @Range(min = 1, max = 9)
-    @ConfigItem(
-            keyName = "defenceWeight",
-            name = "Defence weight",
-            description = "Priority weight for Defence goals",
-            section = "skillWeightsSection",
-            position = 8
-    )
-    default int defenceWeight() {
-        return 5;
-    }
-
-    @Range(min = 1, max = 9)
-    @ConfigItem(
-            keyName = "prayerWeight",
-            name = "Prayer weight",
-            description = "Priority weight for Prayer goals",
-            section = "skillWeightsSection",
-            position = 9
-    )
-    default int prayerWeight() {
-        return 5;
     }
 
     @ConfigItem(

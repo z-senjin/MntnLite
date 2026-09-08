@@ -9,45 +9,54 @@ import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.Activ
 import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.Requirement;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
 import org.junit.After;
+import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
 
 import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertSame;
 
 public class StartupPlanCacheTest {
 
+    @Rule
+    public final TemporaryFolder temporaryFolder = new TemporaryFolder();
+
+    @Before
+    public void useTemporaryCacheDirectory() throws Exception {
+        StartupPlanCache.setCacheDirectoryForTests(temporaryFolder.newFolder("startup-cache").toPath());
+    }
+
     @After
     public void clearCache() {
-        StartupPlanCache.clear();
+        StartupPlanCache.resetCacheDirectoryForTests();
     }
 
     @Test
-    public void reusesMatchingViablePlan() {
+    public void persistsMatchingGoalDirection() {
         TestRequirement requirement = new TestRequirement();
         TestStrategy strategy = new TestStrategy();
         Plan plan = new Plan(new TestGoal(), requirement, new TestActivity(), strategy, 10);
 
-        StartupPlanCache.remember("same", plan);
+        StartupPlanCache.remember("42", "same", plan);
 
-        assertSame(plan, StartupPlanCache.takeIfUsable("same", new AccountContext()));
+        StartupPlanCache.Direction direction = StartupPlanCache.takeIfUsable("42", "same");
+        assertEquals("Test goal", direction.goalName());
     }
 
     @Test
-    public void rejectsChangedConfigurationOrUnavailableStrategy() {
+    public void rejectsChangedConfigurationOrProfile() {
         TestRequirement requirement = new TestRequirement();
         TestStrategy strategy = new TestStrategy();
         Plan plan = new Plan(new TestGoal(), requirement, new TestActivity(), strategy, 10);
-        StartupPlanCache.remember("first", plan);
+        StartupPlanCache.remember("42", "first", plan);
 
-        assertNull(StartupPlanCache.takeIfUsable("changed", new AccountContext()));
-
-        StartupPlanCache.remember("same", plan);
-        strategy.executable = false;
-        assertNull(StartupPlanCache.takeIfUsable("same", new AccountContext()));
+        assertNull(StartupPlanCache.takeIfUsable("42", "changed"));
+        assertNull(StartupPlanCache.takeIfUsable("99", "first"));
     }
 
     private static final class TestGoal implements Goal {

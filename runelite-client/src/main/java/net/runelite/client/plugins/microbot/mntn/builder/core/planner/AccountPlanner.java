@@ -145,6 +145,62 @@ public class AccountPlanner {
     }
 
     /**
+     * Resolves the next valid action for one remembered goal without evaluating unrelated goals.
+     * Strategy prerequisites are still evaluated normally, so a resumed goal can acquire a
+     * missing item before continuing its original activity.
+     */
+    public Plan planForGoal(String goalName, AccountContext context) {
+        if (goalName == null || goalName.isBlank()) {
+            return null;
+        }
+        return withPlanningSnapshot(context, "cached-goal evaluation", () -> planForGoalInSnapshot(goalName, context));
+    }
+
+    private Plan planForGoalInSnapshot(String goalName, AccountContext context) {
+        Goal goal = goals.stream()
+                .filter(candidate -> goalName.equals(candidate.name()))
+                .filter(candidate -> !candidate.isComplete(context))
+                .findFirst()
+                .orElse(null);
+        if (goal == null) {
+            return null;
+        }
+
+        AccountSnapshot snapshot = contentSnapshot(context);
+        List<Plan> candidates = new ArrayList<>();
+        for (Requirement requirement : goal.requirements(context)) {
+            if (requirement.isSatisfied(context)) {
+                continue;
+            }
+            for (ActivityRequest request : requirement.getWaysToSatisfy(context)) {
+                for (Activity activity : activities) {
+                    if (!activity.canProvide(request, context)) {
+                        continue;
+                    }
+                    for (Strategy strategy : activity.getStrategies(context, request)) {
+                        addStrategyCandidate(
+                                candidates,
+                                goal,
+                                requirement,
+                                activity,
+                                strategy,
+                                context,
+                                snapshot,
+                                0,
+                                requirement,
+                                activity,
+                                strategy
+                        );
+                    }
+                }
+            }
+        }
+
+        candidates.sort(Comparator.comparingDouble(Plan::score).reversed());
+        return candidates.isEmpty() ? null : candidates.get(0);
+    }
+
+    /**
      * Advances a prerequisite chain without letting an unrelated strategy replace the
      * original objective between individual supply steps.
      */

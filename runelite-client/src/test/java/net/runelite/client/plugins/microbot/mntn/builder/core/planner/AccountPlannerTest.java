@@ -345,7 +345,8 @@ public class AccountPlannerTest {
 
         assertNotNull(planner.diagnoseNoPlan(context), plan);
         assertEquals(ActivityType.COMBAT, plan.activity().type());
-        assertEquals("Chickens_Attack", plan.strategy().name());
+        assertTrue("Selected combat style must match the selected combat goal",
+                plan.strategy().name().endsWith("_" + plan.goal().name().split(" ")[0]));
         assertNotNull("A selected fresh-F2P plan must create a runnable task", plan.strategy().createTask(context));
     }
 
