@@ -97,6 +97,7 @@ public class MntnBuilderScript extends Script {
     private int lastPrayerTarget;
     private boolean lastCooksAssistant;
     private boolean lastDoricsQuest;
+    private boolean lastSheepShearer;
     private ActivityIntensity lastAntibanIntensity;
     private AllowedContent lastAllowedContent;
     private SessionFlavor lastSessionFlavor;
@@ -161,6 +162,10 @@ public class MntnBuilderScript extends Script {
             addQuestGoal(goals, Quest.DORICS_QUEST, profileId);
         }
 
+        if (cfg.enableSheepShearer()) {
+            addQuestGoal(goals, Quest.SHEEP_SHEARER, profileId);
+        }
+
         return goals;
     }
 
@@ -197,6 +202,7 @@ public class MntnBuilderScript extends Script {
         lastPrayerTarget = cfg.prayerTarget();
         lastCooksAssistant = cfg.enableCooksAssistant();
         lastDoricsQuest = cfg.enableDoricsQuest();
+        lastSheepShearer = cfg.enableSheepShearer();
         lastAntibanIntensity = cfg.antibanIntensity();
         lastAllowedContent = cfg.allowedContent();
         lastSessionFlavor = cfg.sessionFlavor();
@@ -222,6 +228,7 @@ public class MntnBuilderScript extends Script {
                 || cfg.prayerTarget() != lastPrayerTarget
                 || cfg.enableCooksAssistant() != lastCooksAssistant
                 || cfg.enableDoricsQuest() != lastDoricsQuest
+                || cfg.enableSheepShearer() != lastSheepShearer
                 || cfg.antibanIntensity() != lastAntibanIntensity
                 || cfg.allowedContent() != lastAllowedContent
                 || cfg.sessionFlavor() != lastSessionFlavor
@@ -321,6 +328,7 @@ public class MntnBuilderScript extends Script {
                     + ", strengthTarget=" + config.strengthTarget() + ", defenceTarget=" + config.defenceTarget()
                     + ", prayerTarget=" + config.prayerTarget()
                     + ", cooksAssistant=" + config.enableCooksAssistant() + ", doricsQuest=" + config.enableDoricsQuest()
+                    + ", sheepShearer=" + config.enableSheepShearer()
                     + ", antibanIntensity=" + config.antibanIntensity()
                     + ", sessionFlavor=" + config.sessionFlavor()
                     + ", showOverlay=" + config.showOverlay()
@@ -897,7 +905,7 @@ public class MntnBuilderScript extends Script {
             lastOverlaySkillSnapshotAtMs = now;
         }
         overlayQuestFocusAvailable = config != null
-                && (config.enableCooksAssistant() || config.enableDoricsQuest());
+                && (config.enableCooksAssistant() || config.enableDoricsQuest() || config.enableSheepShearer());
         MntnBuilderRuntimeStatus.publish(getOverlayState());
     }
 

@@ -39,7 +39,7 @@ public class SupplyCatalog {
 
         List<SupplyRoute> upgradeFallbacks = new ArrayList<>();
         addKnownRoutes(routes, upgradeFallbacks, itemName, quantity);
-        routes.add(SupplyRoute.grandExchange(itemName, quantity, 0, 1.10));
+        routes.add(SupplyRoute.grandExchange(itemName, quantity, 0, 1.20));
         routes.addAll(upgradeFallbacks);
         return routes;
     }

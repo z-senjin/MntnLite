@@ -13,6 +13,7 @@ public class QuestCatalogTest {
     public void exposesSupportedQuestMetadata() {
         QuestMetadata cooksAssistant = QuestCatalog.get(Quest.COOKS_ASSISTANT).orElseThrow(AssertionError::new);
         QuestMetadata doricsQuest = QuestCatalog.get(Quest.DORICS_QUEST).orElseThrow(AssertionError::new);
+        QuestMetadata sheepShearer = QuestCatalog.get(Quest.SHEEP_SHEARER).orElseThrow(AssertionError::new);
 
         assertEquals(Quest.COOKS_ASSISTANT, cooksAssistant.getQuest());
         assertEquals(1, cooksAssistant.getQuestPoints());
@@ -23,5 +24,10 @@ public class QuestCatalogTest {
         assertEquals(1, doricsQuest.getQuestPoints());
         assertEquals(Integer.valueOf(1300), doricsQuest.xpRewards().get(Skill.MINING));
         assertTrue(doricsQuest.requirements().size() >= 4);
+
+        assertEquals(Quest.SHEEP_SHEARER, sheepShearer.getQuest());
+        assertEquals(1, sheepShearer.getQuestPoints());
+        assertEquals(Integer.valueOf(150), sheepShearer.xpRewards().get(Skill.CRAFTING));
+        assertEquals(1, sheepShearer.requirements().size());
     }
 }

@@ -4,6 +4,7 @@ import net.runelite.api.Skill;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.Strategy;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
+import net.runelite.client.plugins.microbot.mntn.builder.core.ContentAccess;
 import net.runelite.client.plugins.microbot.mntn.builder.core.SupplyBatchPolicy;
 import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.ItemRequirement;
 import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.Requirement;
@@ -46,11 +47,11 @@ public class CraftingStrategy implements Strategy {
      * product. They are kept with the method so the task remains a simple select-and-make flow.
      */
     public enum Method {
-        CUT_OPAL(1, 15.0, Mode.GEM_CUTTING, "Uncut opal", "Opal", 0, 0,
+        CUT_OPAL(ContentAccess.MEMBERS, 1, 15.0, Mode.GEM_CUTTING, "Uncut opal", "Opal", 0, 0,
                 Input.consumed("Uncut opal"), Input.tool("Chisel")),
-        CUT_JADE(13, 20.0, Mode.GEM_CUTTING, "Uncut jade", "Jade", 0, 0,
+        CUT_JADE(ContentAccess.MEMBERS, 13, 20.0, Mode.GEM_CUTTING, "Uncut jade", "Jade", 0, 0,
                 Input.consumed("Uncut jade"), Input.tool("Chisel")),
-        CUT_RED_TOPAZ(16, 25.0, Mode.GEM_CUTTING, "Uncut red topaz", "Red topaz", 0, 0,
+        CUT_RED_TOPAZ(ContentAccess.MEMBERS, 16, 25.0, Mode.GEM_CUTTING, "Uncut red topaz", "Red topaz", 0, 0,
                 Input.consumed("Uncut red topaz"), Input.tool("Chisel")),
         GOLD_RING(5, 15.0, Mode.GOLD_JEWELLERY, "Gold bar", "Gold ring", 446, 7,
                 Input.consumed("Gold bar"), Input.tool("Ring mould")),
@@ -83,9 +84,17 @@ public class CraftingStrategy implements Strategy {
         public final int craftingWidgetGroup;
         public final int productWidgetChild;
         public final Input[] inputs;
+        public final ContentAccess contentAccess;
 
         Method(int requiredLevel, double xpValue, Mode mode, String primaryInput, String productName,
                int craftingWidgetGroup, int productWidgetChild, Input... inputs) {
+            this(ContentAccess.FREE_TO_PLAY, requiredLevel, xpValue, mode, primaryInput, productName,
+                    craftingWidgetGroup, productWidgetChild, inputs);
+        }
+
+        Method(ContentAccess contentAccess, int requiredLevel, double xpValue, Mode mode, String primaryInput,
+               String productName, int craftingWidgetGroup, int productWidgetChild, Input... inputs) {
+            this.contentAccess = contentAccess;
             this.requiredLevel = requiredLevel;
             this.xpValue = xpValue;
             this.mode = mode;
@@ -116,6 +125,11 @@ public class CraftingStrategy implements Strategy {
     @Override
     public String name() {
         return "CRAFT_" + method.name();
+    }
+
+    @Override
+    public ContentAccess contentAccess() {
+        return method.contentAccess;
     }
 
     @Override

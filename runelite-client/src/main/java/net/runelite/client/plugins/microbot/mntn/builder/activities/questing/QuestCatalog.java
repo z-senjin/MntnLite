@@ -5,6 +5,7 @@ import net.runelite.api.Skill;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.questing.quests.cooksassistant.CooksAssistantStrategy;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.questing.quests.doricsquest.DoricQuestStrategy;
+import net.runelite.client.plugins.microbot.mntn.builder.activities.questing.quests.sheepshearer.SheepShearerStrategy;
 import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.ItemRequirement;
 import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.SkillRequirement;
 
@@ -33,6 +34,7 @@ public final class QuestCatalog {
         Map<Quest, QuestMetadata> quests = new EnumMap<>(Quest.class);
         quests.put(Quest.COOKS_ASSISTANT, cooksAssistant());
         quests.put(Quest.DORICS_QUEST, doricsQuest());
+        quests.put(Quest.SHEEP_SHEARER, sheepShearer());
         return Collections.unmodifiableMap(quests);
     }
 
@@ -64,6 +66,19 @@ public final class QuestCatalog {
                         new ItemRequirement(DoricQuestStrategy.COPPER_ORE, DoricQuestStrategy.COPPER_NEEDED),
                         new ItemRequirement(DoricQuestStrategy.IRON_ORE, DoricQuestStrategy.IRON_NEEDED)
                 ),
+                xp,
+                1
+        );
+    }
+
+    private static QuestMetadata sheepShearer() {
+        Map<Skill, Integer> xp = new EnumMap<>(Skill.class);
+        xp.put(Skill.CRAFTING, 150);
+        return new QuestMetadata(
+                Quest.SHEEP_SHEARER,
+                new WorldPoint(3190, 3273, 0),
+                Collections.singletonList(new ItemRequirement(
+                        SheepShearerStrategy.BALL_OF_WOOL, SheepShearerStrategy.BALLS_NEEDED)),
                 xp,
                 1
         );

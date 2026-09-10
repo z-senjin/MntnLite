@@ -224,7 +224,11 @@ public class Rs2GrandExchange {
 
                 sleepUntil(() -> GrandExchangeWidget.getPricePerItemButton_X() != null);
 
-                setPrice(request.getPrice());
+                // A zero price intentionally preserves the GE-selected default. This lets
+                // callers use the native +/-5% controls without opening the price chatbox.
+                if (request.getPrice() > 0) {
+                    setPrice(request.getPrice());
+                }
                 if (request.getPercent() != 0) {
                     adjustPriceByPercent(request.getPercent());
                 }

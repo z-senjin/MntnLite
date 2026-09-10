@@ -9,7 +9,7 @@ public final class SupplyBatchPolicy {
     public static final int MIN_CONSUMABLE_BATCH = 100;
     public static final int MAX_CONSUMABLE_BATCH = 500;
     private static final int DEFAULT_UNIT_PRICE = 100;
-    private static final double GE_PRICE_MULTIPLIER = 1.10;
+    private static final double GE_PRICE_MULTIPLIER = 1.20;
 
     private SupplyBatchPolicy() {
     }

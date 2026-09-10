@@ -509,4 +509,15 @@ public interface MntnBuilderConfig extends Config {
     default boolean enableDoricsQuest() {
         return true;
     }
+
+    @ConfigItem(
+            keyName = "enableSheepShearer",
+            name = "Sheep Shearer",
+            description = "Complete Sheep Shearer when 20 balls of wool can be supplied",
+            section = "questsSection",
+            position = 3
+    )
+    default boolean enableSheepShearer() {
+        return false;
+    }
 }

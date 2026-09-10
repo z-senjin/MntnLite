@@ -6,6 +6,7 @@ import net.runelite.client.plugins.microbot.mntn.builder.activities.ActivityType
 import net.runelite.client.plugins.microbot.mntn.builder.activities.Strategy;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.questing.quests.cooksassistant.CooksAssistantStrategy;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.questing.quests.doricsquest.DoricQuestStrategy;
+import net.runelite.client.plugins.microbot.mntn.builder.activities.questing.quests.sheepshearer.SheepShearerStrategy;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.ActivityRequest;
 
@@ -44,12 +45,16 @@ public class QuestingActivity implements Activity {
             if (quest == Quest.DORICS_QUEST) {
                 return Collections.singletonList(new DoricQuestStrategy());
             }
+            if (quest == Quest.SHEEP_SHEARER) {
+                return Collections.singletonList(new SheepShearerStrategy());
+            }
             return Collections.emptyList();
         }
 
         List<Strategy> strategies = new ArrayList<>();
         strategies.add(new CooksAssistantStrategy());
         strategies.add(new DoricQuestStrategy());
+        strategies.add(new SheepShearerStrategy());
         return strategies;
     }
 }

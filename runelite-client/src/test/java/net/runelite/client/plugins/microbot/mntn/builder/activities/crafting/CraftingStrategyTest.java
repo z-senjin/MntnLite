@@ -3,6 +3,7 @@ package net.runelite.client.plugins.microbot.mntn.builder.activities.crafting;
 import net.runelite.api.Skill;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.core.BankView;
+import net.runelite.client.plugins.microbot.mntn.builder.core.ContentAccess;
 import net.runelite.client.plugins.microbot.mntn.builder.core.InventoryView;
 import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.ActivityRequest;
 import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.ItemRequirement;
@@ -19,12 +20,10 @@ import static org.junit.Assert.assertTrue;
 public class CraftingStrategyTest {
 
     @Test
-    public void opalCuttingProvidesALevelOneCraftingRoute() {
-        TestContext context = new TestContext();
-        context.bank.items.put("Uncut opal", 27);
-        context.bank.items.put("Chisel", 1);
+    public void opalCuttingIsMembersOnly() {
+        CraftingStrategy strategy = new CraftingStrategy(CraftingStrategy.Method.CUT_OPAL);
 
-        assertTrue(new CraftingStrategy(CraftingStrategy.Method.CUT_OPAL).canExecute(context));
+        assertEquals(ContentAccess.MEMBERS, strategy.contentAccess());
     }
 
     @Test

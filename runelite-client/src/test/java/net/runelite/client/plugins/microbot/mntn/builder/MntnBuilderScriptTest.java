@@ -1,6 +1,7 @@
 package net.runelite.client.plugins.microbot.mntn.builder;
 
 import net.runelite.api.Skill;
+import net.runelite.api.Quest;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.ActivityType;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.Strategy;
 import net.runelite.client.plugins.microbot.breakhandler.BreakHandlerState;
@@ -173,6 +174,29 @@ public class MntnBuilderScriptTest {
     }
 
     @Test
+    public void sheepShearerAddsItsQuestGoalWhenEnabled() {
+        TestConfig config = new TestConfig();
+        config.fishingTarget = 0;
+        config.cookingTarget = 0;
+        config.firemakingTarget = 0;
+        config.woodcuttingTarget = 0;
+        config.miningTarget = 0;
+        config.smithingTarget = 0;
+        config.attackTarget = 0;
+        config.strengthTarget = 0;
+        config.defenceTarget = 0;
+        config.prayerTarget = 0;
+        config.sheepShearer = true;
+
+        List<Goal> goals = new MntnBuilderScript().buildGoals(config);
+
+        assertEquals(1, goals.size());
+        assertEquals("Sheep Shearer", goals.get(0).name());
+        assertEquals(MntnBuilderScript.profileGoalPriority("default", Quest.SHEEP_SHEARER.name()),
+                goals.get(0).priority(new AccountContext()), 0.01);
+    }
+
+    @Test
     public void forceReplanQueuesWorkInsteadOfRunningPlannerFromCaller() {
         MntnBuilderScript script = new MntnBuilderScript();
 
@@ -274,6 +298,7 @@ public class MntnBuilderScriptTest {
         private int strengthTarget = 20;
         private int defenceTarget = 20;
         private int prayerTarget = 20;
+        private boolean sheepShearer;
 
         @Override
         public int fishingTarget() {
@@ -333,6 +358,11 @@ public class MntnBuilderScriptTest {
         @Override
         public boolean enableDoricsQuest() {
             return false;
+        }
+
+        @Override
+        public boolean enableSheepShearer() {
+            return sheepShearer;
         }
     }
 }

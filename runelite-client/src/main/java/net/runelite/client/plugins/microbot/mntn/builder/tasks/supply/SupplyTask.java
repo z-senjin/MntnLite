@@ -31,7 +31,7 @@ import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
 public class SupplyTask implements Task {
 
     private static final int MAX_GE_COLLECT_ATTEMPTS = 20;
-    private static final int GRAND_EXCHANGE_BUY_PERCENT = 10;
+    private static final int GRAND_EXCHANGE_BUY_PERCENT = 20;
 
     private enum Phase {
         CHECK,
@@ -308,14 +308,10 @@ public class SupplyTask implements Task {
         beforeRouteInventoryCount = desiredInventoryCount(context);
         boolean placed;
         try {
-            placed = Rs2GrandExchange.processOffer(GrandExchangeRequest.builder()
-                    .action(GrandExchangeAction.BUY)
-                    .itemName(route.getItemName())
-                    .exact(true)
-                    .price(baseUnitPrice())
-                    .percent(GRAND_EXCHANGE_BUY_PERCENT)
-                    .quantity(Math.max(1, missingDesiredQuantity(context)))
-                    .build());
+            placed = Rs2GrandExchange.processOffer(grandExchangeBuyRequest(
+                    route.getItemName(),
+                    Math.max(1, missingDesiredQuantity(context))
+            ));
         } catch (RuntimeException ex) {
             return stop(TaskStatus.BLOCKED, hasOpenGrandExchangeSlot()
                     ? TaskStopReason.GE_OFFER_FAILED
@@ -328,6 +324,18 @@ public class SupplyTask implements Task {
         geCollectAttempts = 0;
         phase = Phase.GE_COLLECT;
         return TaskStatus.RUNNING;
+    }
+
+    static GrandExchangeRequest grandExchangeBuyRequest(String itemName, int quantity) {
+        return GrandExchangeRequest.builder()
+                .action(GrandExchangeAction.BUY)
+                .itemName(itemName)
+                .exact(true)
+                // Leave the GE-selected default price intact, then use its +5% button four times.
+                .price(0)
+                .percent(GRAND_EXCHANGE_BUY_PERCENT)
+                .quantity(Math.max(1, quantity))
+                .build();
     }
 
     private boolean hasOpenGrandExchangeSlot() {

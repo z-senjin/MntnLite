@@ -70,13 +70,13 @@ public class SupplyCatalogTest {
     }
 
     @Test
-    public void grandExchangeRoutesBudgetTenPercentAboveTheirBaseEstimate() {
+    public void grandExchangeRoutesBudgetTwentyPercentAboveTheirBaseEstimate() {
         SupplyRoute route = routesFor("Black axe").stream()
                 .filter(candidate -> candidate.getType() == SupplyRouteType.GRAND_EXCHANGE)
                 .findFirst()
                 .orElseThrow(AssertionError::new);
 
-        assertEquals(1.10, route.getPriceMultiplier(), 0.0);
+        assertEquals(1.20, route.getPriceMultiplier(), 0.0);
     }
 
     private List<SupplyRoute> routesFor(String itemName) {
