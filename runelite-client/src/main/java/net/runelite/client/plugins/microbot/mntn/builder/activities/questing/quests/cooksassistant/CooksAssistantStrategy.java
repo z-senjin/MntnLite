@@ -6,12 +6,14 @@ import net.runelite.client.plugins.microbot.mntn.builder.activities.Strategy;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.questing.QuestCatalog;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.questing.QuestMetadata;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
+import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.ItemRequirement;
 import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.Requirement;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.questing.CooksAssistantTask;
 import net.runelite.client.plugins.microbot.util.math.Rs2Random;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 
 public class CooksAssistantStrategy implements Strategy {
@@ -33,7 +35,19 @@ public class CooksAssistantStrategy implements Strategy {
 
     @Override
     public List<Requirement> requirements(AccountContext context) {
-        return METADATA.requirements();
+        List<Requirement> requirements = new ArrayList<>();
+        for (Requirement requirement : METADATA.requirements()) {
+            if (!(requirement instanceof ItemRequirement)) {
+                requirements.add(requirement);
+                continue;
+            }
+            ItemRequirement item = (ItemRequirement) requirement;
+            int missing = item.getMissingAccountQuantity(context);
+            if (missing > 0) {
+                requirements.add(new ItemRequirement(item.getItemName(), missing));
+            }
+        }
+        return requirements;
     }
 
     @Override

@@ -207,6 +207,12 @@ public class CookingTask implements Task {
         int rawCount = context.inventory().getCount(method.rawItemName);
         boolean cooked = rawItemsBeforeCook > 0 && rawCount < rawItemsBeforeCook;
         TaskActionGuard.Result cookResult = cookGuard.evaluate("cook " + method.name(), cooked);
+        if (cookResult == TaskActionGuard.Result.CONFIRMED) {
+            // Consume this one observed raw-item reduction before the next cooking batch.
+            // Otherwise every later tick sees the same reduction as a permanent success.
+            rawItemsBeforeCook = 0;
+            return TaskStatus.RUNNING;
+        }
         if (cookResult == TaskActionGuard.Result.EXHAUSTED) {
             return stop(TaskStatus.REPLAN, TaskStopReason.PRODUCTION_WIDGET_FAILED);
         }

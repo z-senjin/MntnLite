@@ -3,31 +3,25 @@ package net.runelite.client.plugins.microbot.mntn.builder.tasks;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.banking.BankingTask;
 
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.LinkedHashSet;
-import java.util.Set;
-
-/** Deposits inventory items unrelated to a newly selected productive task. */
+/**
+ * Gives every selected task the same starting point: an empty inventory and no worn gear.
+ * The delegate then owns its complete loadout, travel, and action flow.
+ */
 public class TaskInventoryPreparationTask implements Task {
 
     private final Task delegate;
-    private final Set<String> keepItemNames;
     private BankingTask bankingTask;
     private boolean prepared;
     private TaskStopReason lastStopReason = TaskStopReason.NONE;
 
-    public TaskInventoryPreparationTask(Task delegate, String[] keepItemNames) {
+    public TaskInventoryPreparationTask(Task delegate) {
         this.delegate = delegate;
-        this.keepItemNames = keepItemNames == null
-                ? Collections.emptySet()
-                : Collections.unmodifiableSet(new LinkedHashSet<>(Arrays.asList(keepItemNames)));
     }
 
     @Override
     public TaskStatus tick(AccountContext context) {
         if (!prepared) {
-            if (!needsInventoryPreparation(context)) {
+            if (!needsPreparation(context)) {
                 prepared = true;
             } else {
                 return prepareInventory(context);
@@ -36,15 +30,15 @@ public class TaskInventoryPreparationTask implements Task {
         return delegate.tick(context);
     }
 
-    boolean needsInventoryPreparation(AccountContext context) {
-        return context.inventory().isFull() || !context.inventory().hasOnlyItems(keepItemNames);
+    boolean needsPreparation(AccountContext context) {
+        return !context.inventory().isEmpty() || !context.equipment().isEmpty();
     }
 
     private TaskStatus prepareInventory(AccountContext context) {
         if (bankingTask == null) {
             bankingTask = new BankingTask(
-                    BankingTask.Mode.DEPOSIT_ALL_EXCEPT,
-                    keepItemNames.toArray(new String[0])
+                    BankingTask.Mode.DEPOSIT_ALL,
+                    true
             );
         }
 
@@ -77,6 +71,6 @@ public class TaskInventoryPreparationTask implements Task {
 
     @Override
     public String describe() {
-        return prepared ? delegate.describe() : "Preparing inventory for " + delegate.describe();
+        return prepared ? delegate.describe() : "Banking before " + delegate.describe();
     }
 }

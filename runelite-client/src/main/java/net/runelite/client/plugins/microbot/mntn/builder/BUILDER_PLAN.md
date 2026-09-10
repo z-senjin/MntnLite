@@ -16,7 +16,7 @@ This document tracks the work to turn the builder into a simple, well-defined ac
 - `AccountSnapshot`: one read-only view of account state per planning pass.
 - `Goal`: desired account outcome, such as skill level, quest completion, items, gear, or money.
 - `Requirement`: typed blocker or need, such as item, equipment, money, skill, quest, location, or safety.
-- `Activity`: category that can satisfy requirements, such as fishing, mining, supply, questing, combat, or money-making.
+- `Activity`: category that can satisfy requirements, such as fishing, mining, supply, questing, or combat.
 - `Strategy`: one concrete way to perform an activity, with declared content access, requirements, score inputs, and task creation.
 - `Task`: small phase machine that executes a chosen strategy and returns clear status.
 - `PlannerScorer`: centralized scoring for readiness, distance, XP, profit, risk, unlock value, and repetition.
@@ -27,26 +27,22 @@ This document tracks the work to turn the builder into a simple, well-defined ac
 - F2P is the active content mode; members content should be added behind `ContentAccess.MEMBERS`.
 - Real testing should assume mostly fresh F2P accounts: low/no coins, empty or poor bank, no teleports, starter stats, and short Lumbridge/Varrock/Port Sarim progression paths.
 - The planner now sees content access, account snapshots, supply requirements, and session-local memory.
-- The planner can recursively resolve prerequisite chains up to a bounded depth, so a combat task can request gear/food, supply can request coins, and money-making can become the chosen next step.
+- The planner can resolve a bounded prerequisite lookup, so a combat task can request gear/food and supply can withdraw coins already owned in the bank. It only selects that immediate next task; every terminal task result triggers a fresh live-state plan.
 - Config is grouped into General, Overlay, Skill Targets, Money, and Quests sections. Skill target `0` now means that skill goal is ignored.
 - Skill targets are the only progression controls. Each local Microbot profile receives a stable, small `45-55` goal-preference variation so accounts can take different routes without exposing per-skill weights or letting preferences outweigh method value.
 - Supply Policy config can enable or disable Grand Exchange, shop, and ground-pickup routes, which lets fresh-F2P testing run with self-contained acquisition rules.
 - Overlay visibility/detail is configurable, and the overlay now renders from a single read-only script state instead of loose debug fields.
 - The overlay shows the active runner state, activity, strategy, commitment time, task status, stop reason, content mode, session flavor, goal, requirement, and score when detailed mode is enabled.
 - Supply acquisition is route-aware: bank, Grand Exchange, known shops, and known ground pickups can all be planner candidates.
-- Purchasable supply routes now declare their coin need as a planner-visible `MoneyRequirement`, so missing coins can chain into banking or money-making instead of dead-ending the item route.
+- Purchasable supply routes own their full transaction: check total coins, withdraw banked coins, then buy and collect. An account without enough owned coins leaves that route unavailable until money-making is intentionally reintroduced.
 - Generic Grand Exchange routes use live offer prices when available; catalog shop routes use conservative item-specific estimates.
 - Item requirements can also be satisfied by matching item-producing skilling activities such as mining ores, cutting logs, and fishing raw fish.
-- `MoneyMakingActivity` is registered with initial F2P methods for chicken feathers, cowhides, raw shrimps, logs, copper ore, iron ore, bronze bars, and iron bars.
-- Chicken feathers are the zero-gear, zero-capital F2P money bootstrap when the GE is enabled: fresh accounts can fight chickens unarmed, collect stackable feathers, and sell them through the GE. Lumbridge General Store pays `0 gp` for feathers, so the planner never offers that route.
 - When no usable axe or pickaxe exists, woodcutting and mining now explicitly request a bronze starter tool. That lets an empty-bank skill goal chain cleanly through the chicken-feather GE coin route, tool purchase, and the requested activity instead of failing silently before it can ask for supplies.
-- Money-making selects an explicit sale route per plan. When shops are enabled it can sell gathered items at Lumbridge General Store; when the GE is enabled it can use the existing GE offer flow. Disabling either supply policy removes the corresponding money-making route.
-- Shop sale is a guarded task sequence: walk to the verified store, confirm the shop is open, sell one supported item, and confirm coins increased before continuing. Low-value loot is excluded from shop routes; a zero-value result ends the task with a specific stop reason.
-- Shop visits now reset their open/sell guards at the travel boundary, so a failed earlier visit cannot exhaust a later visit immediately. After a bank withdrawal, money-making also waits for the sellable item to appear in inventory before choosing to sell or gather again.
 - GE collection no longer blocks the task executor with a static wait. It now observes coin progress between ticks and uses a bounded collect guard.
 - GE offer quantity entry now has a bounded utility-level recovery path: an offer form that never exposes its quantity control retries briefly, returns to the overview, and lets the Builder report `GE_OFFER_FAILED` instead of trapping its script thread in a log-spam loop.
+- Builder GE purchases now reserve `+10%` in planning, then use the offer UI's `+5%` control twice after setting the base estimate. GE selling is not currently part of Builder while money-making remains removed.
 - Live runtime diagnosis is ready to use through Microbot's local Agent Server: inspect builder script status, player state, inventory/bank, nearby entities, screenshots, and the visible widget tree at a failure boundary before changing code. The local testing client must enable `Microbot Agent Server` with TCP port `8081` and stealth bind disabled before this loop can connect.
-- Money-making can run as a fallback for missing coins and as an optional account-level money goal via `moneyTarget`.
+- **Money-making removed (2026-09-09):** money goals, gather-and-sell activities, shop liquidation, GE sales, and money test overrides are removed while the core task system is stabilized. Supply purchases may use coins already held in the bank or inventory, but missing coins have no automatic farming fallback.
 - Prayer target is now a real planner goal and routes through combat methods that bury bones while training.
 - Combat strategy now exposes starter weapon and risk-based food requirements to the planner; chickens do not require food, while goblins/cows request food only when the inventory is below the monster-specific target.
 - Chickens are now the fresh-F2P no-gear combat bootstrap fallback: if the account has no weapon and no coins, the planner can still choose chickens and `CombatTask` can fight them unarmed.
@@ -71,7 +67,7 @@ This document tracks the work to turn the builder into a simple, well-defined ac
 - Prerequisite route discovery now short-circuits on the first runnable route. The catalog intentionally orders bank before shops and GE, so a banked item is selected directly without evaluating unrelated later routes or their price lookups.
 - Builder tasks now have a shared non-blocking `TaskActionGuard`: a phase confirms the expected game state, retries only after a cooldown, and ends with a specific recoverable stop reason when its time/attempt budget is exhausted.
 - The guard now protects combat walking and attacks; supply walking, shop opening/purchase, and ground-item search/pickup; and the early F2P fishing, mining, and woodcutting walking/gather actions. These flows no longer rely on fixed sleeps to presume a click, walk, shop, or pickup succeeded.
-- Banking keeps its existing open/close/deposit/withdraw retry and nearest-bank recovery checks. Shop money-making sales and GE collection now use bounded confirmation; production, cooking, smelting, forging, GE offer placement, and quest interactions are the next action-guard migration pass.
+- Banking keeps its existing open/close/deposit/withdraw retry and nearest-bank recovery checks. Production, cooking, smelting, forging, GE supply purchases, and quest interactions are the next action-guard migration pass.
 - Banking close cleanup is bounded; after repeated close misses, the completed bank mutation is allowed to finish instead of looping forever in `CLOSE`.
 - Startup/shared banking now has bounded recovery for walking to a bank, opening the bank, depositing, and withdrawing. If startup bank warming stalls, it returns `BANK_FAILED` so the startup loop recreates the banking task and retries from walking/opening.
 - Startup bank warming now immediately clears the startup task and replans on the same tick after success, instead of briefly sitting in a completed startup state.
@@ -79,8 +75,7 @@ This document tracks the work to turn the builder into a simple, well-defined ac
 - Clearing a task now leaves `TaskManager` in a neutral complete/none state instead of reporting `RUNNING` with no task.
 - Cook's Assistant and Doric's Quest now expose planner-visible requirements instead of keeping all blockers hidden in task code.
 - `TaskStatus.BLOCKED` now clears the current task and asks the planner for a new decision.
-- Tasks can report `TaskStopReason`; supply, money-making, skilling, combat, and current quest tasks now report specific reasons for known dead ends.
-- [x] General-store sales now use an explicit non-zero value floor. Before every sale, the task calculates the current payout from the item's in-game value and live shop stock; feathers and other low-value loot are GE-only, while every allowed shop sale is one item at a time and must increase coins before the next sale.
+- Tasks can report `TaskStopReason`; supply, skilling, combat, and current quest tasks report specific reasons for known dead ends.
 - Slow GE offer handling waits for buy/sell completion for a bounded number of ticks before reporting an offer failure.
 - `PlannerScorer` now uses richer inputs: bank readiness, travel distance, XP estimate, profit estimate, supply cost, safety, unlock value, repetition, and recent failure memory.
 - `SessionFlavor` can bias the same account goals toward balanced, quest-focused, gatherer, combat-heavy, or efficient sessions.
@@ -95,9 +90,13 @@ This document tracks the work to turn the builder into a simple, well-defined ac
 - [x] Add authenticated, read-only Agent Server runtime status at `GET /mntn-builder/status`. It publishes the Builder's immutable overlay snapshot after every loop and clears it on shutdown, so live diagnosis can inspect the current plan, task phase/status, stop reason, and score without mutating game state.
 - [x] Combat attack retries are now scoped to the individual NPC instead of every monster sharing one retry counter. `TaskActionGuard` also freezes active deadlines during a Builder script-guard pause, preventing an antiban cooldown or other guard pause from converting a single accepted combat action into a timeout.
 - [x] Combat style selection now resolves the equipped weapon's live style metadata and confirms the selected `COM_MODE` varp before fighting. It no longer assumes Defence is always the fourth combat widget; this prevents unarmed and axe combat from silently training Strength while a Defence goal is active.
-- [x] Money-making now clears Bones from a full inventory before returning to gather. If a full inventory contains no safe cleanup item, the task reports `INVENTORY_FULL` for replanning instead of cycling forever through `CHECK -> GATHER`.
 - The supply catalog is intentionally conservative; add item-specific shop, spawn, gather, and quest-reward routes as methods are verified.
 - **Core audit completed (2026-09-07):** the Builder has one task owner (`TaskManager`), task-local phases, planner-visible terminal reasons, and bounded action guards. The audit removed blocking waits from banking equipment deposits, supply GE collection/equipment, production widgets, and the two current quest tasks. A failed click, route, station lookup, or confirmation now stays in the owning task until confirmed or ends with a specific planner-visible reason.
+- **GE slot recovery (2026-09-08):** Builder preflights every GE buy and sell against the live available-slot count and catches the narrow slot-selection race in the shared API. A full exchange becomes `GE_NO_OPEN_SLOT`, never cancels a player's offers, and suppresses all Builder GE routes for one minute so the planner can choose bank, shop, gathering, or training work before checking GE availability again.
+- **Ready-work selection (2026-09-09):** A live trace showed fresh rerolls withdrawing copper, tin, coal, iron, and gear from the bank without ever training. The planner now ranks immediately runnable productive activities first. Only when none is runnable does it select one supply prerequisite; its next terminal result returns to a new live-state pass. This prevents account-wide stockpiling while preserving simple prerequisite recovery.
+- **Activity timeout handoff (2026-09-10):** An expired commitment now removes its old task before planning the successor, prefers a different activity, then a different method, and only repeats when it is the only runnable option. Break/login waits preserve the active commitment clock instead of clearing it; if a timeout pass has no live candidate, Builder falls back through the normal bounded recovery planner.
+- **Activity controls in config (2026-09-10):** The Builder overlay reads the immutable runtime snapshot and shows the complete current plan/task state and every player skill level. Skip, `-10 min`, `+10 min`, every supported skill focus, and quest focus are native config-panel buttons, so they remain usable while Microbot's Disable Input setting disables the game client. All button callbacks only queue work for the Builder worker; they never mutate planner state on Swing's event thread.
+- **Overlay chat placement and skill icons (2026-09-10):** The Builder panel is anchored over the lower-left chat area and uses RuneLite's cached small skill icons with numeric levels in a five-column grid. The grid is display-only; testing controls live in the config panel.
 - `AccountContext` is now the sole Builder boundary for direct RuneLite client reads. Skill levels, combat level, plane, login readiness, membership checks, and null-safe location checks use the client-thread helper; activities and tasks no longer read the raw client directly.
 - Production tasks remain intentionally separate and small. Cooking, smelting, and forging each own their walk, station, widget, production-confirmation, and bank phases instead of introducing a shared workflow framework.
 - `AccountMemory` prunes expired selection/failure entries as it is used, keeping cooldown behavior session-local and bounded during long runs.
@@ -112,7 +111,7 @@ the planner with a specific result.
 1. **Stabilize the task contract.** Every current Builder action follows `observe -> act -> confirm -> bounded recovery -> replan`, including bank loadouts, gathering, supply, production widgets, and the two supported quests. Keep GE offer placement under runtime observation. Do not add a generic state-machine framework; keep phases inside the owning task and use `TaskActionGuard` only for actions that need retries.
 2. **Prove the fresh-F2P bootstrap.** Run the complete path from warm bank cache through a banked tool/equipment withdrawal, no-gear chickens when necessary, travel, fighting, loot/bones, low-health recovery, banking, and the next plan. Maintain a short manual smoke recipe for the exact account state used during testing.
 3. **Complete three foundational skill loops.** Make woodcutting, fishing/cooking, and mining/smelting/smithing each work end-to-end: obtain tool/input, travel to a verified location, gather or produce, handle full inventory, bank, and replan. Finish and test one loop before broadening its method list.
-4. **Make supplies and coins reliable.** Keep acquisition order simple: bank first, then a verified nearby shop or ground source, then GE only where it is proven useful. The first dependable F2P loop is now unarmed chickens -> feathers -> GE -> starter tool coins. Runtime-test that loop before expanding the money catalog.
+4. **Make supplies and owned coins reliable.** Keep acquisition order simple: bank first, then a verified nearby shop or ground source, then GE only where it is proven useful. Purchase routes must withdraw available banked coins and otherwise report an ordinary unavailable requirement.
 5. **Expand progression decisions only after the loops are proven.** The planner should choose among working tasks using configured goals, route availability, basic travel cost, safety, and short failure cooldowns. Avoid simulated personality, deep dependency graphs, persistence, or large scoring systems until actual task data shows they are needed.
 6. **Add quests and members content last.** Supported quests need the same observable task contract. Members methods remain behind content flags until their F2P-equivalent loops are stable.
 
@@ -125,7 +124,7 @@ the planner with a specific result.
 5. Add runtime tests for banking, supply acquisition, GE slow-offer handling, task recovery, and quest handoff behavior.
 6. Expand the F2P supply catalog with more verified shops, ground spawns, simple NPC drops, and quest reward routes.
 7. After the chicken bootstrap is runtime-proven, add only verified F2P money methods with a complete gather/sell contract: clay or low-level ore with a banked/shop pickaxe, cowhide with food, and gathered logs/fish with route-aware sales.
-8. Add richer planner explanations to overlay/debug output: top candidate list, lost-candidate reasons, and prerequisite chain.
+8. Add richer planner explanations to overlay/debug output: top candidate list, lost-candidate reasons, and immediate prerequisite.
 9. Add account-profile presets and save/load support for common build styles.
 10. Add route policy toggles for item selling and looting.
 11. Decide whether config should use only target `0` disables, or add explicit per-skill enable toggles/profiles.
@@ -144,7 +143,7 @@ Assumptions:
 Core systems that must be reliable before adding many new methods:
 
 - Startup bank warming: populate bank cache and leave account in a known state. This now retries walking/opening/depositing on stalls and reports `BANK_FAILED` after bounded attempts.
-- Requirement-to-supply chain: missing item/equipment/money should lead to bank, shop, ground pickup, skilling, or money-making rather than dead-ending.
+- Requirement-to-supply chain: missing item/equipment should lead to bank, shop, ground pickup, or skilling. A purchase requiring more coins than the account owns remains unavailable while money-making is removed.
 - Banking/loadout behavior: deposit, withdraw, keep tools, equip gear, and preserve supplies.
 - Travel recovery: walk to bank, shop, spawn, or task area and report failure if not arriving.
 - Task phase contract: every task should have clear phases, bounded retries, stop reasons, and replan behavior.
@@ -158,7 +157,7 @@ Suggested first manual runtime recipe:
 - Fresh account after tutorial.
 - GE disabled, shops enabled, ground pickups enabled.
 - Combat targets enabled with low Attack/Strength/Defence/Prayer goals.
-- Money target disabled at first unless testing supply coin fallback.
+- Start with enough banked coins for any shop/GE supply route being tested; the Builder does not earn coins automatically.
 - Verify startup bank cache, immediate post-startup plan selection, no-gear chicken combat, starter gear handling when available, bones/loot handling, level completion, and clean replan.
 
 ## Aeglen-Inspired Feature Map
@@ -214,7 +213,7 @@ Ideas to adopt:
 - [x] Add ground-item pickup supply route using `Microbot.getRs2TileItemCache().query()`.
 - [x] Let item requirements ask item-producing skilling activities for matching methods.
 - [x] Replan when the active requirement is satisfied, not only when the top-level goal is complete.
-- [x] Let purchasable supply routes expose missing coins as `MoneyRequirement`.
+- [x] Initially exposed purchasable supply coins as `MoneyRequirement`; replaced by the self-contained supply transaction below because a standalone withdrawal could reroll into unrelated work before the purchase.
 - [x] Add money-making fallback when a GE/shop supply route is affordable in theory but the account lacks coins.
 - [x] Add zero-gear chicken-feather GE coin bootstrap and guard all general-store sale routes against zero-value items.
 - [x] Make money-making sale routes honor the existing shop/GE policy settings.
@@ -236,8 +235,7 @@ Ideas to adopt:
 - Starter-tool policy: request the cheapest usable tool first. For a bronze pickaxe, try Bob in Lumbridge, then Nurmof in the Dwarven Mine, then the GE when permitted. If those routes fail, try higher shop-stocked tiers the account can afford. Shop routes use verified default-stock prices so the planner only raises the coins actually needed; unsupported shop tiers use the GE route instead of trying a shop that cannot stock them.
 - Combat-upgrade policy: preserve 1,000 gp across inventory and bank. When a combat strategy is selected, first equip the strongest relevant gear already owned. Otherwise, buy only one upgrade at a time: the highest eligible affordable scimitar first, then a platebody only for non-chicken combat. Zeke supplies bronze through mithril scimitars; Horvik supplies bronze through mithril platebodies. Every listed shop purchase retains the generic GE route as its fallback.
 - Future route types are already modeled: `SKILL_ACTIVITY`, `QUEST_REWARD`, and `OTHER`. Use these when an item should be gathered by doing a skilling method, obtained from a quest step, or acquired by a special interaction instead of purchased.
-- When a route needs coins and the account is short, the supply strategy emits a money requirement so `MoneyMakingActivity` can choose a F2P method.
-- The starter money route deliberately shares the existing shop/GE policy toggles rather than adding separate selling config. That keeps the route surface small: enable shops for the local general-store fallback, GE for market sales, or both for planner choice.
+- When a purchase route needs coins, the supply strategy may withdraw enough coins already owned in the bank. When the account does not own enough coins, that purchase has no automatic acquisition path while money-making is removed.
 - Mining, woodcutting, and fishing now advertise item production for items already named on their methods. Add more produced-item fields as new activities mature.
 
 ## Phase 3: Task Contracts
@@ -258,7 +256,7 @@ Ideas to adopt:
 - [x] Propagate nested banking `BLOCKED` results to parent combat and skilling tasks.
 - [x] Treat task-creation failures as recoverable planner outcomes.
 - [x] Reject strategies with unmet prerequisites when no prerequisite route is runnable.
-- [x] Keep a prerequisite chain attached to its original objective strategy. After a supply step completes, the planner now advances the same recipe/loadout instead of freely switching to another eligible strategy between ingredients.
+- [x] Retired objective-chain continuation in favor of live-state rerolls. A prerequisite task (for example, acquiring copper ore) completes independently; the next full planner pass then selects tin ore, smelting, or any more valuable valid activity from the account's actual state.
 - [x] Let an active task finish its own terminal cleanup before the runner advances a satisfied prerequisite. This prevents a withdrawal from being cut off before its banking task closes the bank UI.
 - [x] Use a fixed item-acquisition order: banked item, gatherable/ground source, verified shop, then Grand Exchange. A gatherable resource such as coal now uses the owned pickaxe and Mining route before a money-making/GE dependency is considered.
 - [x] Money-making now earns only the shortfall after inventory and bank coins are counted. The later supply task combines those coins by withdrawing the banked portion before purchasing.
@@ -278,7 +276,7 @@ Ideas to adopt:
 - [x] Let the planner choose among multiple F2P locations for fishing, woodcutting, and mining. Each method/location pair is scored independently by travel distance, receives only a 0-2 point variation, and gets its own cooldown when the resource cannot be found.
 - [x] Reduce planner work per pass: evaluate each goal, requirement, activity provider, and strategy once; reuse one open-bank cache snapshot for a short interval; and log only planner passes that exceed 250 ms.
 - [x] Bound planner debug output to one summary per pass. The previous per-goal and per-strategy trace caused a measured 56.9-second startup decision with debug logging enabled.
-- [ ] Add richer planner explanations to overlay/debug output: top candidate list, lost-candidate reasons, and prerequisite chain.
+- [ ] Add richer planner explanations to overlay/debug output: top candidate list, lost-candidate reasons, and immediate prerequisite.
 
 ### F2P Gathering Location Catalog
 
@@ -314,14 +312,11 @@ Ideas to adopt:
 - [x] Convert Cook's Assistant and Doric's Quest to planner-visible requirements.
 - [x] Route prayer training through combat while choosing the lowest melee attack style for the active fight.
 
-## Phase 6: Money-Making
+## Phase 6: Money-Making (Removed)
 
-- [x] Add `MoneyMakingActivity`.
-- [x] Add initial F2P methods: chicken feathers, cowhides, raw shrimps, logs, copper ore, iron ore, bronze bars, and iron bars.
-- [x] Let money-making run as both fallback and optional account goal.
-- [x] Use profit and supply needs in planner scoring.
-- [x] Restrict combat loot to self-owned stacks worth more than 100 gp, with an active money-method item exception; collect bones only for unfinished Prayer training and bank full loot inventories before resuming combat.
-- [ ] Add more verified F2P methods after the chicken bootstrap smoke test: clay or low-level ore, cowhide with food, and gathered logs/fish with route-aware sales.
+- [x] Removed money-making activities, goals, sale routes, task overrides, and configuration while the core builder loops are stabilized.
+- [x] Retained only banked-coin withdrawal as a supply prerequisite for purchases.
+- [ ] Reintroduce a small, separately tested money system only after the core skilling, combat, banking, and supply loops are runtime-proven.
 
 ## Phase 7: Members-Ready Expansion
 
@@ -371,7 +366,7 @@ Ideas to adopt:
 - [x] Focused training-location activity, money-making activity, and planner tests pass after adding multi-location F2P gathering selection.
 - [x] Focused planner, builder-script, and training-location tests pass after planner-pass performance cleanup.
 - [x] Focused planner and Builder-script tests pass after bounding planner debug output.
-- [x] Focused planner, Builder-script, and supply tests pass after preserving the original strategy across multi-item prerequisite chains.
+- [x] Focused planner and Builder-script tests prove each prerequisite completion rerolls from the live account state rather than resuming a remembered parent strategy.
 - [x] Focused planner, Builder-script, combat, and money-making tests pass after task-cleanup, source-order, and cash-shortfall cleanup.
 - [x] Focused Builder script and planner tests pass after Break Handler login recovery is added.
 - [x] `:client:compileJava` and focused Builder-script/TaskActionGuard tests pass after yielding to every active Break Handler V2 state.
@@ -390,7 +385,7 @@ Ideas to adopt:
 
 - [x] Observed a live startup for three minutes through the Agent Server. The account was logged in and unpaused, startup banking had completed, and the builder remained at `Planning / Selecting first task after bank cache` with no task or plan selected.
 - [x] Confirmed the preceding planner pass took 408,325 ms. The client log contained repeated GE Tracker connection timeouts during the pass.
-- [x] Identified synchronous live price fetching in `MoneyMakingStrategy` and zero-price `SupplyStrategy` routes. `Rs2GrandExchange.getOfferPrice` waits on an HTTP request with a 10-second timeout and is currently called while the planner scores candidates.
+- [x] Identified synchronous live price fetching in retired money-making code and zero-price `SupplyStrategy` routes. `Rs2GrandExchange.getOfferPrice` waits on an HTTP request with a 10-second timeout and must never run while the planner scores candidates.
 - [x] Identified repeated synchronous client-thread reads from strategy/goal evaluation as a secondary startup cost. Each read may wait up to 10 seconds when the client thread is unavailable.
 
 ### Implementation Plan
@@ -401,7 +396,7 @@ Ideas to adopt:
 - [x] Persist one last-known broad goal per local Microbot profile in `~/.runelite/microbot/mntn-builder/`, so startup direction survives plugin, client, and IntelliJ debug restarts. The record contains only a configuration fingerprint, goal name, and timestamp; it expires after 30 days.
 - [x] After bank warming, resolve the next valid step for the remembered goal before considering unrelated goals. The targeted evaluation retains normal prerequisite handling (for example, buy or withdraw a missing tool); if the goal is complete, blocked, stale, or incompatible with the current config, immediately use the full planner.
 - [x] Add aggregate timing diagnostics for snapshot capture and candidate evaluation, emitted only when a stage exceeds 250 ms. Per-candidate debug logs remain disabled.
-- [x] Add unit coverage for local price estimates and durable startup-direction cache reuse/rejection, including mismatched profile/configuration protection. Focused Builder planner, script, guard, bank-view, cache, and supply tests pass with `:client:compileJava`.
+- [x] Removed the persistent startup-direction cache. It could bias a fresh account state toward a stale old goal; startup now uses the same fresh, bounded planner pass as every later task transition.
 - [x] Simplify smelting to one verified production flow: interact with a reachable furnace, wait up to five seconds for the furnace interface, pause for a randomized `800-3000 ms`, press `SPACE`, and wait for an ingredient count reduction. Live Agent Server tracing showed the generic action guard could remain in `WAITING` while the production interface was closed, so smelting now owns two local, explicit recovery counters instead: three failed interface opens or three failed production confirmations replan. This avoids an indefinite `RUNNING` state while preserving bounded recovery.
 - [x] Multi-item bank withdrawals now request and confirm one item at a time while keeping the bank open. A copper/tin loadout no longer starts both asynchronous withdrawals in the same tick or closes between items; it advances only after each requested amount is visible in inventory.
 - [x] Add a shared pre-task inventory preparation step for fishing, mining, woodcutting, cooking, and smelting. Before travel, it keeps only the selected strategy's declared inputs and uses the bounded banking task to deposit unrelated inventory items. Full inventories are always prepared even if an inventory cache is briefly stale; equipment is intentionally left unchanged.
@@ -411,5 +406,58 @@ Ideas to adopt:
 - [x] Freeze inventory counts, occupied slots, and food presence in the same client-thread snapshot as planner skills and location. Live thread inspection showed a planner stuck in `Rs2Inventory.itemQuantity()` while recursively evaluating money prerequisites; planner-time inventory reads are now map lookups and cannot trigger a second client-thread inventory query.
 - [x] Clear Web Walker state when a Builder task ends with `TRAVEL_FAILED` and before every new Builder plan begins. A stale route can no longer bleed from a failed, skipped, or completed task into the next activity; the next task starts a fresh walker route while existing task-level bounded travel guards still decide when to replan.
 - [x] Add an `InventoryView` regression test for the frozen planner inventory read.
+- [x] Fix the live full-inventory money-making loop: a full bronze ore loadout now reaches its smelting subtask, while any full inventory that cannot be consumed by the selected money source is banked through the bounded banking task before gathering resumes.
+- [x] Promote recent failed strategies from a score penalty to a planner eligibility cooldown, and delay no-plan retries for five seconds. A `BLOCKED` task can select an alternative recovery route, but it cannot repeatedly recreate the same failed task every script tick.
+- [x] Purchase trips now withdraw the complete available bank coin stack after the route passes its affordability check. This applies to both shop and Grand Exchange supply routes; exact coin withdrawals remain only for a direct money requirement.
+- [x] Fix equipment-supply completion semantics: possession in inventory now enters the bounded equip phase, while only worn equipment satisfies an `EquipmentRequirement`. Add a runner-level completion assertion so a task that reports `COMPLETE` without satisfying its current plan becomes a cooled-down replan instead of an endless success loop.
+- [x] Deduplicate equivalent recursive prerequisite candidates before planner ranking. Live debug output showed thousands of candidate entries from a few dozen strategies; the planner now compares only distinct actionable choices.
 - [x] Add unit coverage for task-inventory preparation decisions: a matching loadout starts immediately, while unrelated or full inventory enters banking before the productive task starts.
-- [ ] Re-run the live Agent Server startup trace. Acceptance target: on a matching cached direction, a visible task/goal selection within two script ticks after bank warming; when it cannot produce a valid next step, one full planner pass follows without a planning loop.
+- [ ] Re-run the live Agent Server startup trace. Acceptance target: a visible task/goal selection within two script ticks after bank warming; after every successful prerequisite or terminal task result, exactly one fresh planner pass selects the next action without a continuation loop.
+
+## Current Core Contract (2026-09-09)
+
+- [x] Every selected Builder task begins from a clean banked state: empty inventory and no worn equipment. The shared bounded banking task owns this reset and reports normal bank failure reasons if it cannot complete.
+- [x] Every concrete task owns its own loadout after that reset. Smithing withdraws its complete ore batch in one bank visit, combat withdraws and equips available combat gear plus food, and gathering tasks withdraw their own tools before travel.
+- [x] Strategy requirements now mean an input is genuinely absent from the account, not merely absent from the current inventory. Banked ore, bars, tools, food, combat gear, and supported quest items no longer create a redundant supply task.
+- [x] When an input is genuinely missing, the planner chooses one ordinary acquisition task, lets it finish, then rerolls from live account state. The next selected task has no hidden parent or remembered dependency.
+- [x] Combat gear upgrades are no longer a blocking prerequisite for combat. A combat task uses the best gear already owned; missing required weapons and food remain normal acquisition requirements.
+- [x] Combat banking now always advances to a fresh `CHECK_STATUS` tick after withdrawals. It no longer rejects a valid loadout by inspecting the pre-withdrawal account snapshot in the same tick; the task then equips the highest owned, level-valid F2P gear from bronze through rune.
+- [x] Combat preparation now uses one declared loadout: deposit inventory and worn equipment, withdraw exactly the best level-valid weapon, shield when compatible, helm, body, legs, and food, then equip one item at a time with a confirmed equipment-state check. Combat style setup and travel cannot begin until that loadout is equipped.
+- [x] Add `BUILDER_CORE_GUIDE.md`: a short, code-grounded explanation of the Builder's config-to-task flow, planning rules, banking/recovery contract, debugging path, and safe extension points.
+- [x] Direct test overrides use the same clean-start wrapper as normal planner selections, so a method smoke test exercises its real banking/loadout path.
+- [x] Focused planner, task-reset, combat-strategy, and money-making tests pass after the core-contract rewrite.
+- [x] Treat the configured money target as background progress. It cannot outrank configured skill/quest work merely because a large bank stack is sellable; coin-making retains full priority when another task actually needs coins.
+- [x] Exclude trivial general-store liquidation routes from normal money planning. Banked training inputs now wait for a worthwhile sale route instead of being sold for a few coins.
+- [x] General-store sales use `Sell 50`, not `Sell 1`. Each accepted click waits for both an item-count reduction and a coin increase before another batch is allowed, so shop liquidation is fast without hiding a failed or zero-value sale.
+- [x] Removed the entire money-making feature while core account-building loops are stabilized: no coin target/config, planning activity, test override, task, shop sale, or GE sale path remains. Existing coins can still fund supply withdrawals and purchases.
+- [ ] Runtime acceptance: start from a mixed inventory/equipment state with banked copper and tin. Expected flow is one cleanup bank trip, one smithing loadout withdrawal, travel to furnace, and smelting; no standalone bank-supply steps for those banked ores.
+- [ ] Runtime acceptance: start combat with banked gear/food. Expected flow is one cleanup bank trip, a combat loadout withdrawal/equip, then travel to the selected monster.
+
+## F2P Skilling Expansion (2026-09-09)
+
+- [x] Add a normal Crafting target and F2P Crafting activity. Supported first-batch methods are gem cutting from uncut opal through diamond, gold and sapphire jewellery, and silver tiaras. Each task resets to a clean banked state, withdraws only its fixed batch/loadout, and uses bounded action recovery for gem cutting or the jewellery furnace widgets.
+- [x] Add direct Crafting test overrides for cutting opals and making gold rings. Leather tanning/crafting and pottery remain separate future work because they each need a reliable multi-step world interaction.
+- [x] Gate both Al Kharid mining locations behind combat level 29, so lower-level accounts use another valid F2P mine until they can safely enter the mine area.
+- [x] Add Firemaking as a normal target-driven Builder activity with direct test overrides for logs and willow logs.
+- [x] Add a bounded Forester's Campfire task: load tinderbox and up to 27 logs, walk to the outdoor Varrock West bank-adjacent route, reuse a nearby ordinary fire when possible, convert it to a Forester's Campfire with one log, then use `Tend-to` and the production widget to consume the remaining logs. It creates one starter fire only when none exists; it never line-burns an inventory.
+- [x] Let missing Firemaking logs resolve through the existing Woodcutting producer path and missing tinderboxes through the existing supply path; after either prerequisite completes, reroll from the live account state.
+- [x] Add F2P clay and silver mining methods using the game object IDs already used by the supported Doric quest path.
+- [x] Replace Woodcutting placeholder object lists with verified normal/oak/willow variants, add a Varrock Grand Exchange yew method, and query the nearest tree across all matching variants.
+- [x] Add supported cooking catalog entries for sardines, herring, mackerel, pike, tuna, lobster, and swordfish. The existing cooking task owns their common range/banking/production flow.
+- [x] Add silver, mithril, adamantite, and runite smelting batches. Add mithril, adamant, and rune forging with explicit product unlock data; Rune platebody correctly remains level 99.
+- [x] `:client:compileJava` passes after the F2P skilling expansion.
+- [x] Focused Builder script, planner, Firemaking activity/catalog, activity mapping, and forging metadata tests pass after the F2P skilling expansion.
+- [x] Live Firemaking observation found the generic withdraw-all log path could stop at the bank despite a visible tinderbox and 374 willow logs. Replace it with confirmed exact 27-log withdrawals, matching the established Builder batch-loadout pattern.
+- [x] Correct the Firemaking method to use Forestry's actual interaction model. A normal `Fire` is only a starter: reuse one when present, create one only when none is available, use one log on it to create a Forester's Campfire, then select `Tend-to` and start the production widget. The task queries all six live Forester's Campfire object variants and does not create a line of fires.
+- [x] Live interaction audit: split `Use Tinderbox` followed by `Use Willow logs` reliably created one normal fire at the test tile, while the task's convenience-combine call did not. Builder now owns that interaction as two non-blocking ticks, confirms a fire appears before retrying, and never uses the utility's internal static delay.
+- [x] Live cache audit: Builder's worker-thread name query missed nineteen nearby ordinary fires that the Agent Server's client-thread cache query could see. Firemaking now uses the observed ordinary-fire IDs and resolves both starter-fire and Forester's Campfire cache queries atomically on the RuneLite client thread before deciding its next phase.
+- [x] Live animation audit: creating a Forester's Campfire immediately entered the Willow tending animation while the task still displayed `CREATE_CAMPFIRE`. That phase now treats any player movement or animation as a strict no-op and returns to banking when the automatic tending run has exhausted the loaded logs.
+- [x] `:client:compileJava` plus focused Firemaking strategy and Builder-script tests pass after the Forester's Campfire correction and the explicit starter-fire interaction fix.
+- [x] Moved every Builder quick control from the game overlay into the native config panel. The overlay is status-only, while config buttons queue Skip, time adjustments, supported skill focus, and quest focus actions even when Disable Input is enabled.
+- [x] `:client:compileJava` and focused `MntnBuilderScriptTest` pass after moving Builder controls to the config panel.
+- [x] Live Agent Server diagnosis of `FORGE_BRONZE` found two swords had been made before the task stalled: the old bar-count confirmation baseline remained set, so every later tick reported the same forge as confirmed and never selected another product. `ForgingTask` now clears that baseline after one confirmation and scopes each product lookup to the active Smithing interface (`312`). `:client:compileJava` and focused `ForgingStrategyTest` pass.
+- [x] Productive-task active-state audit: Forging, smelting, cooking, normal crafting production, mining, woodcutting, and firemaking already return without interacting while the player is moving or animating. Fishing now also respects movement, and gem cutting now skips while active. Cooking now consumes its confirmed raw-item reduction once, preventing the same permanent-success latch fixed in forging. `:client:compileJava`, focused `TaskActionGuardTest`, and `MntnBuilderScriptTest` pass.
+- [x] Add a shared affordability-bounded supply batch policy for consumed Crafting inputs. Uncut gems and bars now request 100-500 units through the existing GE supply route, based on total bank plus inventory coins and the route's existing 10% price buffer. Reusable tools and moulds remain one-item requirements, and an account that cannot fund the minimum batch does not degrade into repeated one-item purchases.
+- [x] Standardize purchase ownership: the planner now selects a shop or GE supply route directly, while `SupplyTask` alone checks affordability, withdraws coins, travels, purchases, and collects. This removes the duplicate planner-level coin prerequisite that could withdraw funds and then reroll into combat before buying the requested item.
+- [ ] Runtime acceptance: test `Firemaking: logs` from Varrock West Bank with a tinderbox and logs in the bank. Expected flow is cleanup, one bank loadout, walk south of the bank, create or reuse one starter fire, convert it to a Forester's Campfire, then tend it through the production widget until the trip is exhausted.
+- [ ] Runtime acceptance: exercise a yew route and a high-tier smelting/forging batch once materials are available. Confirm exact in-game object/widget names against the live cache before expanding their location catalogs.

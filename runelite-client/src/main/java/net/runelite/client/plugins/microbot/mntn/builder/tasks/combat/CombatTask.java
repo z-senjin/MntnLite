@@ -38,6 +38,7 @@ public class CombatTask implements Task {
     private enum Phase {
         CHECK_STATUS,
         BANKING,
+        EQUIPPING,
         WALK_TO_MONSTER,
         FIGHTING
     }
@@ -48,8 +49,10 @@ public class CombatTask implements Task {
     private final int prayerTarget;
     private final String requiredLootName;
 
-    private Phase phase = Phase.CHECK_STATUS;
+    private Phase phase = Phase.BANKING;
     private BankingTask bankingTask;
+    private final List<String> plannedLoadout = new ArrayList<>();
+    private int equipmentIndex;
     private boolean styleConfigured = false;
     private TaskStopReason lastStopReason = TaskStopReason.NONE;
     private int styleAttempts;
@@ -57,6 +60,7 @@ public class CombatTask implements Task {
     private int targetSearchFailures;
     private final TaskActionGuard walkGuard = new TaskActionGuard(10, 30_000, 800);
     private final TaskActionGuard attackGuard = new TaskActionGuard(5, 12_000, 700);
+    private final TaskActionGuard equipmentGuard = new TaskActionGuard(4, 10_000, 800);
 
     public CombatTask(CombatStrategy.Monster monster, Skill targetSkill, int targetLevel, int prayerTarget) {
         this(monster, targetSkill, targetLevel, prayerTarget, null);
@@ -101,6 +105,8 @@ public class CombatTask implements Task {
                 return handleCheckStatus(context);
             case BANKING:
                 return handleBank(context);
+            case EQUIPPING:
+                return handleEquip(context);
             case WALK_TO_MONSTER:
                 return handleWalk(context);
             case FIGHTING:
@@ -120,8 +126,10 @@ public class CombatTask implements Task {
             Rs2Player.eatAt(50);
         }
 
-        // Equip any gear currently in inventory
-        equipAvailableGear(context);
+        if (!isPlannedLoadoutEquipped(context)) {
+            phase = Phase.EQUIPPING;
+            return TaskStatus.RUNNING;
+        }
 
         // Verify weapon is equipped
         CombatGear.GearItem bestEquippedWeapon = CombatGear.findBestWeapon(context, false);
@@ -201,31 +209,30 @@ public class CombatTask implements Task {
             }
 
             int foodTarget = CombatStrategy.recommendedFoodCount(monster, context);
-            int foodNeeded = Math.max(0, foodTarget - CombatStrategy.inventoryFoodCount(context));
-            String bestFood = foodNeeded > 0 ? CombatStrategy.findBestFoodInBank(context) : null;
-            if (foodNeeded > 0 && bestFood == null) {
-                // No food in bank to withdraw - reroll task
-                debugLog(context, "No food in bank and inventory empty, returning REPLAN");
+            String bestFood = foodTarget > 0 ? CombatStrategy.findBestAvailableFood(context) : null;
+            if (foodTarget > 0 && bestFood == null) {
+                debugLog(context, "No food available for the combat loadout, returning REPLAN");
                 return stop(TaskStatus.REPLAN, TaskStopReason.MISSING_SUPPLIES);
             }
 
-            List<String> gearUpgrades = CombatGear.getBankGearUpgrades(context);
+            plannedLoadout.clear();
+            plannedLoadout.addAll(CombatGear.getBestLoadout(context));
+            equipmentIndex = 0;
+            equipmentGuard.reset();
+
             List<BankingTask.ItemWithdrawal> withdrawals = new ArrayList<>();
-            for (String gear : gearUpgrades) {
+            for (String gear : plannedLoadout) {
                 withdrawals.add(new BankingTask.ItemWithdrawal(gear, 1));
             }
-            if (bestFood != null && foodNeeded > 0) {
-                withdrawals.add(new BankingTask.ItemWithdrawal(bestFood, foodNeeded));
+            if (bestFood != null) {
+                withdrawals.add(new BankingTask.ItemWithdrawal(bestFood, foodTarget));
             }
 
-            List<String> keepItems = new ArrayList<>();
-            for (String f : CombatStrategy.COOKED_FOODS) keepItems.add(f);
-            keepItems.addAll(CombatGear.getAllKnownGearNames());
-
-            debugLog(context, "Creating DEPOSIT_ALL_AND_WITHDRAW banking task with " + withdrawals.size() + " withdrawals");
+            debugLog(context, "Creating clean combat loadout banking task with " + withdrawals.size() + " withdrawals");
             bankingTask = new BankingTask(
                     BankingTask.Mode.DEPOSIT_ALL_AND_WITHDRAW,
-                    keepItems.toArray(new String[0]),
+                    true,
+                    null,
                     withdrawals.toArray(new BankingTask.ItemWithdrawal[0])
             );
         }
@@ -235,26 +242,11 @@ public class CombatTask implements Task {
         if (bankStatus == TaskStatus.COMPLETE) {
             debugLog(context, "Banking complete");
             bankingTask = null;
-
-            equipAvailableGear(context);
             styleConfigured = false;
-
-            CombatGear.GearItem equippedWeapon = CombatGear.findBestWeapon(context, false);
-            if (equippedWeapon == null || !context.equipment().hasItem(equippedWeapon.name)) {
-                // Failed to acquire/equip a weapon
-                debugLog(context, "Failed to acquire/equip weapon, returning REPLAN");
-                return stop(TaskStatus.REPLAN, TaskStopReason.EQUIP_FAILED);
-            }
-
-            int foodTarget = CombatStrategy.recommendedFoodCount(monster, context);
-            if (CombatStrategy.inventoryFoodCount(context) < foodTarget) {
-                // Failed to get food from bank
-                debugLog(context, "Failed to get food from bank, returning REPLAN");
-                return stop(TaskStatus.REPLAN, TaskStopReason.MISSING_SUPPLIES);
-            }
-
-            debugLog(context, "Switching to CHECK_STATUS");
-            phase = Phase.CHECK_STATUS;
+            equipmentIndex = 0;
+            equipmentGuard.reset();
+            debugLog(context, "Banking complete; equipping the selected loadout next tick");
+            phase = Phase.EQUIPPING;
             return TaskStatus.RUNNING;
         }
 
@@ -264,6 +256,42 @@ public class CombatTask implements Task {
             return stop(TaskStatus.REPLAN, TaskStopReason.BANK_FAILED);
         }
 
+        return TaskStatus.RUNNING;
+    }
+
+    private TaskStatus handleEquip(AccountContext context) {
+        while (equipmentIndex < plannedLoadout.size()
+                && context.equipment().hasItem(plannedLoadout.get(equipmentIndex))) {
+            equipmentIndex++;
+            equipmentGuard.reset();
+        }
+
+        if (equipmentIndex >= plannedLoadout.size()) {
+            phase = Phase.CHECK_STATUS;
+            return TaskStatus.RUNNING;
+        }
+
+        String itemName = plannedLoadout.get(equipmentIndex);
+        if (!context.inventory().hasItem(itemName)) {
+            if (context.bank().hasItem(itemName)) {
+                phase = Phase.BANKING;
+                return TaskStatus.RUNNING;
+            }
+            return stop(TaskStatus.REPLAN, TaskStopReason.EQUIPMENT_MISSING);
+        }
+
+        TaskActionGuard.Result result = equipmentGuard.evaluate(
+                "equip combat loadout " + itemName,
+                context.equipment().hasItem(itemName)
+        );
+        if (result == TaskActionGuard.Result.EXHAUSTED) {
+            return stop(TaskStatus.REPLAN, TaskStopReason.EQUIP_FAILED);
+        }
+        if (result == TaskActionGuard.Result.READY) {
+            debugLog(context, "Equipping selected loadout item: " + itemName);
+            Rs2Inventory.wield(itemName);
+            equipmentGuard.recordAttempt();
+        }
         return TaskStatus.RUNNING;
     }
 
@@ -428,40 +456,13 @@ public class CombatTask implements Task {
         return TaskStatus.RUNNING;
     }
 
-    private void equipAvailableGear(AccountContext context) {
-        CombatGear.GearItem bestWeapon = CombatGear.findBestWeapon(context, false);
-        if (bestWeapon != null && !context.equipment().hasItem(bestWeapon.name) && context.inventory().hasItem(bestWeapon.name)) {
-            debugLog(context, "Equipping weapon: " + bestWeapon.name);
-            Rs2Inventory.wield(bestWeapon.name);
-        }
-
-        boolean usingTwoHanded = (bestWeapon != null && CombatGear.isTwoHanded(bestWeapon));
-
-        if (!usingTwoHanded) {
-            CombatGear.GearItem bestShield = CombatGear.findBestArmor(context, CombatGear.SHIELDS, false);
-            if (bestShield != null && !context.equipment().hasItem(bestShield.name) && context.inventory().hasItem(bestShield.name)) {
-                debugLog(context, "Equipping shield: " + bestShield.name);
-                Rs2Inventory.wield(bestShield.name);
+    private boolean isPlannedLoadoutEquipped(AccountContext context) {
+        for (String itemName : plannedLoadout) {
+            if (!context.equipment().hasItem(itemName)) {
+                return false;
             }
         }
-
-        CombatGear.GearItem bestHelm = CombatGear.findBestArmor(context, CombatGear.HELMETS, false);
-        if (bestHelm != null && !context.equipment().hasItem(bestHelm.name) && context.inventory().hasItem(bestHelm.name)) {
-            debugLog(context, "Equipping helm: " + bestHelm.name);
-            Rs2Inventory.wield(bestHelm.name);
-        }
-
-        CombatGear.GearItem bestBody = CombatGear.findBestArmor(context, CombatGear.BODIES, false);
-        if (bestBody != null && !context.equipment().hasItem(bestBody.name) && context.inventory().hasItem(bestBody.name)) {
-            debugLog(context, "Equipping body: " + bestBody.name);
-            Rs2Inventory.wield(bestBody.name);
-        }
-
-        CombatGear.GearItem bestLegs = CombatGear.findBestArmor(context, CombatGear.LEGS, false);
-        if (bestLegs != null && !context.equipment().hasItem(bestLegs.name) && context.inventory().hasItem(bestLegs.name)) {
-            debugLog(context, "Equipping legs: " + bestLegs.name);
-            Rs2Inventory.wield(bestLegs.name);
-        }
+        return true;
     }
 
     private enum CombatStyleResult {

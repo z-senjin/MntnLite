@@ -39,4 +39,8 @@ public class SkillGoal implements Goal {
     public double priority(AccountContext context) {
         return priority;
     }
+
+    public Skill getSkill() {
+        return skill;
+    }
 }

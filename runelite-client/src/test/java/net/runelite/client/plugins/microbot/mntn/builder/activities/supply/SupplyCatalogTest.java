@@ -69,6 +69,16 @@ public class SupplyCatalogTest {
         assertFalse(routes.stream().anyMatch(route -> route.getType() == SupplyRouteType.SHOP));
     }
 
+    @Test
+    public void grandExchangeRoutesBudgetTenPercentAboveTheirBaseEstimate() {
+        SupplyRoute route = routesFor("Black axe").stream()
+                .filter(candidate -> candidate.getType() == SupplyRouteType.GRAND_EXCHANGE)
+                .findFirst()
+                .orElseThrow(AssertionError::new);
+
+        assertEquals(1.10, route.getPriceMultiplier(), 0.0);
+    }
+
     private List<SupplyRoute> routesFor(String itemName) {
         return catalog.routesFor(new ItemRequirement(itemName, 1), context);
     }

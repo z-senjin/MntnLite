@@ -1,6 +1,7 @@
 package net.runelite.client.plugins.microbot.mntn.builder;
 
 import net.runelite.client.config.Config;
+import net.runelite.client.config.ConfigButton;
 import net.runelite.client.config.ConfigGroup;
 import net.runelite.client.config.ConfigInformation;
 import net.runelite.client.config.ConfigItem;
@@ -15,6 +16,21 @@ import net.runelite.client.plugins.microbot.util.antiban.enums.ActivityIntensity
         "with the core model prepared for members content later.")
 public interface MntnBuilderConfig extends Config {
     String CONFIG_GROUP = "MntnBuilder";
+    String SKIP_ACTIVITY = "skipActivity";
+    String REMOVE_ACTIVITY_TIME = "removeActivityTime";
+    String ADD_ACTIVITY_TIME = "addActivityTime";
+    String FOCUS_FISHING = "focusFishing";
+    String FOCUS_COOKING = "focusCooking";
+    String FOCUS_FIREMAKING = "focusFiremaking";
+    String FOCUS_WOODCUTTING = "focusWoodcutting";
+    String FOCUS_MINING = "focusMining";
+    String FOCUS_SMITHING = "focusSmithing";
+    String FOCUS_CRAFTING = "focusCrafting";
+    String FOCUS_ATTACK = "focusAttack";
+    String FOCUS_STRENGTH = "focusStrength";
+    String FOCUS_DEFENCE = "focusDefence";
+    String FOCUS_PRAYER = "focusPrayer";
+    String FOCUS_QUESTS = "focusQuests";
 
     @ConfigSection(
             name = "General",
@@ -31,9 +47,16 @@ public interface MntnBuilderConfig extends Config {
     String testingSection = "testingSection";
 
     @ConfigSection(
+            name = "Activity Controls",
+            description = "Manual activity controls that remain available while game input is disabled",
+            position = 2
+    )
+    String activityControlsSection = "activityControlsSection";
+
+    @ConfigSection(
             name = "Overlay",
             description = "In-game planner status display",
-            position = 2
+            position = 3
     )
     String overlaySection = "overlaySection";
 
@@ -106,16 +129,169 @@ public interface MntnBuilderConfig extends Config {
         return MntnBuilderTestOverride.NORMAL_PLANNER;
     }
 
-    @Range(min = 1)
     @ConfigItem(
-            keyName = "testCoinTarget",
-            name = "Test coin target",
-            description = "Money test modes stop after reaching this many coins in inventory.",
-            section = "testingSection",
+            keyName = SKIP_ACTIVITY,
+            name = "Skip activity",
+            description = "Stop the current task and select a new activity",
+            section = "activityControlsSection",
+            position = 1
+    )
+    default ConfigButton skipActivity() {
+        return new ConfigButton();
+    }
+
+    @ConfigItem(
+            keyName = REMOVE_ACTIVITY_TIME,
+            name = "Remove 10 minutes",
+            description = "Reduce the current activity time by 10 minutes",
+            section = "activityControlsSection",
             position = 2
     )
-    default int testCoinTarget() {
-        return 1000;
+    default ConfigButton removeActivityTime() {
+        return new ConfigButton();
+    }
+
+    @ConfigItem(
+            keyName = ADD_ACTIVITY_TIME,
+            name = "Add 10 minutes",
+            description = "Extend the current activity time by 10 minutes",
+            section = "activityControlsSection",
+            position = 3
+    )
+    default ConfigButton addActivityTime() {
+        return new ConfigButton();
+    }
+
+    @ConfigItem(
+            keyName = FOCUS_FISHING,
+            name = "Focus Fishing",
+            description = "Run the next available Fishing activity",
+            section = "activityControlsSection",
+            position = 4
+    )
+    default ConfigButton focusFishing() {
+        return new ConfigButton();
+    }
+
+    @ConfigItem(
+            keyName = FOCUS_COOKING,
+            name = "Focus Cooking",
+            description = "Run the next available Cooking activity",
+            section = "activityControlsSection",
+            position = 5
+    )
+    default ConfigButton focusCooking() {
+        return new ConfigButton();
+    }
+
+    @ConfigItem(
+            keyName = FOCUS_FIREMAKING,
+            name = "Focus Firemaking",
+            description = "Run the next available Firemaking activity",
+            section = "activityControlsSection",
+            position = 6
+    )
+    default ConfigButton focusFiremaking() {
+        return new ConfigButton();
+    }
+
+    @ConfigItem(
+            keyName = FOCUS_WOODCUTTING,
+            name = "Focus Woodcutting",
+            description = "Run the next available Woodcutting activity",
+            section = "activityControlsSection",
+            position = 7
+    )
+    default ConfigButton focusWoodcutting() {
+        return new ConfigButton();
+    }
+
+    @ConfigItem(
+            keyName = FOCUS_MINING,
+            name = "Focus Mining",
+            description = "Run the next available Mining activity",
+            section = "activityControlsSection",
+            position = 8
+    )
+    default ConfigButton focusMining() {
+        return new ConfigButton();
+    }
+
+    @ConfigItem(
+            keyName = FOCUS_SMITHING,
+            name = "Focus Smithing",
+            description = "Run the next available Smithing activity",
+            section = "activityControlsSection",
+            position = 9
+    )
+    default ConfigButton focusSmithing() {
+        return new ConfigButton();
+    }
+
+    @ConfigItem(
+            keyName = FOCUS_CRAFTING,
+            name = "Focus Crafting",
+            description = "Run the next available Crafting activity",
+            section = "activityControlsSection",
+            position = 10
+    )
+    default ConfigButton focusCrafting() {
+        return new ConfigButton();
+    }
+
+    @ConfigItem(
+            keyName = FOCUS_ATTACK,
+            name = "Focus Attack",
+            description = "Run the next available Attack activity",
+            section = "activityControlsSection",
+            position = 11
+    )
+    default ConfigButton focusAttack() {
+        return new ConfigButton();
+    }
+
+    @ConfigItem(
+            keyName = FOCUS_STRENGTH,
+            name = "Focus Strength",
+            description = "Run the next available Strength activity",
+            section = "activityControlsSection",
+            position = 12
+    )
+    default ConfigButton focusStrength() {
+        return new ConfigButton();
+    }
+
+    @ConfigItem(
+            keyName = FOCUS_DEFENCE,
+            name = "Focus Defence",
+            description = "Run the next available Defence activity",
+            section = "activityControlsSection",
+            position = 13
+    )
+    default ConfigButton focusDefence() {
+        return new ConfigButton();
+    }
+
+    @ConfigItem(
+            keyName = FOCUS_PRAYER,
+            name = "Focus Prayer",
+            description = "Run the next available Prayer activity",
+            section = "activityControlsSection",
+            position = 14
+    )
+    default ConfigButton focusPrayer() {
+        return new ConfigButton();
+    }
+
+    @ConfigItem(
+            keyName = FOCUS_QUESTS,
+            name = "Focus Quests",
+            description = "Run the next available enabled quest activity",
+            section = "activityControlsSection",
+            position = 15
+    )
+    default ConfigButton focusQuests() {
+        return new ConfigButton();
     }
 
     @ConfigItem(
@@ -166,11 +342,23 @@ public interface MntnBuilderConfig extends Config {
 
     @Range(max = 99)
     @ConfigItem(
+            keyName = "firemakingTarget",
+            name = "Firemaking target level",
+            description = "The planner will keep burning logs until real Firemaking level reaches this. Set to 0 to ignore.",
+            section = "skillTargetsSection",
+            position = 4
+    )
+    default int firemakingTarget() {
+        return 20;
+    }
+
+    @Range(max = 99)
+    @ConfigItem(
             keyName = "woodcuttingTarget",
             name = "Woodcutting target level",
             description = "The planner will keep woodcutting until real Woodcutting level reaches this. Set to 0 to ignore.",
             section = "skillTargetsSection",
-            position = 3
+            position = 4
     )
     default int woodcuttingTarget() {
         return 20;
@@ -182,7 +370,7 @@ public interface MntnBuilderConfig extends Config {
             name = "Mining target level",
             description = "The planner will keep mining until real Mining level reaches this. Set to 0 to ignore.",
             section = "skillTargetsSection",
-            position = 4
+            position = 6
     )
     default int miningTarget() {
         return 20;
@@ -194,10 +382,22 @@ public interface MntnBuilderConfig extends Config {
             name = "Smithing target level",
             description = "The planner will keep smithing until real Smithing level reaches this. Set to 0 to ignore.",
             section = "skillTargetsSection",
-            position = 5
+            position = 7
     )
     default int smithingTarget() {
         return 20;
+    }
+
+    @Range(max = 99)
+    @ConfigItem(
+            keyName = "craftingTarget",
+            name = "Crafting target level",
+            description = "The planner will keep crafting until real Crafting level reaches this. Set to 0 to ignore.",
+            section = "skillTargetsSection",
+            position = 7
+    )
+    default int craftingTarget() {
+        return 0;
     }
 
     @Range(max = 99)
@@ -206,7 +406,7 @@ public interface MntnBuilderConfig extends Config {
             name = "Attack target level",
             description = "The planner will keep training Attack until real level reaches this. Set to 0 to ignore.",
             section = "skillTargetsSection",
-            position = 6
+            position = 8
     )
     default int attackTarget() {
         return 20;
@@ -218,7 +418,7 @@ public interface MntnBuilderConfig extends Config {
             name = "Strength target level",
             description = "The planner will keep training Strength until real level reaches this. Set to 0 to ignore.",
             section = "skillTargetsSection",
-            position = 7
+            position = 9
     )
     default int strengthTarget() {
         return 20;
@@ -230,7 +430,7 @@ public interface MntnBuilderConfig extends Config {
             name = "Defence target level",
             description = "The planner will keep training Defence until real level reaches this. Set to 0 to ignore.",
             section = "skillTargetsSection",
-            position = 8
+            position = 10
     )
     default int defenceTarget() {
         return 20;
@@ -242,35 +442,16 @@ public interface MntnBuilderConfig extends Config {
             name = "Prayer target level",
             description = "The planner will keep training Prayer and burying bones until real level reaches this. Set to 0 to ignore.",
             section = "skillTargetsSection",
-            position = 9
+            position = 11
     )
     default int prayerTarget() {
         return 20;
     }
 
     @ConfigSection(
-            name = "Money",
-            description = "Coin goals for supplies and early account building",
-            position = 6
-    )
-    String moneySection = "moneySection";
-
-    @Range(min = 0)
-    @ConfigItem(
-            keyName = "moneyTarget",
-            name = "Money target",
-            description = "Optional total coins target across inventory and bank. Set to 0 to disable.",
-            section = "moneySection",
-            position = 1
-    )
-    default int moneyTarget() {
-        return 0;
-    }
-
-    @ConfigSection(
             name = "Quests",
             description = "Quest goals for the builder to complete",
-            position = 7
+            position = 6
     )
     String questsSection = "questsSection";
 

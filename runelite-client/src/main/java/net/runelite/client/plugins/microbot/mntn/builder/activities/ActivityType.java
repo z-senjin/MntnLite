@@ -5,12 +5,13 @@ import net.runelite.api.Skill;
 public enum ActivityType {
     FISHING,
     COOKING,
+    FIREMAKING,
     WOODCUTTING,
     COMBAT,
     BANKING,
     SUPPLY,
-    MONEY_MAKING,
     MINING,
+    CRAFTING,
     SMITHING,
     QUESTING;
 
@@ -21,10 +22,14 @@ public enum ActivityType {
                 return FISHING;
             case COOKING:
                 return COOKING;
+            case FIREMAKING:
+                return FIREMAKING;
             case WOODCUTTING:
                 return WOODCUTTING;
             case MINING:
                 return MINING;
+            case CRAFTING:
+                return CRAFTING;
             case SMITHING:
                 return SMITHING;
             case ATTACK:

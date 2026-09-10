@@ -4,7 +4,6 @@ import net.runelite.api.Skill;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.Strategy;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
-import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.EquipmentRequirement;
 import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.ItemRequirement;
 import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.Requirement;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
@@ -12,7 +11,7 @@ import net.runelite.client.plugins.microbot.mntn.builder.tasks.combat.CombatTask
 import net.runelite.client.plugins.microbot.util.math.Rs2Random;
 
 import java.time.Duration;
-import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 public class CombatStrategy implements Strategy {
@@ -127,28 +126,26 @@ public class CombatStrategy implements Strategy {
 
     @Override
     public List<Requirement> requirements(AccountContext context) {
-        List<Requirement> requirements = new ArrayList<>();
-
-        CombatGear.PurchasableGear upgrade = CombatGear.findNextPurchasableUpgrade(
-                context,
-                !canFightUnarmed(monster)
-        );
         CombatGear.GearItem weapon = selectedWeapon(context);
-        if (upgrade != null) {
-            requirements.add(new EquipmentRequirement(upgrade.item.name));
-        } else if (weapon != null) {
-            requirements.add(new EquipmentRequirement(weapon.name));
-        } else if (!canFightUnarmed(monster)) {
-            requirements.add(new EquipmentRequirement(STARTER_WEAPON));
+        if (weapon == null && !canFightUnarmed(monster)) {
+            return Collections.singletonList(new ItemRequirement(STARTER_WEAPON, 1));
         }
 
-        int foodNeeded = Math.max(0, recommendedFoodCount(context) - inventoryFoodCount(context));
-        if (foodNeeded > 0) {
-            String food = findBestFoodInBank(context);
-            requirements.add(new ItemRequirement(food != null ? food : STARTER_FOOD, foodNeeded));
+        int foodNeeded = recommendedFoodCount(context);
+        if (foodNeeded == 0) {
+            return Collections.emptyList();
         }
 
-        return requirements;
+        String food = findBestAvailableFood(context);
+        int available = food == null ? 0
+                : context.inventory().getCount(food) + context.bank().getCount(food);
+        if (available >= foodNeeded) {
+            return Collections.emptyList();
+        }
+        return Collections.singletonList(new ItemRequirement(
+                food != null ? food : STARTER_FOOD,
+                foodNeeded - available
+        ));
     }
 
     @Override
@@ -291,6 +288,15 @@ public class CombatStrategy implements Strategy {
     public static String findBestFoodInBank(AccountContext context) {
         for (String food : COOKED_FOODS) {
             if (context.bank().hasItem(food)) {
+                return food;
+            }
+        }
+        return null;
+    }
+
+    public static String findBestAvailableFood(AccountContext context) {
+        for (String food : COOKED_FOODS) {
+            if (context.inventory().hasItem(food) || context.bank().hasItem(food)) {
                 return food;
             }
         }

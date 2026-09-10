@@ -14,4 +14,8 @@ public class EquipmentView {
     public boolean hasItem(int itemId) {
         return Rs2Equipment.isWearing(itemId);
     }
+
+    public boolean isEmpty() {
+        return Rs2Equipment.items().isEmpty();
+    }
 }

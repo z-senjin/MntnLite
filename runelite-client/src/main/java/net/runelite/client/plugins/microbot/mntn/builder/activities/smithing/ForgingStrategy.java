@@ -11,24 +11,36 @@ import net.runelite.client.plugins.microbot.mntn.builder.tasks.skilling.ForgingT
 import net.runelite.client.plugins.microbot.util.math.Rs2Random;
 
 import java.time.Duration;
-import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.List;
 
 public class ForgingStrategy implements Strategy {
 
     public enum BarType {
-        BRONZE(1, 12.5, "Bronze bar"),
-        IRON(15, 25.0, "Iron bar"),
-        STEEL(30, 37.5, "Steel bar");
+        BRONZE(1, 12.5, "Bronze bar", 1, 4, 16, 18),
+        IRON(15, 25.0, "Iron bar", 15, 19, 31, 33),
+        STEEL(30, 37.5, "Steel bar", 30, 34, 46, 48),
+        MITHRIL(50, 50.0, "Mithril bar", 50, 54, 66, 68),
+        ADAMANT(70, 62.5, "Adamantite bar", 70, 74, 86, 88),
+        RUNE(85, 75.0, "Rune bar", 85, 89, 99, 99);
 
         public final int requiredLevel;
         public final double xpPerBar;
         public final String barItemName;
+        public final int daggerLevel;
+        public final int swordLevel;
+        public final int platelegsLevel;
+        public final int platebodyLevel;
 
-        BarType(int requiredLevel, double xpPerBar, String barItemName) {
+        BarType(int requiredLevel, double xpPerBar, String barItemName, int daggerLevel,
+                int swordLevel, int platelegsLevel, int platebodyLevel) {
             this.requiredLevel = requiredLevel;
             this.xpPerBar = xpPerBar;
             this.barItemName = barItemName;
+            this.daggerLevel = daggerLevel;
+            this.swordLevel = swordLevel;
+            this.platelegsLevel = platelegsLevel;
+            this.platebodyLevel = platebodyLevel;
         }
     }
 
@@ -65,10 +77,19 @@ public class ForgingStrategy implements Strategy {
 
     @Override
     public List<Requirement> requirements(AccountContext context) {
-        return Arrays.asList(
-                new ItemRequirement(HAMMER, 1),
-                new ItemRequirement(barType.barItemName, 1)
-        );
+        List<Requirement> requirements = new ArrayList<>();
+        addMissingInput(requirements, context, HAMMER, 1);
+        addMissingInput(requirements, context, barType.barItemName, 1);
+        return requirements;
+    }
+
+    private static void addMissingInput(List<Requirement> requirements, AccountContext context,
+                                        String itemName, int quantity) {
+        ItemRequirement input = new ItemRequirement(itemName, quantity);
+        int missing = input.getMissingAccountQuantity(context);
+        if (missing > 0) {
+            requirements.add(new ItemRequirement(itemName, missing));
+        }
     }
 
     @Override

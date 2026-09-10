@@ -15,6 +15,8 @@ import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskActionGuard;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStatus;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStopReason;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.banking.BankingTask;
+import net.runelite.client.plugins.microbot.util.grandexchange.GrandExchangeAction;
+import net.runelite.client.plugins.microbot.util.grandexchange.GrandExchangeRequest;
 import net.runelite.client.plugins.microbot.util.grandexchange.Rs2GrandExchange;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
 import net.runelite.client.plugins.microbot.util.shop.Rs2Shop;
@@ -29,6 +31,7 @@ import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
 public class SupplyTask implements Task {
 
     private static final int MAX_GE_COLLECT_ATTEMPTS = 20;
+    private static final int GRAND_EXCHANGE_BUY_PERCENT = 10;
 
     private enum Phase {
         CHECK,
@@ -123,6 +126,12 @@ public class SupplyTask implements Task {
             return TaskStatus.RUNNING;
         }
 
+        if (requirement instanceof EquipmentRequirement
+                && context.inventory().hasItem(((EquipmentRequirement) requirement).getItemName())) {
+            phase = Phase.EQUIP;
+            return TaskStatus.RUNNING;
+        }
+
         if (route.getType() == SupplyRouteType.BANK) {
             return prepareBankRoute(context);
         }
@@ -188,9 +197,11 @@ public class SupplyTask implements Task {
             return stop(TaskStatus.BLOCKED, TaskStopReason.MISSING_COINS);
         }
 
-        int missingCoins = Math.max(0, coinsNeeded - context.inventory().getCount("Coins"));
-        if (missingCoins > 0) {
-            bankingTask = createWithdrawalTask(context, "Coins", missingCoins);
+        int bankCoins = context.bank().getCount("Coins");
+        if (bankCoins > 0) {
+            // A purchase trip carries the whole available coin stack. The estimate above only
+            // decides whether this route is affordable; it must not leave usable funds behind.
+            bankingTask = createWithdrawalTask(context, "Coins", purchaseCoinWithdrawalAmount(bankCoins));
             afterBankPhase = purchasePhase;
             phase = Phase.BANK;
             return TaskStatus.RUNNING;
@@ -280,18 +291,36 @@ public class SupplyTask implements Task {
                 : BankingTask.Mode.WITHDRAW;
     }
 
+    static int purchaseCoinWithdrawalAmount(int bankCoins) {
+        return bankCoins > 0 ? -1 : 0;
+    }
+
     private TaskStatus handleGrandExchangeBuy(AccountContext context) {
         if (isSupplied(context)) {
             phase = Phase.DONE;
             return TaskStatus.RUNNING;
         }
 
+        if (!hasOpenGrandExchangeSlot()) {
+            return stop(TaskStatus.BLOCKED, TaskStopReason.GE_NO_OPEN_SLOT);
+        }
+
         beforeRouteInventoryCount = desiredInventoryCount(context);
-        boolean placed = Rs2GrandExchange.buyItem(
-                route.getItemName(),
-                estimatedUnitPrice(),
-                Math.max(1, missingDesiredQuantity(context))
-        );
+        boolean placed;
+        try {
+            placed = Rs2GrandExchange.processOffer(GrandExchangeRequest.builder()
+                    .action(GrandExchangeAction.BUY)
+                    .itemName(route.getItemName())
+                    .exact(true)
+                    .price(baseUnitPrice())
+                    .percent(GRAND_EXCHANGE_BUY_PERCENT)
+                    .quantity(Math.max(1, missingDesiredQuantity(context)))
+                    .build());
+        } catch (RuntimeException ex) {
+            return stop(TaskStatus.BLOCKED, hasOpenGrandExchangeSlot()
+                    ? TaskStopReason.GE_OFFER_FAILED
+                    : TaskStopReason.GE_NO_OPEN_SLOT);
+        }
         if (!placed) {
             return stop(TaskStatus.BLOCKED, TaskStopReason.GE_OFFER_FAILED);
         }
@@ -299,6 +328,14 @@ public class SupplyTask implements Task {
         geCollectAttempts = 0;
         phase = Phase.GE_COLLECT;
         return TaskStatus.RUNNING;
+    }
+
+    private boolean hasOpenGrandExchangeSlot() {
+        try {
+            return Rs2GrandExchange.getAvailableSlotsCount() > 0;
+        } catch (RuntimeException ex) {
+            return false;
+        }
     }
 
     private TaskStatus handleGrandExchangeCollect(AccountContext context) {
@@ -529,6 +566,9 @@ public class SupplyTask implements Task {
     }
 
     private boolean isSupplied(AccountContext context) {
+        if (requirement instanceof EquipmentRequirement) {
+            return requirement.isSatisfied(context);
+        }
         return requirement.isSatisfied(context)
                 || (route.getItemName() != null
                 && context.inventory().getCount(route.getItemName()) >= route.getQuantity());
@@ -539,9 +579,12 @@ public class SupplyTask implements Task {
     }
 
     private int estimatedUnitPrice() {
+        return (int) Math.ceil(baseUnitPrice() * route.getPriceMultiplier());
+    }
+
+    private int baseUnitPrice() {
         int fallback = route.getEstimatedUnitPrice() > 0 ? route.getEstimatedUnitPrice() : 100;
-        return (int) Math.ceil(BuilderItemPrices.estimate(route.getItemName(), fallback)
-                * route.getPriceMultiplier());
+        return BuilderItemPrices.estimate(route.getItemName(), fallback);
     }
 
     private boolean hasEnoughTotalCoins(AccountContext context, int coinsNeeded) {

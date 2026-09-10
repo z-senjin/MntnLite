@@ -297,6 +297,33 @@ public class CombatGear {
         return toWithdraw;
     }
 
+    /**
+     * Selects one level-valid item for each combat slot from the whole account.
+     * The caller can then deposit everything and withdraw exactly this loadout.
+     */
+    public static List<String> getBestLoadout(AccountContext context) {
+        List<String> loadout = new ArrayList<>();
+
+        GearItem weapon = findBestWeapon(context, true);
+        if (weapon != null) {
+            loadout.add(weapon.name);
+        }
+
+        if (weapon == null || !isTwoHanded(weapon)) {
+            addBestArmor(loadout, findBestArmor(context, SHIELDS, true));
+        }
+        addBestArmor(loadout, findBestArmor(context, HELMETS, true));
+        addBestArmor(loadout, findBestArmor(context, BODIES, true));
+        addBestArmor(loadout, findBestArmor(context, LEGS, true));
+        return loadout;
+    }
+
+    private static void addBestArmor(List<String> loadout, GearItem item) {
+        if (item != null) {
+            loadout.add(item.name);
+        }
+    }
+
     public static List<String> getAllKnownGearNames() {
         List<String> names = new ArrayList<>();
         for (GearItem w : WEAPONS) names.add(w.name);

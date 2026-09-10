@@ -16,6 +16,7 @@ import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
 
 import java.util.EnumMap;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -95,6 +96,26 @@ public class AccountContext {
 
     public int getBoostedLevel(Skill skill) {
         return getSkillLevel(skill, true);
+    }
+
+    /** Reads all skill levels in one client-thread call for display-only status snapshots. */
+    public Map<Skill, Integer> getRealSkillLevels() {
+        if (planningSnapshot != null) {
+            return Collections.unmodifiableMap(new EnumMap<>(planningSnapshot.realLevels));
+        }
+        if (!isLoggedIn() || Microbot.getClient() == null || Microbot.getClientThread() == null) {
+            return Collections.emptyMap();
+        }
+        return Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            Map<Skill, Integer> levels = new EnumMap<>(Skill.class);
+            if (Microbot.getClient() == null) {
+                return Collections.unmodifiableMap(levels);
+            }
+            for (Skill skill : Skill.values()) {
+                levels.put(skill, Microbot.getClient().getRealSkillLevel(skill));
+            }
+            return Collections.unmodifiableMap(levels);
+        }).orElse(Collections.emptyMap());
     }
 
     public int getCombatLevel() {

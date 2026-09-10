@@ -203,8 +203,7 @@ public class FishingTask implements Task {
             return TaskStatus.RUNNING;
         }
 
-        boolean isAnimating = Rs2Player.isAnimating();
-        if (!isAnimating) {
+        if (!Rs2Player.isAnimating() && !Rs2Player.isMoving()) {
             TaskActionGuard.Result fishResult = fishGuard.evaluate("fish " + method.name(), false);
             if (fishResult == TaskActionGuard.Result.EXHAUSTED) {
                 return stop(TaskStatus.REPLAN, TaskStopReason.ACTION_FAILED);
@@ -216,7 +215,7 @@ public class FishingTask implements Task {
             }
         } else {
             fishGuard.reset();
-            debugLog(context, "Already animating, waiting");
+            debugLog(context, "Already animating/moving, waiting");
         }
 
         spotGuard.reset();

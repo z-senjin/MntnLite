@@ -38,6 +38,13 @@ public class MiningStrategy implements Strategy {
     }
 
     public enum Method {
+        CLAY(
+                1, 5.0,
+                new int[]{11362, 11363},
+                "Mine",
+                "Clay",
+                new WorldPoint(3180, 3372, 0)
+        ),
         TIN_ORE(
                 1, 17.5,
                 new int[]{11360, 11361},
@@ -65,6 +72,13 @@ public class MiningStrategy implements Strategy {
                 "Mine",
                 "Coal",
                 new WorldPoint(3082, 3423, 0)
+        ),
+        SILVER_ORE(
+                20, 40.0,
+                new int[]{11368, 11369},
+                "Mine",
+                "Silver ore",
+                new WorldPoint(3295, 3314, 0)
         );
 
         public final int requiredLevel;
@@ -87,6 +101,7 @@ public class MiningStrategy implements Strategy {
 
     /** F2P mine areas evaluated independently by the planner. */
     public enum Location {
+        VARROCK_WEST_CLAY(Method.CLAY, new WorldPoint(3180, 3372, 0)),
         VARROCK_EAST_TIN(Method.TIN_ORE, new WorldPoint(3285, 3365, 0)),
         LUMBRIDGE_SWAMP_TIN(Method.TIN_ORE, new WorldPoint(3227, 3148, 0)),
         RIMMINGTON_TIN(Method.TIN_ORE, new WorldPoint(2970, 3247, 0)),
@@ -94,16 +109,27 @@ public class MiningStrategy implements Strategy {
         LUMBRIDGE_SWAMP_COPPER(Method.COPPER_ORE, new WorldPoint(3227, 3148, 0)),
         RIMMINGTON_COPPER(Method.COPPER_ORE, new WorldPoint(2970, 3247, 0)),
         VARROCK_EAST_IRON(Method.IRON_ORE, new WorldPoint(3286, 3369, 0)),
-        AL_KHARID_IRON(Method.IRON_ORE, new WorldPoint(3297, 3317, 0)),
+        AL_KHARID_IRON(Method.IRON_ORE, new WorldPoint(3297, 3317, 0), 29),
         RIMMINGTON_IRON(Method.IRON_ORE, new WorldPoint(2970, 3247, 0)),
-        FALADOR_NORTH_COAL(Method.COAL_ORE, new WorldPoint(3082, 3423, 0));
+        FALADOR_NORTH_COAL(Method.COAL_ORE, new WorldPoint(3082, 3423, 0)),
+        AL_KHARID_SILVER(Method.SILVER_ORE, new WorldPoint(3295, 3314, 0), 29);
 
         public final Method method;
         public final WorldPoint point;
+        public final int requiredCombatLevel;
 
         Location(Method method, WorldPoint point) {
+            this(method, point, 0);
+        }
+
+        Location(Method method, WorldPoint point, int requiredCombatLevel) {
             this.method = method;
             this.point = point;
+            this.requiredCombatLevel = requiredCombatLevel;
+        }
+
+        public boolean meetsCombatRequirement(AccountContext context) {
+            return context.getCombatLevel() >= requiredCombatLevel;
         }
 
         public static Location defaultFor(Method method) {
@@ -140,6 +166,10 @@ public class MiningStrategy implements Strategy {
 
     @Override
     public boolean canExecute(AccountContext context) {
+        if (!location.meetsCombatRequirement(context)) {
+            return false;
+        }
+
         int level = context.getRealLevel(Skill.MINING);
         if (level < method.requiredLevel) {
             return false;
@@ -153,11 +183,15 @@ public class MiningStrategy implements Strategy {
         if (pickaxe == null) {
             return Collections.singletonList(new ItemRequirement(Pickaxe.BRONZE.itemName, 1));
         }
-        return Collections.singletonList(new ItemRequirement(pickaxe.itemName, 1));
+        return Collections.emptyList();
     }
 
     @Override
     public double score(AccountContext context) {
+        if (!location.meetsCombatRequirement(context)) {
+            return -1000;
+        }
+
         int level = context.getRealLevel(Skill.MINING);
         if (level < method.requiredLevel) {
             return -1000;

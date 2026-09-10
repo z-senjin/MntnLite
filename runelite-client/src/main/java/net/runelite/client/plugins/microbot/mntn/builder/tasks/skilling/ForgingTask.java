@@ -1,6 +1,7 @@
 package net.runelite.client.plugins.microbot.mntn.builder.tasks.skilling;
 
 import net.runelite.api.Skill;
+import net.runelite.api.gameval.InterfaceID;
 import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.api.tileobject.models.Rs2TileObjectModel;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.smithing.ForgingStrategy;
@@ -13,6 +14,8 @@ import net.runelite.client.plugins.microbot.mntn.builder.tasks.banking.BankingTa
 import net.runelite.client.plugins.microbot.util.player.Rs2Player;
 import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
 import net.runelite.client.plugins.microbot.util.widget.Rs2Widget;
+
+import java.util.Optional;
 
 public class ForgingTask implements Task {
 
@@ -148,13 +151,23 @@ public class ForgingTask implements Task {
 
         boolean forged = barsBeforeForge > 0 && barCount < barsBeforeForge;
         TaskActionGuard.Result forgeResult = forgeGuard.evaluate("forge " + targetItem, forged);
+        if (forgeResult == TaskActionGuard.Result.CONFIRMED) {
+            // Consume this one observed bar reduction. Leaving the old baseline in place
+            // makes every later tick look like the same completed forge and prevents the
+            // next product click.
+            barsBeforeForge = 0;
+            return TaskStatus.RUNNING;
+        }
         if (forgeResult == TaskActionGuard.Result.EXHAUSTED) {
             return stop(TaskStatus.REPLAN, TaskStopReason.PRODUCTION_WIDGET_FAILED);
         }
         if (forgeResult == TaskActionGuard.Result.READY) {
             debugLog(context, "Clicking widget for: " + targetItem);
             barsBeforeForge = barCount;
-            Rs2Widget.clickWidget(targetItem);
+            boolean clicked = Rs2Widget.clickWidget(targetItem, Optional.of(InterfaceID.SMITHING), 0, true);
+            if (!clicked) {
+                debugLog(context, "Smithing interface did not expose: " + targetItem);
+            }
             forgeGuard.recordAttempt();
         }
         return TaskStatus.RUNNING;
@@ -215,36 +228,21 @@ public class ForgingTask implements Task {
                 && context.inventory().hasItem(barType.barItemName);
     }
 
-    /**
-     * Option C: Bar-efficient max XP. Prioritizes Platebody (5 bars) -> Platelegs (3 bars)
-     * -> Sword (1 bar) -> Dagger (1 bar), based on current Smithing level and available bars.
-     */
+    /** Bar-efficient max XP using the exact unlock data declared by the selected bar type. */
     private String determineBestItemToForge(AccountContext context, int barCount) {
         int smithingLevel = context.getRealLevel(Skill.SMITHING);
         String capitalBar = barType.name().substring(0, 1).toUpperCase() + barType.name().substring(1).toLowerCase();
 
-        int baseOffset = 0;
-        if (barType == ForgingStrategy.BarType.IRON) {
-            baseOffset = 15;
-        } else if (barType == ForgingStrategy.BarType.STEEL) {
-            baseOffset = 30;
-        }
-
-        int platebodyReq = (barType == ForgingStrategy.BarType.BRONZE) ? 18 : (baseOffset + 18);
-        int platelegsReq = (barType == ForgingStrategy.BarType.BRONZE) ? 16 : (baseOffset + 16);
-        int swordReq = (barType == ForgingStrategy.BarType.BRONZE) ? 4 : (baseOffset + 4);
-        int daggerReq = (barType == ForgingStrategy.BarType.BRONZE) ? 1 : baseOffset;
-
-        if (barCount >= 5 && smithingLevel >= platebodyReq) {
+        if (barCount >= 5 && smithingLevel >= barType.platebodyLevel) {
             return capitalBar + " platebody";
         }
-        if (barCount >= 3 && smithingLevel >= platelegsReq) {
+        if (barCount >= 3 && smithingLevel >= barType.platelegsLevel) {
             return capitalBar + " platelegs";
         }
-        if (barCount >= 1 && smithingLevel >= swordReq) {
+        if (barCount >= 1 && smithingLevel >= barType.swordLevel) {
             return capitalBar + " sword";
         }
-        if (barCount >= 1 && smithingLevel >= daggerReq) {
+        if (barCount >= 1 && smithingLevel >= barType.daggerLevel) {
             return capitalBar + " dagger";
         }
         return null;

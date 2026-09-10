@@ -75,26 +75,11 @@ public class WoodcuttingTask implements Task {
         }
     }
 
-    /**
-     * The same visual tree type has several distinct game object ids (different rotations/
-     * graphical variants around the map) - this tries each id in method.treeObjectIds in
-     * turn and returns the first one that's actually nearby, rather than requiring a single
-     * id to match.
-     *
-     * NOTE: this returns the first MATCHING id's nearest instance, not necessarily the
-     * closest instance across ALL ids - e.g. if id[0] has a match 20 tiles away and id[1]
-     * has one 3 tiles away, this still returns id[0]'s. Good enough to get chopping working;
-     * if you want true nearest-across-all-variants later, this is the method to extend with
-     * a distance comparison between candidates.
-     */
     private Rs2TileObjectModel findNearestTree() {
-        for (int objectId : method.treeObjectIds) {
-            Rs2TileObjectModel tree = Microbot.getRs2TileObjectCache().query().withId(objectId).within(20).nearest();
-            if (tree != null) {
-                return tree;
-            }
-        }
-        return null;
+        return Microbot.getRs2TileObjectCache().query()
+                .withIds(method.treeObjectIds)
+                .within(20)
+                .nearest();
     }
 
     private TaskStatus handleWalk(AccountContext context) {

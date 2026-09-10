@@ -65,13 +65,10 @@ public class SupplyStrategy implements Strategy {
 
     @Override
     public List<Requirement> requirements(AccountContext context) {
-        switch (route.getType()) {
-            case GRAND_EXCHANGE:
-            case SHOP:
-                return Collections.singletonList(new MoneyRequirement(estimatedTotalPrice()));
-            default:
-                return Collections.emptyList();
-        }
+        // Purchasing is one SupplyTask transaction: it verifies total coins, withdraws
+        // the available bank stack, then completes the shop or GE route. Do not split
+        // that into a planner-visible coin task that can be rerolled into unrelated work.
+        return Collections.emptyList();
     }
 
     private boolean canUseBank(AccountContext context) {

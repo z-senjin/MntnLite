@@ -78,6 +78,7 @@ public class PlannerScorer {
             case SHOP_OUT_OF_STOCK:
             case SHOP_UNAVAILABLE:
             case SHOP_ZERO_VALUE:
+            case GE_NO_OPEN_SLOT:
             case GE_OFFER_FAILED:
                 return 75;
             case MISSING_BANK_ITEM:

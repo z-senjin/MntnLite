@@ -17,7 +17,9 @@ import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.Requi
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.function.Supplier;
 
@@ -77,34 +79,75 @@ public class AccountPlanner {
     }
 
     private List<Plan> planAllInSnapshot(AccountContext context) {
-        List<Plan> candidates = new ArrayList<>();
-        AccountSnapshot snapshot = contentSnapshot(context);
-        int incompleteGoals = 0;
-        int unmetRequirements = 0;
-        int providerMatches = 0;
-        int strategiesConsidered = 0;
+        return planGoalsInSnapshot(context, goals, "candidate evaluation");
+    }
 
-        for (Goal goal : goals) {
-            boolean goalComplete = goal.isComplete(context);
-            if (goalComplete) {
+    /** Plans only the supplied temporary goal without mutating the configured account goals. */
+    public Plan planForGoal(AccountContext context, Goal goal) {
+        if (goal == null) {
+            return null;
+        }
+        List<Plan> candidates = withPlanningSnapshot(context, "overlay focus", () ->
+                planGoalsInSnapshot(context, java.util.Collections.singletonList(goal), "overlay focus"));
+        return candidates.isEmpty() ? null : candidates.get(0);
+    }
+
+    /** Plans only the supplied configured goals, used for the overlay's quest focus. */
+    public Plan planForGoals(AccountContext context, List<Goal> requestedGoals) {
+        if (requestedGoals == null || requestedGoals.isEmpty()) {
+            return null;
+        }
+        List<Plan> candidates = withPlanningSnapshot(context, "overlay focus", () ->
+                planGoalsInSnapshot(context, requestedGoals, "overlay focus"));
+        return candidates.isEmpty() ? null : candidates.get(0);
+    }
+
+    private List<Plan> planGoalsInSnapshot(AccountContext context, List<Goal> candidateGoals, String operation) {
+        AccountSnapshot snapshot = contentSnapshot(context);
+        List<Plan> rankedCandidates = rankCandidates(collectCandidates(context, snapshot, false, candidateGoals));
+        String selectionStage = "ready";
+        if (rankedCandidates.isEmpty()) {
+            rankedCandidates = rankCandidates(collectCandidates(context, snapshot, true, candidateGoals));
+            selectionStage = "prerequisite";
+        }
+        if (debugLogging) {
+            debugLog(operation + ": stage=" + selectionStage
+                    + ", goals=" + candidateGoals.size()
+                    + ", candidates=" + rankedCandidates.size()
+                    + ", top="
+                    + (rankedCandidates.isEmpty() ? "none" : rankedCandidates.get(0).strategy().name()
+                    + " score=" + rankedCandidates.get(0).score()));
+        }
+        return rankedCandidates;
+    }
+
+    /**
+     * Prefer work that can begin now. Supply is only considered after no productive
+     * activity is ready, so the planner acquires one missing input instead of stocking
+     * every material and equipment prerequisite across the account.
+     */
+    private List<Plan> collectCandidates(
+            AccountContext context,
+            AccountSnapshot snapshot,
+            boolean resolvePrerequisites,
+            List<Goal> candidateGoals
+    ) {
+        List<Plan> candidates = new ArrayList<>();
+        for (Goal goal : candidateGoals) {
+            if (goal.isComplete(context)) {
                 continue;
             }
-            incompleteGoals++;
             for (Requirement requirement : goal.requirements(context)) {
-                boolean requirementSatisfied = requirement.isSatisfied(context);
-                if (requirementSatisfied) {
+                if (requirement.isSatisfied(context)) {
                     continue;
                 }
-                unmetRequirements++;
                 for (ActivityRequest request : requirement.getWaysToSatisfy(context)) {
                     for (Activity activity : activities) {
-                        boolean canProvide = activity.canProvide(request, context);
-                        if (!canProvide) {
+                        if (!activity.canProvide(request, context)
+                                || (!resolvePrerequisites && activity.type() == ActivityType.SUPPLY)) {
                             continue;
                         }
-                        providerMatches++;
                         for (Strategy strategy : activity.getStrategies(context, request)) {
-                            strategiesConsidered++;
                             addStrategyCandidate(
                                     candidates,
                                     goal,
@@ -114,27 +157,12 @@ public class AccountPlanner {
                                     context,
                                     snapshot,
                                     0,
-                                    requirement,
-                                    activity,
-                                    strategy
+                                    resolvePrerequisites
                             );
                         }
                     }
                 }
             }
-        }
-
-        candidates.sort(Comparator.comparingDouble(Plan::score).reversed());
-        if (debugLogging) {
-            debugLog("pass: goals=" + goals.size()
-                    + ", incomplete=" + incompleteGoals
-                    + ", unmet=" + unmetRequirements
-                    + ", providers=" + providerMatches
-                    + ", strategies=" + strategiesConsidered
-                    + ", candidates=" + candidates.size()
-                    + ", top="
-                    + (candidates.isEmpty() ? "none" : candidates.get(0).strategy().name()
-                    + " score=" + candidates.get(0).score()));
         }
         return candidates;
     }
@@ -142,86 +170,6 @@ public class AccountPlanner {
     public Plan plan(AccountContext context) {
         List<Plan> candidates = planAll(context);
         return candidates.isEmpty() ? null : candidates.get(0);
-    }
-
-    /**
-     * Resolves the next valid action for one remembered goal without evaluating unrelated goals.
-     * Strategy prerequisites are still evaluated normally, so a resumed goal can acquire a
-     * missing item before continuing its original activity.
-     */
-    public Plan planForGoal(String goalName, AccountContext context) {
-        if (goalName == null || goalName.isBlank()) {
-            return null;
-        }
-        return withPlanningSnapshot(context, "cached-goal evaluation", () -> planForGoalInSnapshot(goalName, context));
-    }
-
-    private Plan planForGoalInSnapshot(String goalName, AccountContext context) {
-        Goal goal = goals.stream()
-                .filter(candidate -> goalName.equals(candidate.name()))
-                .filter(candidate -> !candidate.isComplete(context))
-                .findFirst()
-                .orElse(null);
-        if (goal == null) {
-            return null;
-        }
-
-        AccountSnapshot snapshot = contentSnapshot(context);
-        List<Plan> candidates = new ArrayList<>();
-        for (Requirement requirement : goal.requirements(context)) {
-            if (requirement.isSatisfied(context)) {
-                continue;
-            }
-            for (ActivityRequest request : requirement.getWaysToSatisfy(context)) {
-                for (Activity activity : activities) {
-                    if (!activity.canProvide(request, context)) {
-                        continue;
-                    }
-                    for (Strategy strategy : activity.getStrategies(context, request)) {
-                        addStrategyCandidate(
-                                candidates,
-                                goal,
-                                requirement,
-                                activity,
-                                strategy,
-                                context,
-                                snapshot,
-                                0,
-                                requirement,
-                                activity,
-                                strategy
-                        );
-                    }
-                }
-            }
-        }
-
-        candidates.sort(Comparator.comparingDouble(Plan::score).reversed());
-        return candidates.isEmpty() ? null : candidates.get(0);
-    }
-
-    /**
-     * Advances a prerequisite chain without letting an unrelated strategy replace the
-     * original objective between individual supply steps.
-     */
-    public Plan continuePlan(Plan completedPlan, AccountContext context) {
-        return withPlanningSnapshot(context, "objective continuation",
-                () -> continuePlanInSnapshot(completedPlan, context));
-    }
-
-    private Plan continuePlanInSnapshot(Plan completedPlan, AccountContext context) {
-        if (completedPlan == null || !completedPlan.hasPendingObjective()
-                || completedPlan.goal().isComplete(context)) {
-            return null;
-        }
-
-        return planObjective(
-                completedPlan.goal(),
-                completedPlan.objectiveRequirement(),
-                completedPlan.objectiveActivity(),
-                completedPlan.objectiveStrategy(),
-                context
-        );
     }
 
     /**
@@ -351,63 +299,27 @@ public class AccountPlanner {
         }
     }
 
-    private Plan planObjective(
-            Goal goal,
-            Requirement objectiveRequirement,
-            Activity objectiveActivity,
-            Strategy objectiveStrategy,
-            AccountContext context
-    ) {
-        AccountSnapshot snapshot = contentSnapshot(context);
-        if (!allowedContent.allows(objectiveStrategy.contentAccess())
-                || !objectiveStrategy.contentAccess().isCurrentlyReachable(snapshot)) {
-            return null;
+    /**
+     * Recursive prerequisite resolution can discover the same actionable route through more
+     * than one parent candidate. Retain one best copy so commitment comparison and debug
+     * output reflect actual choices rather than traversal duplicates.
+     */
+    private List<Plan> rankCandidates(List<Plan> candidates) {
+        Map<String, Plan> uniqueCandidates = new LinkedHashMap<>();
+        for (Plan candidate : candidates) {
+            String key = candidate.goal().name() + "|"
+                    + candidate.requirement().description() + "|"
+                    + candidate.activity().type() + "|"
+                    + candidate.strategy().name();
+            Plan existing = uniqueCandidates.get(key);
+            if (existing == null || candidate.score() > existing.score()) {
+                uniqueCandidates.put(key, candidate);
+            }
         }
 
-        Optional<Requirement> missingRequirement = objectiveStrategy.requirements(context)
-                .stream()
-                .filter(requirement -> !requirement.isSatisfied(context))
-                .findFirst();
-        if (missingRequirement.isPresent()) {
-            List<Plan> prerequisites = new ArrayList<>();
-            addRequirementCandidates(
-                    prerequisites,
-                    goal,
-                    missingRequirement.get(),
-                    context,
-                    snapshot,
-                    0,
-                    objectiveRequirement,
-                    objectiveActivity,
-                    objectiveStrategy
-            );
-            prerequisites.sort(Comparator.comparingDouble(Plan::score).reversed());
-            return prerequisites.isEmpty() ? null : prerequisites.get(0);
-        }
-
-        if (!objectiveStrategy.canExecute(context)) {
-            return null;
-        }
-
-        double score = scorer.score(
-                goal,
-                objectiveRequirement,
-                objectiveActivity.type(),
-                objectiveStrategy,
-                context,
-                memory,
-                sessionFlavor
-        );
-        return new Plan(
-                goal,
-                objectiveRequirement,
-                objectiveActivity,
-                objectiveStrategy,
-                score,
-                objectiveRequirement,
-                objectiveActivity,
-                objectiveStrategy
-        );
+        List<Plan> rankedCandidates = new ArrayList<>(uniqueCandidates.values());
+        rankedCandidates.sort(Comparator.comparingDouble(Plan::score).reversed());
+        return rankedCandidates;
     }
 
     private boolean addRequirementCandidates(
@@ -416,10 +328,7 @@ public class AccountPlanner {
             Requirement missingRequirement,
             AccountContext context,
             AccountSnapshot snapshot,
-            int depth,
-            Requirement objectiveRequirement,
-            Activity objectiveActivity,
-            Strategy objectiveStrategy
+            int depth
     ) {
         if (depth > MAX_REQUIREMENT_DEPTH) {
             return false;
@@ -445,9 +354,7 @@ public class AccountPlanner {
                                 context,
                                 snapshot,
                                 depth,
-                                objectiveRequirement,
-                                objectiveActivity,
-                                objectiveStrategy
+                                true
                         );
                     }
                 }
@@ -496,6 +403,11 @@ public class AccountPlanner {
         }
     }
 
+    private boolean usesGrandExchange(Strategy strategy) {
+        return strategy instanceof SupplyStrategy
+                && ((SupplyStrategy) strategy).routeType() == SupplyRouteType.GRAND_EXCHANGE;
+    }
+
     private boolean addStrategyCandidate(
             List<Plan> candidates,
             Goal goal,
@@ -505,14 +417,18 @@ public class AccountPlanner {
             AccountContext context,
             AccountSnapshot snapshot,
             int depth,
-            Requirement objectiveRequirement,
-            Activity objectiveActivity,
-            Strategy objectiveStrategy
+            boolean resolvePrerequisites
     ) {
         if (!allowedContent.allows(strategy.contentAccess())) {
             return false;
         }
         if (!strategy.contentAccess().isCurrentlyReachable(snapshot)) {
+            return false;
+        }
+        if (memory != null && memory.isCoolingDown(strategy.name())) {
+            return false;
+        }
+        if (memory != null && memory.isGrandExchangeUnavailable() && usesGrandExchange(strategy)) {
             return false;
         }
 
@@ -521,16 +437,16 @@ public class AccountPlanner {
                 .filter(strategyRequirement -> !strategyRequirement.isSatisfied(context))
                 .findFirst();
         if (missingStrategyRequirement.isPresent()) {
+            if (!resolvePrerequisites) {
+                return false;
+            }
             if (addRequirementCandidates(
                     candidates,
                     goal,
                     missingStrategyRequirement.get(),
                     context,
                     snapshot,
-                    depth + 1,
-                    objectiveRequirement,
-                    objectiveActivity,
-                    objectiveStrategy
+                    depth + 1
             )) {
                 return true;
             }
@@ -543,16 +459,7 @@ public class AccountPlanner {
         }
 
         double score = scorer.score(goal, requirement, activity.type(), strategy, context, memory, sessionFlavor);
-        candidates.add(new Plan(
-                goal,
-                requirement,
-                activity,
-                strategy,
-                score,
-                objectiveRequirement,
-                objectiveActivity,
-                objectiveStrategy
-        ));
+        candidates.add(new Plan(goal, requirement, activity, strategy, score));
         return true;
     }
 

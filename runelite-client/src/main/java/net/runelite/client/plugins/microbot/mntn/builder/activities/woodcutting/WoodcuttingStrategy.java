@@ -46,21 +46,10 @@ public class WoodcuttingStrategy implements Strategy {
         }
     }
 
-    /**
-     * One concrete tree/method. xpValue uses the real per-log OSRS values (25 / 37.5 / 67.5)
-     * since those are static game constants, not something that needs verifying like the
-     * placeholder object ids and locations below.
-     *
-     * treeObjectIds is an array, not a single id - the same visual tree type has several
-     * distinct game object ids in OSRS (different rotations/graphical variants scattered
-     * around the map), so a single id would miss most of them. WoodcuttingTask tries each id
-     * in turn and uses whichever's actually nearby.
-     */
+    /** One concrete F2P tree type and its known live object variants. */
     public enum Method {
         NORMAL_TREE(
                 1, 25,
-                // TODO verify - placeholders. Normal trees have many object id variants;
-                // add more as you find them via the OSRS Wiki or RuneLite's object ID tool.
                 new int[]{1276, 1278},
                 "Chop down",
                 "Logs",
@@ -68,17 +57,24 @@ public class WoodcuttingStrategy implements Strategy {
         ),
         OAK_TREE(
                 15, 37.5,
-                new int[]{10820}, // TODO verify - placeholders
+                new int[]{4533, 4540, 10820},
                 "Chop down",
                 "Oak logs",
                 new WorldPoint(3181, 3421, 0)
         ),
         WILLOW_TREE(
                 30, 67.5,
-                new int[]{10831, 10833, 10819}, // TODO verify - placeholders
+                new int[]{4534, 4541, 10819, 10829, 10831, 10833},
                 "Chop down",
                 "Willow logs",
                 new WorldPoint(3086, 3228, 0)
+        ),
+        YEW_TREE(
+                60, 175,
+                new int[]{4536, 5121, 10822, 10823},
+                "Chop down",
+                "Yew logs",
+                new WorldPoint(3166, 3490, 0)
         );
 
         public final int requiredLevel;
@@ -109,7 +105,8 @@ public class WoodcuttingStrategy implements Strategy {
         LUMBRIDGE_GENERAL_STORE_OAK(Method.OAK_TREE, new WorldPoint(3212, 3244, 0)),
         DRAYNOR_WILLOW(Method.WILLOW_TREE, new WorldPoint(3086, 3228, 0)),
         EDGEVILLE_WILLOW(Method.WILLOW_TREE, new WorldPoint(3094, 3491, 0)),
-        PORT_SARIM_WILLOW(Method.WILLOW_TREE, new WorldPoint(3048, 3235, 0));
+        PORT_SARIM_WILLOW(Method.WILLOW_TREE, new WorldPoint(3048, 3235, 0)),
+        VARROCK_GRAND_EXCHANGE_YEW(Method.YEW_TREE, new WorldPoint(3166, 3490, 0));
 
         public final Method method;
         public final WorldPoint point;
@@ -167,7 +164,7 @@ public class WoodcuttingStrategy implements Strategy {
         if (axe == null) {
             return Collections.singletonList(new ItemRequirement(Axe.BRONZE.itemName, 1));
         }
-        return Collections.singletonList(new ItemRequirement(axe, 1));
+        return Collections.emptyList();
     }
 
     @Override

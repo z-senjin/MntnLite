@@ -16,9 +16,9 @@ public enum SessionFlavor {
             case GATHERER:
                 return isGathering(activityType) ? 18 : activityType == ActivityType.SUPPLY ? 6 : -4;
             case COMBAT_HEAVY:
-                return activityType == ActivityType.COMBAT ? 22 : activityType == ActivityType.MONEY_MAKING ? 8 : -3;
+                return activityType == ActivityType.COMBAT ? 22 : -3;
             case EFFICIENT:
-                return activityType == ActivityType.MONEY_MAKING || activityType == ActivityType.QUESTING ? 12 : 4;
+                return activityType == ActivityType.QUESTING ? 12 : 4;
             case BALANCED:
             default:
                 return 0;

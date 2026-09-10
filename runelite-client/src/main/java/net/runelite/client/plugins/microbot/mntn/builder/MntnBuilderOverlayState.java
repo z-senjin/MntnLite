@@ -1,7 +1,12 @@
 package net.runelite.client.plugins.microbot.mntn.builder;
 
+import net.runelite.api.Skill;
+
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Collections;
+import java.util.EnumMap;
+import java.util.Map;
 
 public class MntnBuilderOverlayState {
 
@@ -20,6 +25,8 @@ public class MntnBuilderOverlayState {
     private final Duration commitmentDuration;
     private final Instant taskStartTime;
     private final double score;
+    private final Map<Skill, Integer> skillLevels;
+    private final boolean questFocusAvailable;
 
     public MntnBuilderOverlayState(
             boolean visible,
@@ -38,6 +45,30 @@ public class MntnBuilderOverlayState {
             Instant taskStartTime,
             double score
     ) {
+        this(visible, detailed, runnerState, goal, requirement, activity, strategy, task, taskStatus,
+                lastStopReason, contentMode, sessionFlavor, commitmentDuration, taskStartTime, score,
+                Collections.emptyMap(), false);
+    }
+
+    public MntnBuilderOverlayState(
+            boolean visible,
+            boolean detailed,
+            String runnerState,
+            String goal,
+            String requirement,
+            String activity,
+            String strategy,
+            String task,
+            String taskStatus,
+            String lastStopReason,
+            String contentMode,
+            String sessionFlavor,
+            Duration commitmentDuration,
+            Instant taskStartTime,
+            double score,
+            Map<Skill, Integer> skillLevels,
+            boolean questFocusAvailable
+    ) {
         this.visible = visible;
         this.detailed = detailed;
         this.runnerState = runnerState;
@@ -53,6 +84,10 @@ public class MntnBuilderOverlayState {
         this.commitmentDuration = commitmentDuration;
         this.taskStartTime = taskStartTime;
         this.score = score;
+        this.skillLevels = skillLevels == null || skillLevels.isEmpty()
+                ? Collections.emptyMap()
+                : Collections.unmodifiableMap(new EnumMap<>(skillLevels));
+        this.questFocusAvailable = questFocusAvailable;
     }
 
     public boolean isVisible() {
@@ -113,5 +148,17 @@ public class MntnBuilderOverlayState {
 
     public double getScore() {
         return score;
+    }
+
+    public Map<Skill, Integer> getSkillLevels() {
+        return skillLevels;
+    }
+
+    public int getSkillLevel(Skill skill) {
+        return skillLevels.getOrDefault(skill, 0);
+    }
+
+    public boolean isQuestFocusAvailable() {
+        return questFocusAvailable;
     }
 }

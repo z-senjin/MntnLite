@@ -1,10 +1,9 @@
 package net.runelite.client.plugins.microbot.mntn.builder.tasks;
 
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
+import net.runelite.client.plugins.microbot.mntn.builder.core.EquipmentView;
 import net.runelite.client.plugins.microbot.mntn.builder.core.InventoryView;
 import org.junit.Test;
-
-import java.util.Collection;
 
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -12,56 +11,66 @@ import static org.junit.Assert.assertTrue;
 public class TaskInventoryPreparationTaskTest {
 
     @Test
-    public void skipsBankingWhenInventoryContainsOnlyTheTaskLoadout() {
-        TestContext context = new TestContext(false, true);
-        TaskInventoryPreparationTask task = new TaskInventoryPreparationTask(
-                new TestTask(), new String[]{"Small fishing net"});
+    public void skipsBankingWhenInventoryAndEquipmentAreEmpty() {
+        TestContext context = new TestContext(true, true);
+        TaskInventoryPreparationTask task = new TaskInventoryPreparationTask(new TestTask());
 
-        assertFalse(task.needsInventoryPreparation(context));
+        assertFalse(task.needsPreparation(context));
         assertTrue(task.tick(context) == TaskStatus.RUNNING);
     }
 
     @Test
-    public void preparesWhenInventoryContainsUnrelatedItemsOrIsFull() {
-        TaskInventoryPreparationTask unrelatedItems = new TaskInventoryPreparationTask(
-                new TestTask(), new String[]{"Bronze pickaxe"});
-        TaskInventoryPreparationTask fullInventory = new TaskInventoryPreparationTask(
-                new TestTask(), new String[]{"Bronze pickaxe"});
+    public void preparesWhenEitherInventoryOrEquipmentIsNotEmpty() {
+        TaskInventoryPreparationTask inventoryItems = new TaskInventoryPreparationTask(new TestTask());
+        TaskInventoryPreparationTask wornGear = new TaskInventoryPreparationTask(new TestTask());
 
-        assertTrue(unrelatedItems.needsInventoryPreparation(new TestContext(false, false)));
-        assertTrue(fullInventory.needsInventoryPreparation(new TestContext(true, true)));
+        assertTrue(inventoryItems.needsPreparation(new TestContext(false, true)));
+        assertTrue(wornGear.needsPreparation(new TestContext(true, false)));
     }
 
     private static class TestContext extends AccountContext {
         private final InventoryView inventory;
+        private final EquipmentView equipment;
 
-        private TestContext(boolean full, boolean onlyTaskItems) {
-            inventory = new TestInventoryView(full, onlyTaskItems);
+        private TestContext(boolean inventoryEmpty, boolean equipmentEmpty) {
+            inventory = new TestInventoryView(inventoryEmpty);
+            equipment = new TestEquipmentView(equipmentEmpty);
         }
 
         @Override
         public InventoryView inventory() {
             return inventory;
         }
+
+        @Override
+        public EquipmentView equipment() {
+            return equipment;
+        }
     }
 
     private static class TestInventoryView extends InventoryView {
-        private final boolean full;
-        private final boolean onlyTaskItems;
+        private final boolean empty;
 
-        private TestInventoryView(boolean full, boolean onlyTaskItems) {
-            this.full = full;
-            this.onlyTaskItems = onlyTaskItems;
+        private TestInventoryView(boolean empty) {
+            this.empty = empty;
         }
 
         @Override
-        public boolean isFull() {
-            return full;
+        public boolean isEmpty() {
+            return empty;
+        }
+    }
+
+    private static class TestEquipmentView extends EquipmentView {
+        private final boolean empty;
+
+        private TestEquipmentView(boolean empty) {
+            this.empty = empty;
         }
 
         @Override
-        public boolean hasOnlyItems(Collection<String> itemNames) {
-            return onlyTaskItems;
+        public boolean isEmpty() {
+            return empty;
         }
     }
 

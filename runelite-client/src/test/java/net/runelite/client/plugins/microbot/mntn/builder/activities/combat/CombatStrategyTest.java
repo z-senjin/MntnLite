@@ -5,7 +5,6 @@ import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.core.BankView;
 import net.runelite.client.plugins.microbot.mntn.builder.core.EquipmentView;
 import net.runelite.client.plugins.microbot.mntn.builder.core.InventoryView;
-import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.EquipmentRequirement;
 import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.ItemRequirement;
 import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.Requirement;
 import org.junit.Test;
@@ -19,6 +18,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 
 public class CombatStrategyTest {
 
@@ -29,32 +29,24 @@ public class CombatStrategyTest {
 
         List<Requirement> requirements = strategy.requirements(context);
 
-        assertFalse(requirements.stream().anyMatch(EquipmentRequirement.class::isInstance));
-        assertFalse(requirements.stream().anyMatch(ItemRequirement.class::isInstance));
+        assertTrue(requirements.isEmpty());
     }
 
     @Test
-    public void chickensUseBankedWeaponWhenAvailable() {
+    public void chickensLetCombatTaskLoadABankedWeapon() {
         TestContext context = new TestContext();
         context.bank.items.put("Bronze dagger", 1);
         CombatStrategy strategy = new CombatStrategy(CombatStrategy.Monster.CHICKENS, Skill.STRENGTH, 10, 0);
 
         List<Requirement> requirements = strategy.requirements(context);
 
-        EquipmentRequirement weapon = requirements.stream()
-                .filter(EquipmentRequirement.class::isInstance)
-                .map(EquipmentRequirement.class::cast)
-                .findFirst()
-                .orElse(null);
-
-        assertNotNull(weapon);
-        assertEquals("Bronze dagger", weapon.getItemName());
-        assertFalse(requirements.stream().anyMatch(ItemRequirement.class::isInstance));
+        assertTrue(requirements.isEmpty());
     }
 
     @Test
     public void riskyMonstersRequestStarterFoodWhenNoFoodIsAvailable() {
         TestContext context = new TestContext();
+        context.bank.items.put("Bronze dagger", 1);
         CombatStrategy strategy = new CombatStrategy(CombatStrategy.Monster.COWS, Skill.STRENGTH, 20, 0);
 
         ItemRequirement food = strategy.requirements(context).stream()
@@ -72,6 +64,7 @@ public class CombatStrategyTest {
     public void foodRequirementOnlyRequestsMissingInventoryFood() {
         TestContext context = new TestContext();
         context.inventory.items.put(CombatStrategy.STARTER_FOOD, 3);
+        context.bank.items.put("Bronze dagger", 1);
         CombatStrategy strategy = new CombatStrategy(CombatStrategy.Monster.GOBLINS, Skill.STRENGTH, 20, 0);
 
         ItemRequirement food = strategy.requirements(context).stream()
@@ -121,40 +114,95 @@ public class CombatStrategyTest {
     }
 
     @Test
-    public void combatEquipsOwnedWeaponBeforeBuyingAnUpgrade() {
+    public void combatDoesNotBlockOnAnUpgradeWhenOwnedGearIsBanked() {
         TestContext context = new TestContext();
         context.realLevels.put(Skill.ATTACK, 5);
         context.inventory.items.put("Coins", CombatGear.COMBAT_GEAR_COIN_RESERVE + 400);
         context.bank.items.put("Bronze dagger", 1);
         CombatStrategy strategy = new CombatStrategy(CombatStrategy.Monster.CHICKENS, Skill.STRENGTH, 10, 0);
 
-        EquipmentRequirement requirement = strategy.requirements(context).stream()
-                .filter(EquipmentRequirement.class::isInstance)
-                .map(EquipmentRequirement.class::cast)
-                .findFirst()
-                .orElse(null);
-
-        assertNotNull(requirement);
-        assertEquals("Bronze dagger", requirement.getItemName());
+        assertTrue(strategy.requirements(context).isEmpty());
     }
 
     @Test
-    public void combatBuysBodyArmourAfterWeaponIsEquippedForRiskyTargets() {
+    public void combatDoesNotBlockOnBodyArmourUpgrade() {
         TestContext context = new TestContext();
         context.realLevels.put(Skill.ATTACK, 5);
         context.realLevels.put(Skill.DEFENCE, 5);
         context.inventory.items.put("Coins", CombatGear.COMBAT_GEAR_COIN_RESERVE + 2000);
         context.equipment.items.put("Steel scimitar", 1);
+        context.bank.items.put(CombatStrategy.STARTER_FOOD, 4);
         CombatStrategy strategy = new CombatStrategy(CombatStrategy.Monster.GOBLINS, Skill.STRENGTH, 20, 0);
 
-        EquipmentRequirement requirement = strategy.requirements(context).stream()
-                .filter(EquipmentRequirement.class::isInstance)
-                .map(EquipmentRequirement.class::cast)
-                .findFirst()
-                .orElse(null);
+        assertTrue(strategy.requirements(context).isEmpty());
+    }
 
-        assertNotNull(requirement);
-        assertEquals("Steel platebody", requirement.getItemName());
+    @Test
+    public void combatSelectsTheHighestOwnedF2pGearTierAllowedByLevels() {
+        TestContext context = new TestContext();
+        context.realLevels.put(Skill.ATTACK, 20);
+        context.realLevels.put(Skill.DEFENCE, 20);
+        context.bank.items.put("Bronze scimitar", 1);
+        context.bank.items.put("Steel scimitar", 1);
+        context.bank.items.put("Mithril scimitar", 1);
+        context.bank.items.put("Mithril full helm", 1);
+        context.bank.items.put("Mithril platebody", 1);
+        context.bank.items.put("Mithril platelegs", 1);
+        context.bank.items.put("Mithril kiteshield", 1);
+
+        assertEquals("Mithril scimitar", CombatGear.findBestWeapon(context, true).name);
+        assertTrue(CombatGear.getBankGearUpgrades(context).contains("Mithril kiteshield"));
+        assertTrue(CombatGear.getBankGearUpgrades(context).contains("Mithril full helm"));
+        assertTrue(CombatGear.getBankGearUpgrades(context).contains("Mithril platebody"));
+        assertTrue(CombatGear.getBankGearUpgrades(context).contains("Mithril platelegs"));
+    }
+
+    @Test
+    public void combatCanSelectRuneInsteadOfLowerTiersWhenEligible() {
+        TestContext context = new TestContext();
+        context.realLevels.put(Skill.ATTACK, 40);
+        context.bank.items.put("Mithril scimitar", 1);
+        context.bank.items.put("Adamant scimitar", 1);
+        context.bank.items.put("Rune scimitar", 1);
+
+        assertEquals("Rune scimitar", CombatGear.findBestWeapon(context, true).name);
+    }
+
+    @Test
+    public void combatLoadoutUsesOneBestValidItemForEachSlot() {
+        TestContext context = new TestContext();
+        context.realLevels.put(Skill.ATTACK, 20);
+        context.realLevels.put(Skill.DEFENCE, 20);
+        context.bank.items.put("Mithril scimitar", 1);
+        context.bank.items.put("Mithril kiteshield", 1);
+        context.bank.items.put("Mithril full helm", 1);
+        context.bank.items.put("Mithril platebody", 1);
+        context.bank.items.put("Mithril platelegs", 1);
+        context.bank.items.put("Bronze sword", 1);
+
+        List<String> loadout = CombatGear.getBestLoadout(context);
+
+        assertEquals(5, loadout.size());
+        assertTrue(loadout.contains("Mithril scimitar"));
+        assertTrue(loadout.contains("Mithril kiteshield"));
+        assertTrue(loadout.contains("Mithril full helm"));
+        assertTrue(loadout.contains("Mithril platebody"));
+        assertTrue(loadout.contains("Mithril platelegs"));
+        assertFalse(loadout.contains("Bronze sword"));
+    }
+
+    @Test
+    public void twoHandedCombatLoadoutDoesNotIncludeAShield() {
+        TestContext context = new TestContext();
+        context.realLevels.put(Skill.ATTACK, 40);
+        context.realLevels.put(Skill.DEFENCE, 40);
+        context.bank.items.put("Rune 2h sword", 1);
+        context.bank.items.put("Rune kiteshield", 1);
+
+        List<String> loadout = CombatGear.getBestLoadout(context);
+
+        assertTrue(loadout.contains("Rune 2h sword"));
+        assertFalse(loadout.contains("Rune kiteshield"));
     }
 
     private static class TestContext extends AccountContext {

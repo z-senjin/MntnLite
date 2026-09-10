@@ -180,7 +180,10 @@ public class FishingStrategy implements Strategy {
     public List<Requirement> requirements(AccountContext context) {
         List<Requirement> requirements = new ArrayList<>();
         for (ToolRequirement requirement : method.toolRequirements) {
-            requirements.add(new ItemRequirement(requirement.itemName, Math.max(1, requirement.quantity)));
+            if (!context.inventory().hasItem(requirement.itemName)
+                    && !context.bank().hasItem(requirement.itemName)) {
+                requirements.add(new ItemRequirement(requirement.itemName, 1));
+            }
         }
         return requirements;
     }

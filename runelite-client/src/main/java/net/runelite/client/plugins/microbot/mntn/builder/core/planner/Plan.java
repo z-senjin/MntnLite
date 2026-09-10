@@ -6,10 +6,7 @@ import net.runelite.client.plugins.microbot.mntn.builder.core.goals.Goal;
 import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.Requirement;
 
 /**
- * The doc separates PlanCandidate (scored option) from Plan (the selected one). For the
- * vertical slice those are the same data, so this one class does both jobs - split it back
- * into two once you have enough plan-comparison logic (e.g. explaining why candidates lost)
- * to justify it.
+ * One immediately executable action selected from the current account state.
  */
 public class Plan {
 
@@ -18,32 +15,12 @@ public class Plan {
     private final Activity activity;
     private final Strategy strategy;
     private final double score;
-    private final Requirement objectiveRequirement;
-    private final Activity objectiveActivity;
-    private final Strategy objectiveStrategy;
-
     public Plan(Goal goal, Requirement requirement, Activity activity, Strategy strategy, double score) {
-        this(goal, requirement, activity, strategy, score, requirement, activity, strategy);
-    }
-
-    public Plan(
-            Goal goal,
-            Requirement requirement,
-            Activity activity,
-            Strategy strategy,
-            double score,
-            Requirement objectiveRequirement,
-            Activity objectiveActivity,
-            Strategy objectiveStrategy
-    ) {
         this.goal = goal;
         this.requirement = requirement;
         this.activity = activity;
         this.strategy = strategy;
         this.score = score;
-        this.objectiveRequirement = objectiveRequirement;
-        this.objectiveActivity = objectiveActivity;
-        this.objectiveStrategy = objectiveStrategy;
     }
 
     public Goal goal() {
@@ -66,23 +43,4 @@ public class Plan {
         return score;
     }
 
-    /**
-     * The goal requirement and strategy that started this plan. These differ from the
-     * current action only while the planner is satisfying a prerequisite.
-     */
-    public Requirement objectiveRequirement() {
-        return objectiveRequirement;
-    }
-
-    public Activity objectiveActivity() {
-        return objectiveActivity;
-    }
-
-    public Strategy objectiveStrategy() {
-        return objectiveStrategy;
-    }
-
-    public boolean hasPendingObjective() {
-        return objectiveActivity != activity || objectiveStrategy != strategy;
-    }
 }

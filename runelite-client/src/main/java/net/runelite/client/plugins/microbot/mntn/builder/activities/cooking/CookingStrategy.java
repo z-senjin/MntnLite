@@ -51,6 +51,36 @@ public class CookingStrategy implements Strategy {
                 new WorldPoint(3274, 3180, 0)
         ),
 
+        COOK_SARDINE(
+                1,
+                40,
+                "Raw sardine",
+                "Sardine",
+                26181,
+                "Cook",
+                new WorldPoint(3274, 3180, 0)
+        ),
+
+        COOK_HERRING(
+                5,
+                50,
+                "Raw herring",
+                "Herring",
+                26181,
+                "Cook",
+                new WorldPoint(3274, 3180, 0)
+        ),
+
+        COOK_MACKEREL(
+                10,
+                60,
+                "Raw mackerel",
+                "Mackerel",
+                26181,
+                "Cook",
+                new WorldPoint(3274, 3180, 0)
+        ),
+
         COOK_TROUT(
                 15,
                 70,
@@ -61,11 +91,51 @@ public class CookingStrategy implements Strategy {
                 new WorldPoint(3274, 3180, 0)
         ),
 
+        COOK_PIKE(
+                20,
+                80,
+                "Raw pike",
+                "Pike",
+                26181,
+                "Cook",
+                new WorldPoint(3274, 3180, 0)
+        ),
+
         COOK_SALMON(
                 25,
                 90,
                 "Raw salmon",
                 "Salmon",
+                26181,
+                "Cook",
+                new WorldPoint(3274, 3180, 0)
+        ),
+
+        COOK_TUNA(
+                30,
+                100,
+                "Raw tuna",
+                "Tuna",
+                26181,
+                "Cook",
+                new WorldPoint(3274, 3180, 0)
+        ),
+
+        COOK_LOBSTER(
+                40,
+                120,
+                "Raw lobster",
+                "Lobster",
+                26181,
+                "Cook",
+                new WorldPoint(3274, 3180, 0)
+        ),
+
+        COOK_SWORDFISH(
+                45,
+                140,
+                "Raw swordfish",
+                "Swordfish",
                 26181,
                 "Cook",
                 new WorldPoint(3274, 3180, 0)
@@ -129,6 +199,9 @@ public class CookingStrategy implements Strategy {
 
     @Override
     public List<Requirement> requirements(AccountContext context) {
+        if (context.inventory().hasItem(method.rawItemName) || context.bank().hasItem(method.rawItemName)) {
+            return Collections.emptyList();
+        }
         return Collections.singletonList(new ItemRequirement(method.rawItemName, 1));
     }
 

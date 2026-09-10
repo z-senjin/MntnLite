@@ -21,9 +21,11 @@ public class AccountMemory {
 
     private static final int MAX_HISTORY_SIZE = 100;
     private static final Duration FAILURE_COOLDOWN = Duration.ofMinutes(5);
+    private static final Duration GE_SLOT_COOLDOWN = Duration.ofMinutes(1);
 
     private final Deque<PlanHistoryEntry> history = new ArrayDeque<>();
     private final Map<String, StopRecord> failedStrategies = new HashMap<>();
+    private Instant grandExchangeUnavailableAt;
 
     public void recordSelected(Plan plan) {
         prune(Duration.ofHours(2));
@@ -51,6 +53,9 @@ public class AccountMemory {
                 && reason != TaskStopReason.REQUIREMENT_SATISFIED
                 && reason != TaskStopReason.GOAL_COMPLETE) {
             failedStrategies.put(plan.strategy().name(), new StopRecord(Instant.now(), reason));
+        }
+        if (reason == TaskStopReason.GE_NO_OPEN_SLOT) {
+            grandExchangeUnavailableAt = Instant.now();
         }
     }
 
@@ -89,9 +94,25 @@ public class AccountMemory {
         return record.reason;
     }
 
+    /**
+     * A full exchange is account-wide, not a fault in one strategy. Keep this
+     * short so a player who clears an offer can resume GE routes promptly.
+     */
+    public boolean isGrandExchangeUnavailable() {
+        if (grandExchangeUnavailableAt == null) {
+            return false;
+        }
+        if (!grandExchangeUnavailableAt.plus(GE_SLOT_COOLDOWN).isAfter(Instant.now())) {
+            grandExchangeUnavailableAt = null;
+            return false;
+        }
+        return true;
+    }
+
     public void clear() {
         history.clear();
         failedStrategies.clear();
+        grandExchangeUnavailableAt = null;
     }
 
     public void prune(Duration historyWindow) {

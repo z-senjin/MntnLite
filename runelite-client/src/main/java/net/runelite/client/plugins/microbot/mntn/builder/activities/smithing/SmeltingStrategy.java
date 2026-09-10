@@ -60,6 +60,41 @@ public class SmeltingStrategy implements Strategy {
                         new OreRequirement("Gold ore", 28)
                 },
                 new WorldPoint(3274, 3186, 0)
+        ),
+        SILVER_BAR(
+                20, 13.7,
+                "Silver bar",
+                new OreRequirement[]{
+                        new OreRequirement("Silver ore", 28)
+                },
+                new WorldPoint(3274, 3186, 0)
+        ),
+        MITHRIL_BAR(
+                50, 30.0,
+                "Mithril bar",
+                new OreRequirement[]{
+                        new OreRequirement("Mithril ore", 5),
+                        new OreRequirement("Coal", 20)
+                },
+                new WorldPoint(3274, 3186, 0)
+        ),
+        ADAMANTITE_BAR(
+                70, 37.5,
+                "Adamantite bar",
+                new OreRequirement[]{
+                        new OreRequirement("Adamantite ore", 4),
+                        new OreRequirement("Coal", 24)
+                },
+                new WorldPoint(3274, 3186, 0)
+        ),
+        RUNITE_BAR(
+                85, 50.0,
+                "Runite bar",
+                new OreRequirement[]{
+                        new OreRequirement("Runite ore", 3),
+                        new OreRequirement("Coal", 24)
+                },
+                new WorldPoint(3274, 3186, 0)
         );
 
         public final int requiredLevel;
@@ -109,7 +144,11 @@ public class SmeltingStrategy implements Strategy {
     public List<Requirement> requirements(AccountContext context) {
         List<Requirement> requirements = new ArrayList<>();
         for (OreRequirement ingredient : bar.ingredients) {
-            requirements.add(new ItemRequirement(ingredient.itemName, ingredient.withdrawAmount));
+            ItemRequirement input = new ItemRequirement(ingredient.itemName, ingredient.withdrawAmount);
+            int missing = input.getMissingAccountQuantity(context);
+            if (missing > 0) {
+                requirements.add(new ItemRequirement(ingredient.itemName, missing));
+            }
         }
         return requirements;
     }

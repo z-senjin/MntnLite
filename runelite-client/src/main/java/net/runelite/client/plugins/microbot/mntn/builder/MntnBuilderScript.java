@@ -13,8 +13,9 @@ import net.runelite.client.plugins.microbot.mntn.builder.activities.ActivityType
 import net.runelite.api.Quest;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.combat.CombatActivity;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.cooking.CookingActivity;
+import net.runelite.client.plugins.microbot.mntn.builder.activities.crafting.CraftingActivity;
+import net.runelite.client.plugins.microbot.mntn.builder.activities.firemaking.FiremakingActivity;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.fishing.FishingActivity;
-import net.runelite.client.plugins.microbot.mntn.builder.activities.moneymaking.MoneyMakingActivity;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.mining.MiningActivity;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.questing.QuestingActivity;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.smithing.SmithingActivity;
@@ -24,17 +25,12 @@ import net.runelite.client.plugins.microbot.mntn.builder.activities.woodcutting.
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AllowedContent;
 import net.runelite.client.plugins.microbot.mntn.builder.core.goals.Goal;
-import net.runelite.client.plugins.microbot.mntn.builder.core.goals.MoneyGoal;
 import net.runelite.client.plugins.microbot.mntn.builder.core.goals.QuestGoal;
 import net.runelite.client.plugins.microbot.mntn.builder.core.goals.SkillGoal;
-import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.EquipmentRequirement;
-import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.ItemRequirement;
-import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.Requirement;
 import net.runelite.client.plugins.microbot.mntn.builder.core.planner.AccountMemory;
 import net.runelite.client.plugins.microbot.mntn.builder.core.planner.AccountPlanner;
 import net.runelite.client.plugins.microbot.mntn.builder.core.planner.Plan;
 import net.runelite.client.plugins.microbot.mntn.builder.core.planner.SessionFlavor;
-import net.runelite.client.plugins.microbot.mntn.builder.core.planner.StartupPlanCache;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskActionGuard;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskInventoryPreparationTask;
@@ -53,11 +49,13 @@ import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.LinkedHashSet;
+import java.util.Collections;
+import java.util.Map;
 import java.util.List;
-import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Top-level driver, structurally the same shape as GemCrabKillerScript.run(): one
@@ -72,6 +70,8 @@ public class MntnBuilderScript extends Script {
     private static final double COMMITMENT_MARGIN = 10.0;
     private static final long CONFIG_CHANGE_DEBOUNCE_MS = 750L;
     private static final long SLOW_PLANNER_PASS_MS = 250L;
+    private static final long NO_PLAN_RETRY_DELAY_MS = 5_000L;
+    private static final long OVERLAY_SKILL_SNAPSHOT_INTERVAL_MS = 1_000L;
     private static final int LOGIN_READY_TICKS_REQUIRED = 2;
     private static final double PROFILE_GOAL_PRIORITY_BASE = 50.0;
     private static final int PROFILE_GOAL_PRIORITY_VARIATION = 5;
@@ -86,14 +86,15 @@ public class MntnBuilderScript extends Script {
     // Cached config snapshot to detect modifications even without event triggers
     private int lastFishingTarget;
     private int lastCookingTarget;
+    private int lastFiremakingTarget;
     private int lastWoodcuttingTarget;
     private int lastMiningTarget;
     private int lastSmithingTarget;
+    private int lastCraftingTarget;
     private int lastAttackTarget;
     private int lastStrengthTarget;
     private int lastDefenceTarget;
     private int lastPrayerTarget;
-    private int lastMoneyTarget;
     private boolean lastCooksAssistant;
     private boolean lastDoricsQuest;
     private ActivityIntensity lastAntibanIntensity;
@@ -105,7 +106,6 @@ public class MntnBuilderScript extends Script {
     private boolean lastAllowShops;
     private boolean lastAllowGroundPickups;
     private MntnBuilderTestOverride lastTestOverride;
-    private int lastTestCoinTarget;
 
     private boolean initialBankDone = false;
     private boolean postStartupReplanPending = false;
@@ -118,7 +118,13 @@ public class MntnBuilderScript extends Script {
     private volatile boolean configRefreshPending;
     private volatile long configRefreshRequestedAtMs;
     private final AtomicBoolean forceReplanRequested = new AtomicBoolean(false);
+    private final AtomicInteger activityTimeAdjustmentMinutes = new AtomicInteger();
+    private final AtomicReference<MntnBuilderOverlayFocus> overlayFocusRequested = new AtomicReference<>();
+    private volatile Map<Skill, Integer> overlaySkillLevels = Collections.emptyMap();
+    private volatile boolean overlayQuestFocusAvailable;
+    private long lastOverlaySkillSnapshotAtMs;
     private boolean testOverrideFinished;
+    private long nextPlannerAttemptAtMs;
 
     public String debugGoal = "-";
     public String debugRequirement = "-";
@@ -137,17 +143,15 @@ public class MntnBuilderScript extends Script {
 
         addSkillGoal(goals, Skill.FISHING, cfg.fishingTarget(), profileId);
         addSkillGoal(goals, Skill.COOKING, cfg.cookingTarget(), profileId);
+        addSkillGoal(goals, Skill.FIREMAKING, cfg.firemakingTarget(), profileId);
         addSkillGoal(goals, Skill.WOODCUTTING, cfg.woodcuttingTarget(), profileId);
         addSkillGoal(goals, Skill.MINING, cfg.miningTarget(), profileId);
         addSkillGoal(goals, Skill.SMITHING, cfg.smithingTarget(), profileId);
+        addSkillGoal(goals, Skill.CRAFTING, cfg.craftingTarget(), profileId);
         addSkillGoal(goals, Skill.ATTACK, cfg.attackTarget(), profileId);
         addSkillGoal(goals, Skill.STRENGTH, cfg.strengthTarget(), profileId);
         addSkillGoal(goals, Skill.DEFENCE, cfg.defenceTarget(), profileId);
         addSkillGoal(goals, Skill.PRAYER, cfg.prayerTarget(), profileId);
-
-        if (cfg.moneyTarget() > 0) {
-            goals.add(new MoneyGoal(cfg.moneyTarget(), 45));
-        }
 
         if (cfg.enableCooksAssistant()) {
             addQuestGoal(goals, Quest.COOKS_ASSISTANT, profileId);
@@ -182,14 +186,15 @@ public class MntnBuilderScript extends Script {
     private void updateConfigSnapshot(MntnBuilderConfig cfg) {
         lastFishingTarget = cfg.fishingTarget();
         lastCookingTarget = cfg.cookingTarget();
+        lastFiremakingTarget = cfg.firemakingTarget();
         lastWoodcuttingTarget = cfg.woodcuttingTarget();
         lastMiningTarget = cfg.miningTarget();
         lastSmithingTarget = cfg.smithingTarget();
+        lastCraftingTarget = cfg.craftingTarget();
         lastAttackTarget = cfg.attackTarget();
         lastStrengthTarget = cfg.strengthTarget();
         lastDefenceTarget = cfg.defenceTarget();
         lastPrayerTarget = cfg.prayerTarget();
-        lastMoneyTarget = cfg.moneyTarget();
         lastCooksAssistant = cfg.enableCooksAssistant();
         lastDoricsQuest = cfg.enableDoricsQuest();
         lastAntibanIntensity = cfg.antibanIntensity();
@@ -201,20 +206,20 @@ public class MntnBuilderScript extends Script {
         lastAllowShops = cfg.allowShops();
         lastAllowGroundPickups = cfg.allowGroundPickups();
         lastTestOverride = cfg.testOverride();
-        lastTestCoinTarget = cfg.testCoinTarget();
     }
 
     private boolean isConfigChanged(MntnBuilderConfig cfg) {
         return cfg.fishingTarget() != lastFishingTarget
                 || cfg.cookingTarget() != lastCookingTarget
+                || cfg.firemakingTarget() != lastFiremakingTarget
                 || cfg.woodcuttingTarget() != lastWoodcuttingTarget
                 || cfg.miningTarget() != lastMiningTarget
                 || cfg.smithingTarget() != lastSmithingTarget
+                || cfg.craftingTarget() != lastCraftingTarget
                 || cfg.attackTarget() != lastAttackTarget
                 || cfg.strengthTarget() != lastStrengthTarget
                 || cfg.defenceTarget() != lastDefenceTarget
                 || cfg.prayerTarget() != lastPrayerTarget
-                || cfg.moneyTarget() != lastMoneyTarget
                 || cfg.enableCooksAssistant() != lastCooksAssistant
                 || cfg.enableDoricsQuest() != lastDoricsQuest
                 || cfg.antibanIntensity() != lastAntibanIntensity
@@ -225,8 +230,7 @@ public class MntnBuilderScript extends Script {
                 || cfg.allowGrandExchange() != lastAllowGrandExchange
                 || cfg.allowShops() != lastAllowShops
                 || cfg.allowGroundPickups() != lastAllowGroundPickups
-                || cfg.testOverride() != lastTestOverride
-                || cfg.testCoinTarget() != lastTestCoinTarget;
+                || cfg.testOverride() != lastTestOverride;
     }
 
     public void onConfigChanged(MntnBuilderConfig newConfig) {
@@ -268,6 +272,7 @@ public class MntnBuilderScript extends Script {
             planner.setSessionFlavor(newConfig.sessionFlavor());
             currentPlan = null;
             taskManager.setTask(null);
+            nextPlannerAttemptAtMs = 0;
             testOverrideFinished = false;
             showPlanningState(newConfig.testOverride().isActive()
                     ? "Starting selected test"
@@ -291,7 +296,13 @@ public class MntnBuilderScript extends Script {
         readyLoginTicks = 0;
         configRefreshPending = false;
         configRefreshRequestedAtMs = 0;
+        nextPlannerAttemptAtMs = 0;
         forceReplanRequested.set(false);
+        activityTimeAdjustmentMinutes.set(0);
+        overlayFocusRequested.set(null);
+        overlaySkillLevels = Collections.emptyMap();
+        overlayQuestFocusAvailable = false;
+        lastOverlaySkillSnapshotAtMs = 0;
         testOverrideFinished = false;
         showWaitingState("Starting", "Preparing planner");
 
@@ -303,11 +314,12 @@ public class MntnBuilderScript extends Script {
         if (debugLogging) {
             debugLog("=== MntnBuilderScript started ===");
             debugLog("Config: fishingTarget=" + config.fishingTarget() + ", cookingTarget=" + config.cookingTarget()
+                    + ", firemakingTarget=" + config.firemakingTarget()
                     + ", woodcuttingTarget=" + config.woodcuttingTarget() + ", miningTarget=" + config.miningTarget()
-                    + ", smithingTarget=" + config.smithingTarget() + ", attackTarget=" + config.attackTarget()
+                    + ", smithingTarget=" + config.smithingTarget() + ", craftingTarget=" + config.craftingTarget()
+                    + ", attackTarget=" + config.attackTarget()
                     + ", strengthTarget=" + config.strengthTarget() + ", defenceTarget=" + config.defenceTarget()
                     + ", prayerTarget=" + config.prayerTarget()
-                    + ", moneyTarget=" + config.moneyTarget()
                     + ", cooksAssistant=" + config.enableCooksAssistant() + ", doricsQuest=" + config.enableDoricsQuest()
                     + ", antibanIntensity=" + config.antibanIntensity()
                     + ", sessionFlavor=" + config.sessionFlavor()
@@ -352,6 +364,12 @@ public class MntnBuilderScript extends Script {
                 }
                 resumeFromScriptGuard();
 
+                processActivityTimeAdjustmentRequest();
+
+                if (processOverlayFocusRequest()) {
+                    return;
+                }
+
                 if (processForcedReplanRequest()) {
                     return;
                 }
@@ -388,9 +406,6 @@ public class MntnBuilderScript extends Script {
                     debugLog("Running first normal replan after startup banking");
                     postStartupReplanPending = false;
                     showPlanningState("Selecting first task after bank cache");
-                    if (applyCachedStartupPlan()) {
-                        return;
-                    }
                     replan();
                     return;
                 }
@@ -401,6 +416,9 @@ public class MntnBuilderScript extends Script {
                 }
 
                 if (!taskManager.hasTask()) {
+                    if (isPlannerRetryDelayed()) {
+                        return;
+                    }
                     debugLog("No active task, replanning");
                     replan();
                     if (!taskManager.hasTask()) {
@@ -421,15 +439,24 @@ public class MntnBuilderScript extends Script {
                 TaskStatus status = taskManager.tick(context);
                 debugLog("Task tick returned: " + status);
                 if (status.needsPlannerDecision()) {
-                    if (status == TaskStatus.COMPLETE && continueSatisfiedRequirement()) {
-                        return;
+                    TaskStatus outcomeStatus = plannerOutcomeStatus(
+                            status,
+                            currentPlan != null && currentPlan.goal().isComplete(context),
+                            currentPlan != null && currentPlan.requirement().isSatisfied(context)
+                    );
+                    TaskStopReason outcomeReason = outcomeStatus == status
+                            ? terminalStopReason(status)
+                            : TaskStopReason.TASK_REQUESTED_REPLAN;
+                    if (outcomeStatus != status) {
+                        Microbot.log("[MntnBuilder] Task completed without satisfying its plan; cooling down "
+                                + (currentPlan != null ? currentPlan.strategy().name() : "unknown strategy"));
                     }
                     if (taskManager.getLastStopReason() == TaskStopReason.TRAVEL_FAILED) {
                         Rs2Walker.clearWalkingRoute("MntnBuilder task travel failed");
                     }
                     debugLog("Task status requires replan: " + status
                             + " (reason=" + taskManager.getLastStopReason() + ")");
-                    finishCurrentPlan(status, terminalStopReason(status));
+                    finishCurrentPlan(outcomeStatus, outcomeReason);
                     replan();
                     return;
                 }
@@ -448,27 +475,6 @@ public class MntnBuilderScript extends Script {
             }
         }, 0, 600, TimeUnit.MILLISECONDS);
         return true;
-    }
-
-    /**
-     * A task owns its cleanup phases. In particular, a bank withdrawal must be allowed
-     * to close the bank before a satisfied prerequisite starts the next task.
-     */
-    private boolean continueSatisfiedRequirement() {
-        if (currentPlan == null || currentPlan.goal().isComplete(context)
-                || !currentPlan.requirement().isSatisfied(context)) {
-            return false;
-        }
-
-        Plan continuation = planner.continuePlan(currentPlan, context);
-        if (continuation == null) {
-            return false;
-        }
-
-        debugLog("Requirement satisfied: " + currentPlan.requirement().description()
-                + ". Continuing " + continuation.objectiveStrategy().name() + ".");
-        memory.recordOutcome(currentPlan, TaskStatus.COMPLETE, TaskStopReason.REQUIREMENT_SATISFIED);
-        return applyPlan(continuation);
     }
 
     /**
@@ -566,7 +572,7 @@ public class MntnBuilderScript extends Script {
         }
 
         if (!taskManager.hasTask()) {
-            Task task = testOverride.createTask(context, config.testCoinTarget());
+            Task task = testOverride.createTask(context);
             if (task == null) {
                 testOverrideFinished = true;
                 showWaitingState("Test complete", testOverride.displayName());
@@ -574,7 +580,7 @@ public class MntnBuilderScript extends Script {
             }
 
             currentPlan = null;
-            taskManager.setTask(task);
+            taskManager.setTask(prepareTask(task));
             debugGoal = "Test override";
             debugRequirement = testOverride.displayName();
             debugActivity = testOverride.activityType().name();
@@ -621,12 +627,13 @@ public class MntnBuilderScript extends Script {
         return Arrays.asList(
                 new FishingActivity(),
                 new CookingActivity(),
+                new FiremakingActivity(),
                 new WoodcuttingActivity(),
                 new MiningActivity(),
                 new SmithingActivity(),
+                new CraftingActivity(),
                 new QuestingActivity(),
                 new CombatActivity(config),
-                new MoneyMakingActivity(SupplyRoutePolicy.fromConfig(config)),
                 new SupplyActivity(SupplyRoutePolicy.fromConfig(config))
         );
     }
@@ -722,6 +729,11 @@ public class MntnBuilderScript extends Script {
     }
 
     private void showWaitingState(String goal, String requirement) {
+        // A break/login wait is only a temporary runner state. Keep the active plan's
+        // deadline intact so it resumes with the same remaining commitment time.
+        if (currentPlan != null && taskManager.hasTask()) {
+            return;
+        }
         debugGoal = goal;
         debugRequirement = requirement;
         debugActivity = "-";
@@ -794,6 +806,8 @@ public class MntnBuilderScript extends Script {
                 return net.runelite.client.plugins.microbot.util.antiban.enums.Activity.GENERAL_MINING;
             case COOKING:
                 return net.runelite.client.plugins.microbot.util.antiban.enums.Activity.GENERAL_COOKING;
+            case FIREMAKING:
+                return net.runelite.client.plugins.microbot.util.antiban.enums.Activity.GENERAL_FIREMAKING;
             case SMITHING:
                 if (strategy.contains("BRONZE")) {
                     return net.runelite.client.plugins.microbot.util.antiban.enums.Activity.SMELTING_BRONZE_BARS;
@@ -802,7 +816,8 @@ public class MntnBuilderScript extends Script {
                     return net.runelite.client.plugins.microbot.util.antiban.enums.Activity.SMELTING_IRON_BARS;
                 }
                 return net.runelite.client.plugins.microbot.util.antiban.enums.Activity.GENERAL_SMITHING;
-            case MONEY_MAKING:
+            case CRAFTING:
+                return net.runelite.client.plugins.microbot.util.antiban.enums.Activity.GENERAL_CRAFTING;
             case SUPPLY:
             case QUESTING:
             default:
@@ -828,14 +843,19 @@ public class MntnBuilderScript extends Script {
     }
 
     public boolean isCommitmentExpired() {
-        if (debugTime == null || debugTaskStartTime == null) {
-            return false;
-        }
-        boolean expired = Duration.between(debugTaskStartTime, java.time.Instant.now()).compareTo(debugTime) >= 0;
+        boolean expired = isCommitmentExpired(debugTime, debugTaskStartTime, java.time.Instant.now());
         if (expired) {
             debugLog("Commitment expired (elapsed >= " + debugTime + ")");
         }
         return expired;
+    }
+
+    static boolean isCommitmentExpired(Duration duration, java.time.Instant startedAt, java.time.Instant now) {
+        if (duration == null || startedAt == null || now == null) {
+            return false;
+        }
+        Duration elapsed = Duration.between(startedAt, now);
+        return !elapsed.isNegative() && elapsed.compareTo(duration) >= 0;
     }
 
     public MntnBuilderOverlayState getOverlayState() {
@@ -864,11 +884,20 @@ public class MntnBuilderScript extends Script {
                 activeConfig != null ? activeConfig.sessionFlavor().name() : "-",
                 debugTime,
                 overlayTaskStartTime,
-                debugScore
+                debugScore,
+                overlaySkillLevels,
+                overlayQuestFocusAvailable
         );
     }
 
     private void publishRuntimeStatus() {
+        long now = System.currentTimeMillis();
+        if (now - lastOverlaySkillSnapshotAtMs >= OVERLAY_SKILL_SNAPSHOT_INTERVAL_MS) {
+            overlaySkillLevels = context.getRealSkillLevels();
+            lastOverlaySkillSnapshotAtMs = now;
+        }
+        overlayQuestFocusAvailable = config != null
+                && (config.enableCooksAssistant() || config.enableDoricsQuest());
         MntnBuilderRuntimeStatus.publish(getOverlayState());
     }
 
@@ -914,7 +943,7 @@ public class MntnBuilderScript extends Script {
         Task task;
         try {
             task = plan.strategy().createTask(context);
-            task = prepareTaskInventory(plan, task);
+            task = prepareTask(task);
         } catch (RuntimeException ex) {
             return recoverFromTaskCreationFailure(plan, ex.getClass().getSimpleName());
         }
@@ -925,6 +954,7 @@ public class MntnBuilderScript extends Script {
         // A completed, skipped, or failed task must not leave its route active for the next one.
         Rs2Walker.clearWalkingRoute("MntnBuilder plan transition");
         currentPlan = plan;
+        nextPlannerAttemptAtMs = 0;
         updateAntibanActivity(plan);
         taskManager.setTask(task);
 
@@ -936,9 +966,6 @@ public class MntnBuilderScript extends Script {
         debugTaskStartTime = java.time.Instant.now();
         debugScore = plan.score();
         memory.recordSelected(plan);
-        if (config != null && !config.testOverride().isActive()) {
-            StartupPlanCache.remember(startupCacheProfileId(), plannerConfigFingerprint(config), plan);
-        }
 
         debugLog("Applied new plan: goal=" + debugGoal + ", requirement=" + debugRequirement
                 + ", activity=" + debugActivity + ", strategy=" + debugStrategy
@@ -950,51 +977,19 @@ public class MntnBuilderScript extends Script {
         return true;
     }
 
-    private Task prepareTaskInventory(Plan plan, Task task) {
-        if (task == null || !requiresInventoryPreparation(plan.activity().type())) {
-            return task;
+    static TaskStatus plannerOutcomeStatus(
+            TaskStatus taskStatus,
+            boolean goalComplete,
+            boolean requirementSatisfied
+    ) {
+        if (taskStatus == TaskStatus.COMPLETE && !goalComplete && !requirementSatisfied) {
+            return TaskStatus.REPLAN;
         }
-
-        Set<String> keepItems = new LinkedHashSet<>();
-        for (Requirement requirement : plan.strategy().requirements(context)) {
-            if (requirement instanceof ItemRequirement) {
-                keepItems.add(((ItemRequirement) requirement).getItemName());
-            } else if (requirement instanceof EquipmentRequirement) {
-                keepItems.add(((EquipmentRequirement) requirement).getItemName());
-            }
-        }
-        return new TaskInventoryPreparationTask(task, keepItems.toArray(new String[0]));
+        return taskStatus;
     }
 
-    private boolean requiresInventoryPreparation(ActivityType activityType) {
-        return activityType == ActivityType.FISHING
-                || activityType == ActivityType.COOKING
-                || activityType == ActivityType.WOODCUTTING
-                || activityType == ActivityType.MINING
-                || activityType == ActivityType.SMITHING;
-    }
-
-    private boolean applyCachedStartupPlan() {
-        if (config == null || config.testOverride().isActive()) {
-            return false;
-        }
-
-        StartupPlanCache.Direction direction = StartupPlanCache.takeIfUsable(
-                startupCacheProfileId(),
-                plannerConfigFingerprint(config)
-        );
-        if (direction == null) {
-            return false;
-        }
-
-        Plan nextPlan = planner.planForGoal(direction.goalName(), context);
-        if (nextPlan == null) {
-            Microbot.log("[MntnBuilder] Cached startup direction is no longer runnable; using full planner");
-            return false;
-        }
-        Microbot.log("[MntnBuilder] Resuming cached startup direction: " + direction.goalName()
-                + " -> " + nextPlan.strategy().name());
-        return applyPlan(nextPlan);
+    private Task prepareTask(Task task) {
+        return task == null ? null : new TaskInventoryPreparationTask(task);
     }
 
     private String startupCacheProfileId() {
@@ -1002,15 +997,6 @@ public class MntnBuilderScript extends Script {
             return null;
         }
         return String.valueOf(Microbot.getConfigManager().getProfile().getId());
-    }
-
-    private String plannerConfigFingerprint(MntnBuilderConfig cfg) {
-        return cfg.fishingTarget() + ":" + cfg.cookingTarget() + ":" + cfg.woodcuttingTarget() + ":"
-                + cfg.miningTarget() + ":" + cfg.smithingTarget() + ":" + cfg.attackTarget() + ":"
-                + cfg.strengthTarget() + ":" + cfg.defenceTarget() + ":" + cfg.prayerTarget() + ":"
-                + cfg.moneyTarget() + ":" + cfg.enableCooksAssistant() + ":" + cfg.enableDoricsQuest() + ":"
-                + cfg.allowedContent() + ":" + cfg.sessionFlavor() + ":" + cfg.allowGrandExchange() + ":"
-                + cfg.allowShops() + ":" + cfg.allowGroundPickups();
     }
 
     private boolean recoverFromTaskCreationFailure(Plan plan, String detail) {
@@ -1037,8 +1023,92 @@ public class MntnBuilderScript extends Script {
         forceReplanRequested.set(true);
     }
 
+    /** Queues a small commitment adjustment; the script worker owns the actual clock update. */
+    public void adjustActivityTime(int minutes) {
+        if (minutes != 0) {
+            activityTimeAdjustmentMinutes.getAndAdd(minutes);
+        }
+    }
+
+    /** Queues a one-shot focus task without altering the account's configured goals. */
+    public void focusActivity(MntnBuilderOverlayFocus focus) {
+        if (focus != null) {
+            overlayFocusRequested.set(focus);
+        }
+    }
+
     boolean isForceReplanRequested() {
         return forceReplanRequested.get();
+    }
+
+    private void processActivityTimeAdjustmentRequest() {
+        int adjustmentMinutes = activityTimeAdjustmentMinutes.getAndSet(0);
+        if (adjustmentMinutes == 0 || currentPlan == null || debugTime == null || debugTaskStartTime == null) {
+            return;
+        }
+
+        Duration adjusted = debugTime.plusMinutes(adjustmentMinutes);
+        debugTime = adjusted.isNegative() ? Duration.ZERO : adjusted;
+        Microbot.log("[MntnBuilder] Activity time adjusted by " + adjustmentMinutes
+                + " minutes for " + currentPlan.strategy().name());
+    }
+
+    private boolean processOverlayFocusRequest() {
+        MntnBuilderOverlayFocus focus = overlayFocusRequested.get();
+        if (focus == null) {
+            return false;
+        }
+        if (!initialBankDone || planner == null) {
+            return false;
+        }
+        overlayFocusRequested.compareAndSet(focus, null);
+
+        if (isTestOverrideActive()) {
+            Microbot.log("[MntnBuilder] Overlay focus ignored while a test override is active");
+            return true;
+        }
+
+        if (currentPlan != null) {
+            memory.recordOutcome(currentPlan, TaskStatus.REPLAN, TaskStopReason.MANUAL_SKIP);
+        }
+        currentPlan = null;
+        taskManager.setTask(null);
+
+        Plan focusedPlan = focus.isQuestFocus()
+                ? planner.planForGoals(context, incompleteQuestGoals())
+                : focusedSkillPlan(focus);
+        if (focusedPlan != null) {
+            Microbot.log("[MntnBuilder] Overlay focus selected " + focusedPlan.strategy().name()
+                    + " for " + focus.displayName());
+            applyPlan(focusedPlan);
+            return true;
+        }
+
+        showPlanningState("No runnable " + focus.displayName() + " activity; returning to normal planner");
+        return true;
+    }
+
+    private Plan focusedSkillPlan(MntnBuilderOverlayFocus focus) {
+        Skill skill = focus.skill();
+        if (skill == null) {
+            return null;
+        }
+        int targetLevel = Math.min(99, context.getRealLevel(skill) + 1);
+        if (context.getRealLevel(skill) >= targetLevel) {
+            return null;
+        }
+        return planner.planForGoal(context,
+                new SkillGoal(skill, targetLevel, PROFILE_GOAL_PRIORITY_BASE + 1000));
+    }
+
+    private List<Goal> incompleteQuestGoals() {
+        List<Goal> questGoals = new ArrayList<>();
+        for (Goal goal : planner.getGoals()) {
+            if (goal instanceof QuestGoal && !goal.isComplete(context)) {
+                questGoals.add(goal);
+            }
+        }
+        return questGoals;
     }
 
     private boolean processForcedReplanRequest() {
@@ -1109,6 +1179,7 @@ public class MntnBuilderScript extends Script {
             debugTime = null;
             debugTaskStartTime = null;
             debugScore = 0;
+            nextPlannerAttemptAtMs = System.currentTimeMillis() + NO_PLAN_RETRY_DELAY_MS;
             logSlowPlannerPass(startedAtNanos);
             return;
         }
@@ -1140,45 +1211,60 @@ public class MntnBuilderScript extends Script {
         }
     }
 
+    private boolean isPlannerRetryDelayed() {
+        return System.currentTimeMillis() < nextPlannerAttemptAtMs;
+    }
+
     private void replanOnTimeout() {
         debugLog("Replanning on timeout...");
+        Plan expiredPlan = currentPlan;
         List<Plan> candidates = planner.planAll(context);
         if (candidates.isEmpty()) {
-            String diagnostic = planner.diagnoseNoPlan(context);
-            debugLog("Replan on timeout: " + diagnostic);
+            // Do not leave an expired task installed when the live-state pass happens
+            // to have no candidates. The normal planner has the bounded no-plan retry
+            // and fresh-account combat fallback needed to recover cleanly.
             currentPlan = null;
             taskManager.setTask(null);
-            debugGoal = diagnostic.startsWith("All goals complete") ? "All goals complete" : "No runnable plan";
-            debugRequirement = diagnostic;
-            debugActivity = "-";
-            debugStrategy = "-";
-            debugTime = null;
-            debugTaskStartTime = null;
-            debugScore = 0;
+            showPlanningState("Selecting next task after activity timeout");
+            replan();
             return;
         }
 
-        // Look for the best candidate with a different strategy or goal
-        Plan nextPlan = null;
-        if (currentPlan != null) {
-            for (Plan p : candidates) {
-                if (!p.strategy().name().equals(currentPlan.strategy().name())) {
-                    nextPlan = p;
-                    break;
-                }
-            }
-        }
+        Plan nextPlan = selectTimeoutSuccessor(candidates, expiredPlan);
+        currentPlan = null;
+        taskManager.setTask(null);
 
-        // If no other strategy is available, refresh the top candidate
-        if (nextPlan == null) {
-            nextPlan = candidates.get(0);
-        }
-
-        debugLog("Commitment expired for " + (currentPlan != null ? currentPlan.strategy().name() : "previous task")
+        debugLog("Commitment expired for " + (expiredPlan != null ? expiredPlan.strategy().name() : "previous task")
                 + ". Moving to next: " + nextPlan.strategy().name());
-        System.out.println("[MntnPlanner] Commitment expired for " + (currentPlan != null ? currentPlan.strategy().name() : "previous task")
+        System.out.println("[MntnPlanner] Commitment expired for " + (expiredPlan != null ? expiredPlan.strategy().name() : "previous task")
                 + ". Moving to next: " + nextPlan.strategy().name());
         applyPlan(nextPlan);
+    }
+
+    /**
+     * Expiry is a deliberate activity boundary, so favor a different activity first.
+     * When only one activity can progress the configured goals, use a different method;
+     * only repeat the old method when it is genuinely the sole runnable option.
+     */
+    static Plan selectTimeoutSuccessor(List<Plan> candidates, Plan expiredPlan) {
+        if (candidates == null || candidates.isEmpty()) {
+            return null;
+        }
+        if (expiredPlan == null) {
+            return candidates.get(0);
+        }
+
+        for (Plan candidate : candidates) {
+            if (candidate.activity().type() != expiredPlan.activity().type()) {
+                return candidate;
+            }
+        }
+        for (Plan candidate : candidates) {
+            if (!candidate.strategy().name().equals(expiredPlan.strategy().name())) {
+                return candidate;
+            }
+        }
+        return candidates.get(0);
     }
 
     @Override
@@ -1195,6 +1281,11 @@ public class MntnBuilderScript extends Script {
         awaitingLoginStabilization = false;
         readyLoginTicks = 0;
         forceReplanRequested.set(false);
+        activityTimeAdjustmentMinutes.set(0);
+        overlayFocusRequested.set(null);
+        overlaySkillLevels = Collections.emptyMap();
+        overlayQuestFocusAvailable = false;
+        lastOverlaySkillSnapshotAtMs = 0;
         antibanInitialized = false;
         MntnBuilderRuntimeStatus.clear();
     }

@@ -27,7 +27,8 @@ public class ItemRequirement implements Requirement {
                 new ActivityRequest(ActivityType.SUPPLY, this),
                 new ActivityRequest(ActivityType.MINING, this),
                 new ActivityRequest(ActivityType.WOODCUTTING, this),
-                new ActivityRequest(ActivityType.FISHING, this)
+                new ActivityRequest(ActivityType.FISHING, this),
+                new ActivityRequest(ActivityType.CRAFTING, this)
         );
     }
 
@@ -54,7 +55,12 @@ public class ItemRequirement implements Requirement {
         return Math.max(0, quantity - context.inventory().getCount(itemName));
     }
 
+    /** Quantity still absent after counting the task's inventory and its bank. */
+    public int getMissingAccountQuantity(AccountContext context) {
+        return Math.max(0, quantity - context.inventory().getCount(itemName) - context.bank().getCount(itemName));
+    }
+
     public boolean isAvailableInBank(AccountContext context) {
-        return context.bank().getCount(itemName) >= getMissingInventoryQuantity(context);
+        return getMissingAccountQuantity(context) == 0;
     }
 }

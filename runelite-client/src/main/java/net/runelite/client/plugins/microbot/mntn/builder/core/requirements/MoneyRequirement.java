@@ -4,7 +4,7 @@ import net.runelite.api.ItemID;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.ActivityType;
 import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 
-import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 public class MoneyRequirement implements Requirement {
@@ -24,10 +24,10 @@ public class MoneyRequirement implements Requirement {
 
     @Override
     public List<ActivityRequest> getWaysToSatisfy(AccountContext context) {
-        return Arrays.asList(
-                new ActivityRequest(ActivityType.SUPPLY, this),
-                new ActivityRequest(ActivityType.MONEY_MAKING, this)
-        );
+        // This represents a direct cash-in-inventory goal. A shop or GE purchase does
+        // not declare this prerequisite: its SupplyTask owns the coin withdrawal itself.
+        // Money-making is intentionally not a Builder activity.
+        return Collections.singletonList(new ActivityRequest(ActivityType.SUPPLY, this));
     }
 
     @Override
