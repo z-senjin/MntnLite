@@ -64,14 +64,23 @@ public class AccountContext {
      * must not touch banks, walkers, or planners until this client-thread check is true.
      */
     public boolean isGameplayReady() {
-        if (!isLoggedIn() || Microbot.getClient() == null) {
+        if (!isLoggedIn() || Microbot.getClient() == null || Microbot.getClientThread() == null) {
             return false;
         }
-        return Microbot.getClientThread().runOnClientThreadOptional(() ->
-                Microbot.getClient() != null
-                        && Microbot.getClient().getGameState() == GameState.LOGGED_IN
-                        && Microbot.getClient().getLocalPlayer() != null
-        ).orElse(false);
+        return Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            if (Microbot.getClient() == null
+                    || Microbot.getClient().getGameState() != GameState.LOGGED_IN
+                    || Microbot.getClient().getTopLevelWorldView() == null
+                    || Microbot.getClient().getLocalPlayer() == null) {
+                return false;
+            }
+            try {
+                return Microbot.getClient().getLocalPlayer().getWorldLocation() != null;
+            } catch (NullPointerException ignored) {
+                // Logout can clear the local player's world view before its login flag changes.
+                return false;
+            }
+        }).orElse(false);
     }
 
     public AccountSnapshot snapshot() {
@@ -149,11 +158,23 @@ public class AccountContext {
         return Rs2Player.getQuestState(quest);
     }
 
+    /** Reads a cached varplayer value without crossing onto the client thread. */
+    public int getVarpValue(int varpId) {
+        return isLoggedIn() ? Microbot.getVarbitPlayerValue(varpId) : 0;
+    }
+
     public WorldPoint getLocation() {
         if (planningSnapshot != null) {
             return planningSnapshot.location;
         }
-        return Rs2Player.getWorldLocation();
+        if (!isGameplayReady()) {
+            return null;
+        }
+        try {
+            return Rs2Player.getWorldLocation();
+        } catch (NullPointerException ignored) {
+            return null;
+        }
     }
 
     public boolean isNear(WorldPoint location, int distance) {

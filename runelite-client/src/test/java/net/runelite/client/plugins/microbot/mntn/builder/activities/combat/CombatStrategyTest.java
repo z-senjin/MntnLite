@@ -5,7 +5,6 @@ import net.runelite.client.plugins.microbot.mntn.builder.core.AccountContext;
 import net.runelite.client.plugins.microbot.mntn.builder.core.BankView;
 import net.runelite.client.plugins.microbot.mntn.builder.core.EquipmentView;
 import net.runelite.client.plugins.microbot.mntn.builder.core.InventoryView;
-import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.ItemRequirement;
 import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.Requirement;
 import org.junit.Test;
 
@@ -44,38 +43,42 @@ public class CombatStrategyTest {
     }
 
     @Test
-    public void riskyMonstersRequestStarterFoodWhenNoFoodIsAvailable() {
+    public void riskyMonstersSkipWhenTheirBankedFoodReserveIsTooSmall() {
         TestContext context = new TestContext();
         context.bank.items.put("Bronze dagger", 1);
         CombatStrategy strategy = new CombatStrategy(CombatStrategy.Monster.COWS, Skill.STRENGTH, 20, 0);
 
-        ItemRequirement food = strategy.requirements(context).stream()
-                .filter(ItemRequirement.class::isInstance)
-                .map(ItemRequirement.class::cast)
-                .findFirst()
-                .orElse(null);
-
-        assertNotNull(food);
-        assertEquals(CombatStrategy.STARTER_FOOD, food.getItemName());
-        assertEquals(8, food.getQuantity());
+        assertTrue(strategy.requirements(context).isEmpty());
+        assertFalse(strategy.canExecute(context));
     }
 
     @Test
-    public void foodRequirementOnlyRequestsMissingInventoryFood() {
+    public void alKharidWarriorsAlwaysPlanAFoodLoadoutBelowTheirRecommendedLevel() {
         TestContext context = new TestContext();
-        context.inventory.items.put(CombatStrategy.STARTER_FOOD, 3);
+        CombatStrategy.Monster monster = CombatStrategy.Monster.AL_KHARID_WARRIORS;
+
+        assertEquals(20, monster.minCombatLevel);
+        assertEquals(40, monster.maxRecommendedCombatLevel);
+        assertEquals(10, monster.recommendedFood);
+        assertEquals(10, CombatStrategy.recommendedFoodCount(monster, context));
+        assertEquals("Al Kharid warrior", monster.npcNames[0]);
+        assertEquals(3295, monster.location.getX());
+        assertEquals(3170, monster.location.getY());
+    }
+
+    @Test
+    public void combatFoodReserveCountsAllCookedFoodStacksInTheBank() {
+        TestContext context = new TestContext();
         context.bank.items.put("Bronze dagger", 1);
+        context.bank.items.put("Shrimps", 6);
+        context.bank.items.put("Bread", 4);
+        context.inventory.items.put("Salmon", 1);
         CombatStrategy strategy = new CombatStrategy(CombatStrategy.Monster.GOBLINS, Skill.STRENGTH, 20, 0);
 
-        ItemRequirement food = strategy.requirements(context).stream()
-                .filter(ItemRequirement.class::isInstance)
-                .map(ItemRequirement.class::cast)
-                .findFirst()
-                .orElse(null);
-
-        assertNotNull(food);
-        assertEquals(CombatStrategy.STARTER_FOOD, food.getItemName());
-        assertEquals(1, food.getQuantity());
+        assertEquals(10, CombatStrategy.foodCountInBank(context));
+        assertTrue(CombatStrategy.hasMinimumFoodReserveInBank(context));
+        assertEquals(3, CombatStrategy.foodNamesForCombatLoadout(context).size());
+        assertTrue(strategy.canExecute(context));
     }
 
     @Test
@@ -210,6 +213,7 @@ public class CombatStrategyTest {
         private final TestBankView bank = new TestBankView();
         private final TestEquipmentView equipment = new TestEquipmentView();
         private final Map<Skill, Integer> realLevels = new EnumMap<>(Skill.class);
+        private int combatLevel = 20;
 
         private TestContext() {
             realLevels.put(Skill.ATTACK, 1);
@@ -240,6 +244,11 @@ public class CombatStrategyTest {
         @Override
         public int getRealLevel(Skill skill) {
             return realLevels.getOrDefault(skill, 1);
+        }
+
+        @Override
+        public int getCombatLevel() {
+            return combatLevel;
         }
     }
 

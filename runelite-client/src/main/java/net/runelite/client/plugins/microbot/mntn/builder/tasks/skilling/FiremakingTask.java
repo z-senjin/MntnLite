@@ -1,6 +1,7 @@
 package net.runelite.client.plugins.microbot.mntn.builder.tasks.skilling;
 
 import net.runelite.api.Skill;
+import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.api.tileobject.models.Rs2TileObjectModel;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.firemaking.FiremakingStrategy;
@@ -31,6 +32,7 @@ public class FiremakingTask implements Task {
     }
 
     private final FiremakingStrategy.Method method;
+    private final WorldPoint campfireLocation;
     private Phase phase = Phase.BANKING;
     private BankingTask bankingTask;
     private TaskStopReason lastStopReason = TaskStopReason.NONE;
@@ -43,6 +45,7 @@ public class FiremakingTask implements Task {
 
     public FiremakingTask(FiremakingStrategy.Method method) {
         this.method = method;
+        this.campfireLocation = FiremakingStrategy.randomCampfireLocation();
     }
 
     @Override
@@ -111,7 +114,7 @@ public class FiremakingTask implements Task {
             phase = Phase.BANKING;
             return TaskStatus.RUNNING;
         }
-        if (context.isNear(FiremakingStrategy.VARROCK_WEST_CAMPFIRE, 6)) {
+        if (context.isNear(campfireLocation, 6)) {
             walkGuard.reset();
             phase = Phase.FIND_OR_START_CAMPFIRE;
             return TaskStatus.RUNNING;
@@ -122,7 +125,7 @@ public class FiremakingTask implements Task {
             return stop(TaskStatus.REPLAN, TaskStopReason.TRAVEL_FAILED);
         }
         if (result == TaskActionGuard.Result.READY) {
-            Rs2Walker.walkTo(FiremakingStrategy.VARROCK_WEST_CAMPFIRE);
+            Rs2Walker.walkTo(campfireLocation);
             walkGuard.recordAttempt();
         }
         return TaskStatus.RUNNING;
@@ -134,7 +137,7 @@ public class FiremakingTask implements Task {
             phase = Phase.BANKING;
             return TaskStatus.RUNNING;
         }
-        if (!context.isNear(FiremakingStrategy.VARROCK_WEST_CAMPFIRE, 8)) {
+        if (!context.isNear(campfireLocation, 8)) {
             resetActionGuards();
             phase = Phase.WALK_TO_CAMPFIRE;
             return TaskStatus.RUNNING;

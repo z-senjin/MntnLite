@@ -11,6 +11,7 @@ import net.runelite.client.plugins.microbot.mntn.builder.tasks.combat.CombatTask
 import net.runelite.client.plugins.microbot.util.math.Rs2Random;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
@@ -18,6 +19,7 @@ public class CombatStrategy implements Strategy {
 
     public static final String STARTER_WEAPON = "Bronze scimitar";
     public static final String STARTER_FOOD = "Shrimps";
+    public static final int MINIMUM_COMBAT_FOOD_RESERVE = 10;
 
     public static final String[] COOKED_FOODS = {
             "Cooked karambwan",
@@ -66,6 +68,15 @@ public class CombatStrategy implements Strategy {
                 new String[]{"Cow", "Cow calf"},
                 new WorldPoint(3256, 3266, 0),
                 new String[]{"Bones", "Cowhide"}
+        ),
+        AL_KHARID_WARRIORS(
+                "Al Kharid Warriors",
+                20,
+                40,
+                10,
+                new String[]{"Al Kharid warrior", "Al-Kharid warrior"},
+                new WorldPoint(3295, 3170, 0),
+                new String[]{"Bones", "Coins"}
         );
 
         public final String displayName;
@@ -117,7 +128,7 @@ public class CombatStrategy implements Strategy {
             return false;
         }
 
-        if (recommendedFoodCount(context) > 0 && !hasFood(context)) {
+        if (requiresFoodReserve(monster) && !hasMinimumFoodReserveInBank(context)) {
             return false;
         }
 
@@ -126,26 +137,18 @@ public class CombatStrategy implements Strategy {
 
     @Override
     public List<Requirement> requirements(AccountContext context) {
+        // Combat never creates a food-supply detour. It either starts with a
+        // meaningful banked reserve or the planner selects another activity.
+        if (requiresFoodReserve(monster) && !hasMinimumFoodReserveInBank(context)) {
+            return Collections.emptyList();
+        }
+
         CombatGear.GearItem weapon = selectedWeapon(context);
         if (weapon == null && !canFightUnarmed(monster)) {
             return Collections.singletonList(new ItemRequirement(STARTER_WEAPON, 1));
         }
 
-        int foodNeeded = recommendedFoodCount(context);
-        if (foodNeeded == 0) {
-            return Collections.emptyList();
-        }
-
-        String food = findBestAvailableFood(context);
-        int available = food == null ? 0
-                : context.inventory().getCount(food) + context.bank().getCount(food);
-        if (available >= foodNeeded) {
-            return Collections.emptyList();
-        }
-        return Collections.singletonList(new ItemRequirement(
-                food != null ? food : STARTER_FOOD,
-                foodNeeded - available
-        ));
+        return Collections.emptyList();
     }
 
     @Override
@@ -155,7 +158,7 @@ public class CombatStrategy implements Strategy {
             return -1000;
         }
 
-        if (recommendedFoodCount(context) > 0 && !hasFood(context)) {
+        if (requiresFoodReserve(monster) && !hasMinimumFoodReserveInBank(context)) {
             return -1000;
         }
 
@@ -196,6 +199,12 @@ public class CombatStrategy implements Strategy {
                 score += 35;
             } else {
                 score += 15;
+            }
+        } else if (monster == Monster.AL_KHARID_WARRIORS) {
+            if (combatLevel <= 35) {
+                score += 35;
+            } else {
+                score += 10;
             }
         }
 
@@ -267,7 +276,7 @@ public class CombatStrategy implements Strategy {
 
     public static int recommendedFoodCount(Monster monster, AccountContext context) {
         int combatLevel = getCombatLevel(context);
-        if (monster.recommendedFood <= 0 || combatLevel >= monster.maxRecommendedCombatLevel) {
+        if (!requiresFoodReserve(monster)) {
             return 0;
         }
         if (combatLevel >= monster.minCombatLevel + 10) {
@@ -277,12 +286,29 @@ public class CombatStrategy implements Strategy {
     }
 
     public static boolean hasFoodInBank(AccountContext context) {
+        return foodCountInBank(context) > 0;
+    }
+
+    public static boolean hasMinimumFoodReserveInBank(AccountContext context) {
+        return foodCountInBank(context) >= MINIMUM_COMBAT_FOOD_RESERVE;
+    }
+
+    public static int foodCountInBank(AccountContext context) {
+        int count = 0;
         for (String food : COOKED_FOODS) {
-            if (context.bank().hasItem(food)) {
-                return true;
+            count += context.bank().getCount(food);
+        }
+        return count;
+    }
+
+    public static List<String> foodNamesForCombatLoadout(AccountContext context) {
+        List<String> foods = new ArrayList<>();
+        for (String food : COOKED_FOODS) {
+            if (context.bank().getCount(food) > 0 || context.inventory().getCount(food) > 0) {
+                foods.add(food);
             }
         }
-        return false;
+        return foods;
     }
 
     public static String findBestFoodInBank(AccountContext context) {
@@ -305,6 +331,10 @@ public class CombatStrategy implements Strategy {
 
     public static boolean canFightUnarmed(Monster monster) {
         return monster == Monster.CHICKENS;
+    }
+
+    public static boolean requiresFoodReserve(Monster monster) {
+        return monster.recommendedFood > 0;
     }
 
     public int recommendedFoodCount(AccountContext context) {

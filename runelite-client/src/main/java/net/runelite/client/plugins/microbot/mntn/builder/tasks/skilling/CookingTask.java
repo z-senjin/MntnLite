@@ -267,13 +267,20 @@ public class CookingTask implements Task {
             }
             debugLog(context, "Raw item in inventory, switching to WALK_TO_COOKING");
             phase = Phase.WALK_TO_COOKING;
+            // A completed banking child only means the cooking loadout is ready.
+            // The parent must remain active so the next tick can walk and cook it.
+            return statusAfterBanking(bankStatus);
         }
 
         if (bankStatus.isUnsuccessfulStop()) {
             return stop(bankStatus, TaskStopReason.BANK_FAILED);
         }
 
-        return bankStatus;
+        return statusAfterBanking(bankStatus);
+    }
+
+    static TaskStatus statusAfterBanking(TaskStatus bankStatus) {
+        return bankStatus == TaskStatus.COMPLETE ? TaskStatus.RUNNING : bankStatus;
     }
 
     @Override

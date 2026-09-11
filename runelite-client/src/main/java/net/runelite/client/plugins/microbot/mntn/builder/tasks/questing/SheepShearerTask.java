@@ -52,11 +52,11 @@ public class SheepShearerTask implements Task {
     }
 
     private TaskStatus checkStatus(AccountContext context) {
-        if (hasBallsOfWool(context)) {
+        if (hasRemainingBallsOfWool(context)) {
             phase = Phase.TALK_TO_FRED;
             return TaskStatus.RUNNING;
         }
-        if (context.bank().getCount(SheepShearerStrategy.BALL_OF_WOOL) >= SheepShearerStrategy.BALLS_NEEDED) {
+        if (context.bank().getCount(SheepShearerStrategy.BALL_OF_WOOL) >= remainingBallsRequired(context)) {
             phase = Phase.BANKING;
             return TaskStatus.RUNNING;
         }
@@ -65,11 +65,12 @@ public class SheepShearerTask implements Task {
 
     private TaskStatus bankBallsOfWool(AccountContext context) {
         if (bankingTask == null) {
+            int remainingBalls = remainingBallsRequired(context);
             bankingTask = new BankingTask(
                     BankingTask.Mode.DEPOSIT_ALL_AND_WITHDRAW,
                     null,
                     new BankingTask.ItemWithdrawal(SheepShearerStrategy.BALL_OF_WOOL,
-                            SheepShearerStrategy.BALLS_NEEDED)
+                            remainingBalls)
             );
         }
 
@@ -87,7 +88,7 @@ public class SheepShearerTask implements Task {
     }
 
     private TaskStatus talkToFred(AccountContext context) {
-        if (!hasBallsOfWool(context)) {
+        if (!hasRemainingBallsOfWool(context)) {
             phase = Phase.CHECK_STATUS;
             return TaskStatus.RUNNING;
         }
@@ -106,6 +107,8 @@ public class SheepShearerTask implements Task {
         walkGuard.reset();
 
         if (Rs2Dialogue.isInDialogue()) {
+            talkGuard.reset();
+            npcGuard.reset();
             TaskActionGuard.Result result = dialogueGuard.evaluate(
                     "advance Sheep Shearer dialogue",
                     context.getQuestState(Quest.SHEEP_SHEARER) == QuestState.FINISHED
@@ -114,12 +117,7 @@ public class SheepShearerTask implements Task {
                 return stop(TaskStatus.REPLAN, TaskStopReason.QUEST_STEP_FAILED);
             }
             if (Rs2Dialogue.hasSelectAnOption()) {
-                Rs2Dialogue.clickOption(
-                        "I'm looking for a quest.",
-                        "Yes, okay. I can do that.",
-                        "I need to talk to you about shearing these sheep!",
-                        "Yes."
-                );
+                selectDialogueOption(context);
             }
             if (Rs2Dialogue.hasContinue()) {
                 Rs2Dialogue.clickContinue();
@@ -160,8 +158,25 @@ public class SheepShearerTask implements Task {
         return TaskStatus.RUNNING;
     }
 
-    private boolean hasBallsOfWool(AccountContext context) {
-        return context.inventory().getCount(SheepShearerStrategy.BALL_OF_WOOL) >= SheepShearerStrategy.BALLS_NEEDED;
+    private void selectDialogueOption(AccountContext context) {
+        if (context.getQuestState(Quest.SHEEP_SHEARER) == QuestState.NOT_STARTED) {
+            Rs2Dialogue.clickOption(
+                    "I'm looking for a quest.",
+                    "Yes, okay. I can do that.",
+                    "Yes."
+            );
+            return;
+        }
+
+        Rs2Dialogue.clickOption("I need to talk to you about shearing these sheep!");
+    }
+
+    private int remainingBallsRequired(AccountContext context) {
+        return SheepShearerStrategy.remainingBallsRequired(context);
+    }
+
+    private boolean hasRemainingBallsOfWool(AccountContext context) {
+        return context.inventory().getCount(SheepShearerStrategy.BALL_OF_WOOL) >= remainingBallsRequired(context);
     }
 
     @Override

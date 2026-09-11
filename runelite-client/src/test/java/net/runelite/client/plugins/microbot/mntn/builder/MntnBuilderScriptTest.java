@@ -11,6 +11,7 @@ import net.runelite.client.plugins.microbot.mntn.builder.core.goals.Goal;
 import net.runelite.client.plugins.microbot.mntn.builder.core.planner.Plan;
 import net.runelite.client.plugins.microbot.mntn.builder.core.requirements.ActivityRequest;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.Task;
+import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStopReason;
 import net.runelite.client.plugins.microbot.mntn.builder.tasks.TaskStatus;
 import net.runelite.client.plugins.microbot.util.antiban.Rs2AntibanSettings;
 import net.runelite.client.plugins.microbot.util.antiban.enums.Activity;
@@ -131,6 +132,15 @@ public class MntnBuilderScriptTest {
                 MntnBuilderScript.plannerOutcomeStatus(TaskStatus.COMPLETE, false, true));
         assertEquals(TaskStatus.COMPLETE,
                 MntnBuilderScript.plannerOutcomeStatus(TaskStatus.COMPLETE, true, false));
+    }
+
+    @Test
+    public void onlyTransientTaskFailuresReceiveOneCleanRetry() {
+        assertTrue(MntnBuilderScript.isTransientRetryable(TaskStatus.REPLAN, TaskStopReason.ACTION_FAILED));
+        assertTrue(MntnBuilderScript.isTransientRetryable(TaskStatus.REPLAN, TaskStopReason.PRODUCTION_WIDGET_FAILED));
+        assertTrue(MntnBuilderScript.isTransientRetryable(TaskStatus.FAILED, TaskStopReason.TRAVEL_FAILED));
+        assertFalse(MntnBuilderScript.isTransientRetryable(TaskStatus.REPLAN, TaskStopReason.MISSING_SUPPLIES));
+        assertFalse(MntnBuilderScript.isTransientRetryable(TaskStatus.COMPLETE, TaskStopReason.ACTION_FAILED));
     }
 
     @Test

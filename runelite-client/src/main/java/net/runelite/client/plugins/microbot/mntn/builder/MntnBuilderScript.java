@@ -126,6 +126,7 @@ public class MntnBuilderScript extends Script {
     private long lastOverlaySkillSnapshotAtMs;
     private boolean testOverrideFinished;
     private long nextPlannerAttemptAtMs;
+    private Plan transientRetryPlan;
 
     public String debugGoal = "-";
     public String debugRequirement = "-";
@@ -304,6 +305,7 @@ public class MntnBuilderScript extends Script {
         configRefreshPending = false;
         configRefreshRequestedAtMs = 0;
         nextPlannerAttemptAtMs = 0;
+        transientRetryPlan = null;
         forceReplanRequested.set(false);
         activityTimeAdjustmentMinutes.set(0);
         overlayFocusRequested.set(null);
@@ -366,7 +368,6 @@ public class MntnBuilderScript extends Script {
                 }
 
                 if (!super.run()) {
-                    pauseForScriptGuard();
                     debugLog("super.run() returned false, skipping tick");
                     return;
                 }
@@ -447,6 +448,9 @@ public class MntnBuilderScript extends Script {
                 TaskStatus status = taskManager.tick(context);
                 debugLog("Task tick returned: " + status);
                 if (status.needsPlannerDecision()) {
+                    if (retryTransientTaskFailure(status)) {
+                        return;
+                    }
                     TaskStatus outcomeStatus = plannerOutcomeStatus(
                             status,
                             currentPlan != null && currentPlan.goal().isComplete(context),
@@ -519,23 +523,18 @@ public class MntnBuilderScript extends Script {
      * completed Break Handler break.
      */
     private boolean waitForLoginRecovery() {
-        if (!Microbot.isLoggedIn()) {
+        if (!context.isGameplayReady()) {
             awaitingLoginStabilization = true;
             readyLoginTicks = 0;
             pauseForScriptGuard();
-            showWaitingState("Login", "Waiting for account login");
+            showWaitingState("Login", Microbot.isLoggedIn()
+                    ? "Waiting for game world to load"
+                    : "Waiting for account login");
             return true;
         }
 
         if (!awaitingLoginStabilization) {
             return false;
-        }
-
-        if (!context.isGameplayReady()) {
-            readyLoginTicks = 0;
-            pauseForScriptGuard();
-            showWaitingState("Login", "Waiting for game world to load");
-            return true;
         }
 
         readyLoginTicks++;
@@ -567,6 +566,48 @@ public class MntnBuilderScript extends Script {
         }
         currentPlan = null;
         taskManager.setTask(null);
+    }
+
+    /**
+     * A task has already exhausted its local action guard before reporting one of these reasons.
+     * Give it one clean task instance before abandoning its activity for an unrelated goal.
+     */
+    private boolean retryTransientTaskFailure(TaskStatus status) {
+        TaskStopReason reason = taskManager.getLastStopReason();
+        if (!isTransientRetryable(status, reason)
+                || currentPlan == null
+                || transientRetryPlan == currentPlan) {
+            return false;
+        }
+
+        Task retryTask;
+        try {
+            retryTask = prepareTask(currentPlan.strategy().createTask(context));
+        } catch (RuntimeException ex) {
+            debugLog("Could not create transient retry task: " + ex.getClass().getSimpleName());
+            return false;
+        }
+        if (retryTask == null) {
+            debugLog("Could not create transient retry task: returned null");
+            return false;
+        }
+
+        transientRetryPlan = currentPlan;
+        Rs2Walker.clearWalkingRoute("MntnBuilder transient task retry");
+        taskManager.setTask(retryTask);
+        Microbot.log("[MntnBuilder] Retrying " + currentPlan.strategy().name()
+                + " once after " + reason);
+        return true;
+    }
+
+    static boolean isTransientRetryable(TaskStatus status, TaskStopReason reason) {
+        if (status != TaskStatus.REPLAN && status != TaskStatus.FAILED) {
+            return false;
+        }
+        return reason == TaskStopReason.TRAVEL_FAILED
+                || reason == TaskStopReason.RESOURCE_NOT_FOUND
+                || reason == TaskStopReason.ACTION_FAILED
+                || reason == TaskStopReason.PRODUCTION_WIDGET_FAILED;
     }
 
     private boolean isTestOverrideActive() {
@@ -962,6 +1003,7 @@ public class MntnBuilderScript extends Script {
         // A completed, skipped, or failed task must not leave its route active for the next one.
         Rs2Walker.clearWalkingRoute("MntnBuilder plan transition");
         currentPlan = plan;
+        transientRetryPlan = null;
         nextPlannerAttemptAtMs = 0;
         updateAntibanActivity(plan);
         taskManager.setTask(task);
@@ -1288,6 +1330,7 @@ public class MntnBuilderScript extends Script {
         scriptGuardPausedAt = null;
         awaitingLoginStabilization = false;
         readyLoginTicks = 0;
+        transientRetryPlan = null;
         forceReplanRequested.set(false);
         activityTimeAdjustmentMinutes.set(0);
         overlayFocusRequested.set(null);

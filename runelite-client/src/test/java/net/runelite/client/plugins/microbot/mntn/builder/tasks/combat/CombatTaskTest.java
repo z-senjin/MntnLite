@@ -24,4 +24,9 @@ public class CombatTaskTest {
         assertFalse(CombatTask.exceedsLootValueThreshold(100));
         assertTrue(CombatTask.exceedsLootValueThreshold(101));
     }
+
+    @Test
+    public void combatFoodWithdrawalsUseTheBankingTaskWithdrawAllSentinel() {
+        assertEquals(-1, CombatTask.combatFoodWithdrawalAmount());
+    }
 }

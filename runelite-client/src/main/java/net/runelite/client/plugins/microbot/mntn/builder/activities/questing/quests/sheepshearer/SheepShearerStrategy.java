@@ -3,6 +3,7 @@ package net.runelite.client.plugins.microbot.mntn.builder.activities.questing.qu
 import net.runelite.api.Quest;
 import net.runelite.api.QuestState;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.gameval.VarPlayerID;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.Strategy;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.questing.QuestCatalog;
 import net.runelite.client.plugins.microbot.mntn.builder.activities.questing.QuestMetadata;
@@ -46,7 +47,12 @@ public class SheepShearerStrategy implements Strategy {
             }
 
             ItemRequirement item = (ItemRequirement) requirement;
-            int missing = item.getMissingAccountQuantity(context);
+            int requiredQuantity = BALL_OF_WOOL.equals(item.getItemName())
+                    ? remainingBallsRequired(context)
+                    : item.getQuantity();
+            int availableQuantity = context.inventory().getCount(item.getItemName())
+                    + context.bank().getCount(item.getItemName());
+            int missing = Math.max(0, requiredQuantity - availableQuantity);
             if (missing > 0) {
                 requirements.add(new ItemRequirement(item.getItemName(), missing));
             }
@@ -56,13 +62,15 @@ public class SheepShearerStrategy implements Strategy {
 
     @Override
     public double score(AccountContext context) {
-        if (context.getQuestState(Quest.SHEEP_SHEARER) == QuestState.FINISHED) {
+        QuestState questState = context.getQuestState(Quest.SHEEP_SHEARER);
+        if (questState == QuestState.FINISHED) {
             return -1000;
         }
 
-        int ballsAvailable = Math.min(BALLS_NEEDED,
+        int ballsAvailable = Math.min(remainingBallsRequired(context),
                 context.inventory().getCount(BALL_OF_WOOL) + context.bank().getCount(BALL_OF_WOOL));
-        return 50.0 + ballsAvailable * 2;
+        double completionPriority = questState == QuestState.IN_PROGRESS ? 300.0 : 50.0;
+        return completionPriority + ballsAvailable * 2;
     }
 
     @Override
@@ -83,5 +91,18 @@ public class SheepShearerStrategy implements Strategy {
     @Override
     public Duration commitmentDuration(AccountContext context) {
         return Duration.ofMinutes(Rs2Random.between(10, 20));
+    }
+
+    /**
+     * Sheep Shearer's varplayer starts at 0/1 and advances once per accepted ball of wool.
+     * This mirrors the bundled Quest Helper so a partially completed hand-in only requests
+     * the balls Fred still needs instead of restarting the full twenty-ball requirement.
+     */
+    public static int remainingBallsRequired(AccountContext context) {
+        if (context.getQuestState(Quest.SHEEP_SHEARER) == QuestState.FINISHED) {
+            return 0;
+        }
+        int sheepVarp = context.getVarpValue(VarPlayerID.SHEEP);
+        return sheepVarp > 1 ? Math.max(0, BALLS_NEEDED + 1 - sheepVarp) : BALLS_NEEDED;
     }
 }

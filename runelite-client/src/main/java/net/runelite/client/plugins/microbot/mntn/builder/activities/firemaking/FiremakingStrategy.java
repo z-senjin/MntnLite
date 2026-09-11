@@ -19,10 +19,30 @@ public class FiremakingStrategy implements Strategy {
 
     public static final String TINDERBOX = "Tinderbox";
     public static final WorldPoint VARROCK_WEST_CAMPFIRE = new WorldPoint(3187, 3430, 0);
+    private static final WorldPoint[] VARROCK_WEST_CAMPFIRE_SPOTS = {
+            new WorldPoint(3184, 3430, 0),
+            new WorldPoint(3186, 3430, 0),
+            VARROCK_WEST_CAMPFIRE,
+            new WorldPoint(3189, 3430, 0),
+            new WorldPoint(3191, 3430, 0)
+    };
     public static final int[] STARTER_FIRE_IDS = {26185, 26186};
     public static final int[] FORESTERS_CAMPFIRE_IDS = {
             49927, 49928, 49929, 49930, 49931, 49932
     };
+
+    /** Select one nearby open-air spot once per firemaking trip. */
+    public static WorldPoint randomCampfireLocation() {
+        return campfireLocationForIndex(Rs2Random.betweenInclusive(0, VARROCK_WEST_CAMPFIRE_SPOTS.length - 1));
+    }
+
+    static int campfireLocationCount() {
+        return VARROCK_WEST_CAMPFIRE_SPOTS.length;
+    }
+
+    static WorldPoint campfireLocationForIndex(int index) {
+        return VARROCK_WEST_CAMPFIRE_SPOTS[Math.floorMod(index, VARROCK_WEST_CAMPFIRE_SPOTS.length)];
+    }
 
     public enum Method {
         LOGS(1, 40.0, "Logs"),

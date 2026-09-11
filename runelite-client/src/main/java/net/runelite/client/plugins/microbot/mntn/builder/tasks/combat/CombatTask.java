@@ -208,10 +208,10 @@ public class CombatTask implements Task {
                 return stop(TaskStatus.REPLAN, TaskStopReason.EQUIPMENT_MISSING);
             }
 
-            int foodTarget = CombatStrategy.recommendedFoodCount(monster, context);
-            String bestFood = foodTarget > 0 ? CombatStrategy.findBestAvailableFood(context) : null;
-            if (foodTarget > 0 && bestFood == null) {
-                debugLog(context, "No food available for the combat loadout, returning REPLAN");
+            if (CombatStrategy.requiresFoodReserve(monster)
+                    && !CombatStrategy.hasMinimumFoodReserveInBank(context)) {
+                debugLog(context, "Combat food reserve is below "
+                        + CombatStrategy.MINIMUM_COMBAT_FOOD_RESERVE + ", returning REPLAN");
                 return stop(TaskStatus.REPLAN, TaskStopReason.MISSING_SUPPLIES);
             }
 
@@ -224,8 +224,8 @@ public class CombatTask implements Task {
             for (String gear : plannedLoadout) {
                 withdrawals.add(new BankingTask.ItemWithdrawal(gear, 1));
             }
-            if (bestFood != null) {
-                withdrawals.add(new BankingTask.ItemWithdrawal(bestFood, foodTarget));
+            for (String food : CombatStrategy.foodNamesForCombatLoadout(context)) {
+                withdrawals.add(new BankingTask.ItemWithdrawal(food, combatFoodWithdrawalAmount()));
             }
 
             debugLog(context, "Creating clean combat loadout banking task with " + withdrawals.size() + " withdrawals");
@@ -578,6 +578,10 @@ public class CombatTask implements Task {
 
     static boolean exceedsLootValueThreshold(int totalValue) {
         return totalValue > MINIMUM_LOOT_STACK_VALUE;
+    }
+
+    static int combatFoodWithdrawalAmount() {
+        return -1;
     }
 
     @Override

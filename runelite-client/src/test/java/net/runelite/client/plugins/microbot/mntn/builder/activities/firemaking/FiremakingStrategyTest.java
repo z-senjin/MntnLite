@@ -4,6 +4,7 @@ import net.runelite.client.plugins.microbot.mntn.builder.tasks.skilling.Firemaki
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotEquals;
 
 public class FiremakingStrategyTest {
 
@@ -38,5 +39,14 @@ public class FiremakingStrategyTest {
     public void knowsTheObservedOrdinaryFireVariantsUsedToStartCampfires() {
         assertEquals(2, FiremakingStrategy.STARTER_FIRE_IDS.length);
         assertEquals(26185, FiremakingStrategy.STARTER_FIRE_IDS[0]);
+    }
+
+    @Test
+    public void selectsFromSeveralNearbyCampfireSpotsInsteadOfOneFixedTile() {
+        assertEquals(5, FiremakingStrategy.campfireLocationCount());
+        assertNotEquals(FiremakingStrategy.campfireLocationForIndex(0),
+                FiremakingStrategy.campfireLocationForIndex(1));
+        assertEquals(FiremakingStrategy.campfireLocationForIndex(0),
+                FiremakingStrategy.campfireLocationForIndex(5));
     }
 }
