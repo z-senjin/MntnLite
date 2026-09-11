@@ -17,8 +17,8 @@ import java.util.List;
 /** Fixed-size display grid used for the overlay's skill-level tiles. */
 final class MntnBuilderOverlayActionGrid implements LayoutableRenderableEntity {
 
-    private static final int GAP = 3;
-    private static final int CELL_HEIGHT = 22;
+    private static final int GAP = 2;
+    private static final int CELL_HEIGHT = 19;
     private static final Font FONT = new Font("Arial", Font.BOLD, 10);
 
     static final class Action {
