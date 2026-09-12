@@ -305,6 +305,17 @@ public interface MntnBuilderConfig extends Config {
         return true;
     }
 
+    @ConfigItem(
+            keyName = "detailedOverlay",
+            name = "Detailed overlay",
+            description = "Show requirement, task, score, and planner mode details",
+            section = "overlaySection",
+            position = 2
+    )
+    default boolean detailedOverlay() {
+        return true;
+    }
+
     @Range(max = 99)
     @ConfigItem(
             keyName = "fishingTarget",

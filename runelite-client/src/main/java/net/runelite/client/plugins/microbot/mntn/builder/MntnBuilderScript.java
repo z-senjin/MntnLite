@@ -102,6 +102,7 @@ public class MntnBuilderScript extends Script {
     private AllowedContent lastAllowedContent;
     private SessionFlavor lastSessionFlavor;
     private boolean lastShowOverlay;
+    private boolean lastDetailedOverlay;
     private boolean lastAllowGrandExchange;
     private boolean lastAllowShops;
     private boolean lastAllowGroundPickups;
@@ -207,6 +208,7 @@ public class MntnBuilderScript extends Script {
         lastAllowedContent = cfg.allowedContent();
         lastSessionFlavor = cfg.sessionFlavor();
         lastShowOverlay = cfg.showOverlay();
+        lastDetailedOverlay = cfg.detailedOverlay();
         lastAllowGrandExchange = cfg.allowGrandExchange();
         lastAllowShops = cfg.allowShops();
         lastAllowGroundPickups = cfg.allowGroundPickups();
@@ -232,6 +234,7 @@ public class MntnBuilderScript extends Script {
                 || cfg.allowedContent() != lastAllowedContent
                 || cfg.sessionFlavor() != lastSessionFlavor
                 || cfg.showOverlay() != lastShowOverlay
+                || cfg.detailedOverlay() != lastDetailedOverlay
                 || cfg.allowGrandExchange() != lastAllowGrandExchange
                 || cfg.allowShops() != lastAllowShops
                 || cfg.allowGroundPickups() != lastAllowGroundPickups
@@ -331,6 +334,7 @@ public class MntnBuilderScript extends Script {
                     + ", antibanIntensity=" + config.antibanIntensity()
                     + ", sessionFlavor=" + config.sessionFlavor()
                     + ", showOverlay=" + config.showOverlay()
+                    + ", detailedOverlay=" + config.detailedOverlay()
                     + ", allowGrandExchange=" + config.allowGrandExchange()
                     + ", allowShops=" + config.allowShops()
                     + ", allowGroundPickups=" + config.allowGroundPickups());
@@ -916,7 +920,7 @@ public class MntnBuilderScript extends Script {
                 : initialBankDone ? "Running" : "Startup";
         return new MntnBuilderOverlayState(
                 activeConfig == null || activeConfig.showOverlay(),
-                false,
+                activeConfig == null || activeConfig.detailedOverlay(),
                 runnerState,
                 debugGoal,
                 debugRequirement,
