@@ -27,9 +27,8 @@ public class MntnBuilderOverlay extends OverlayPanel {
     private static final Color GOOD_COLOR = new Color(105, 211, 150);
     private static final Color WARN_COLOR = new Color(244, 180, 75);
     private static final Color SKILL_COLOR = new Color(37, 100, 88);
-    private static final int WIDTH = 360;
-    private static final int COMPACT_HEIGHT = 270;
-    private static final int DETAILED_HEIGHT = 365;
+    private static final int WIDTH = 230;
+    private static final int HEIGHT = 225;
 
     private final MntnBuilderPlugin plugin;
     private final SkillIconManager skillIconManager;
@@ -69,8 +68,7 @@ public class MntnBuilderOverlay extends OverlayPanel {
         }
 
         panelComponent.getChildren().clear();
-        panelComponent.setPreferredSize(new Dimension(WIDTH,
-                state.isDetailed() ? DETAILED_HEIGHT : COMPACT_HEIGHT));
+        panelComponent.setPreferredSize(new Dimension(WIDTH, HEIGHT));
         panelComponent.setBackgroundColor(BACKGROUND_COLOR);
 
         panelComponent.getChildren().add(TitleComponent.builder()
@@ -78,27 +76,17 @@ public class MntnBuilderOverlay extends OverlayPanel {
                 .color(TITLE_COLOR)
                 .build());
         addLine("State", state.getRunnerState(), stateColor(state));
-        addLine("Goal", trim(state.getGoal(), 34), VALUE_COLOR);
-        addLine("Activity", trim(prettify(state.getActivity()) + " - " + prettify(state.getStrategy()), 38),
-                VALUE_COLOR);
+        addLine("Goal", trim(state.getGoal(), 24), VALUE_COLOR);
+        addLine("Need", trim(state.getRequirement(), 24), VALUE_COLOR);
+        addLine("Task", trim(state.getTask(), 24), statusColor(state.getTaskStatus()));
         addLine("Time", formatDuration(computeRemaining(state)), timeColor(state));
-        addLine("Status", prettify(state.getTaskStatus()), statusColor(state.getTaskStatus()));
-
-        if (state.isDetailed()) {
-            addLine("Need", trim(state.getRequirement(), 48), VALUE_COLOR);
-            addLine("Task", trim(state.getTask(), 48), VALUE_COLOR);
-            addLine("Reason", prettify(state.getLastStopReason()), statusColor(state.getLastStopReason()));
-            addLine("Score", String.format("%.1f", state.getScore()), GOOD_COLOR);
-            addLine("Mode", prettify(state.getContentMode()) + " / " + prettify(state.getSessionFlavor()),
-                    VALUE_COLOR);
-        }
 
         panelComponent.getChildren().add(TitleComponent.builder()
                 .text("Skills")
                 .color(TITLE_COLOR)
                 .build());
         configureSkills(state);
-        skillGrid.setPreferredSize(new Dimension(WIDTH - 12, 1));
+        skillGrid.setPreferredSize(new Dimension(WIDTH - 10, 1));
         panelComponent.getChildren().add(skillGrid);
 
         return super.render(graphics);
