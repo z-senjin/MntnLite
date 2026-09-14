@@ -26,7 +26,9 @@ public class CombatTaskTest {
     }
 
     @Test
-    public void combatFoodWithdrawalsUseTheBankingTaskWithdrawAllSentinel() {
-        assertEquals(-1, CombatTask.combatFoodWithdrawalAmount());
+    public void combatFoodWithdrawalsLeaveRoomForTheLoadout() {
+        assertEquals(28, CombatTask.combatFoodWithdrawalAmount(0));
+        assertEquals(23, CombatTask.combatFoodWithdrawalAmount(5));
+        assertEquals(0, CombatTask.combatFoodWithdrawalAmount(28));
     }
 }

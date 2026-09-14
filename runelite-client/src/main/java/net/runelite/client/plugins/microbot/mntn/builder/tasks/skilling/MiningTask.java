@@ -120,7 +120,7 @@ public class MiningTask implements Task {
         boolean isMovingOrAnimating = Rs2Player.isAnimating() || Rs2Player.isMoving();
         if (isMovingOrAnimating) {
             mineGuard.reset();
-            debugLog(context, "Already animating/moving, waiting");
+//            debugLog(context, "Already animating/moving, waiting");
             return TaskStatus.RUNNING;
         }
 

@@ -93,9 +93,11 @@ public class CombatTask implements Task {
             return stop(TaskStatus.BLOCKED, TaskStopReason.NOT_LOGGED_IN);
         }
 
-        // A completed prior withdrawal can leave the bank open. Combat widgets and
-        // movement are not reliable until that interface is dismissed.
-        if (phase != Phase.BANKING && Rs2Bank.isOpen()) {
+        // A completed prior withdrawal can leave the bank open. Equipment can be
+        // worn from the inventory while the bank is still open, so both BANKING and
+        // EQUIPPING keep the interface up. Other phases need it dismissed before
+        // combat widgets and movement become reliable.
+        if (phase != Phase.BANKING && phase != Phase.EQUIPPING && Rs2Bank.isOpen()) {
             Rs2Bank.closeBank();
             return TaskStatus.RUNNING;
         }
@@ -225,7 +227,7 @@ public class CombatTask implements Task {
                 withdrawals.add(new BankingTask.ItemWithdrawal(gear, 1));
             }
             for (String food : CombatStrategy.foodNamesForCombatLoadout(context)) {
-                withdrawals.add(new BankingTask.ItemWithdrawal(food, combatFoodWithdrawalAmount()));
+                withdrawals.add(new BankingTask.ItemWithdrawal(food, combatFoodWithdrawalAmount(plannedLoadout.size())));
             }
 
             debugLog(context, "Creating clean combat loadout banking task with " + withdrawals.size() + " withdrawals");
@@ -267,16 +269,23 @@ public class CombatTask implements Task {
         }
 
         if (equipmentIndex >= plannedLoadout.size()) {
+            if (Rs2Bank.isOpen()) {
+                Rs2Bank.closeBank();
+                return TaskStatus.RUNNING;
+            }
             phase = Phase.CHECK_STATUS;
             return TaskStatus.RUNNING;
         }
 
         String itemName = plannedLoadout.get(equipmentIndex);
+
         if (!context.inventory().hasItem(itemName)) {
-            if (context.bank().hasItem(itemName)) {
-                phase = Phase.BANKING;
+            if (context.equipment().hasItem(itemName)) {
+                equipmentIndex++;
+                equipmentGuard.reset();
                 return TaskStatus.RUNNING;
             }
+            debugLog(context, "Equip item missing from inventory and not equipped: " + itemName);
             return stop(TaskStatus.REPLAN, TaskStopReason.EQUIPMENT_MISSING);
         }
 
@@ -289,7 +298,11 @@ public class CombatTask implements Task {
         }
         if (result == TaskActionGuard.Result.READY) {
             debugLog(context, "Equipping selected loadout item: " + itemName);
-            Rs2Inventory.wield(itemName);
+            if (Rs2Bank.isOpen()) {
+                Rs2Bank.wearItem(itemName);
+            } else {
+                Rs2Inventory.wield(itemName);
+            }
             equipmentGuard.recordAttempt();
         }
         return TaskStatus.RUNNING;
@@ -580,8 +593,8 @@ public class CombatTask implements Task {
         return totalValue > MINIMUM_LOOT_STACK_VALUE;
     }
 
-    static int combatFoodWithdrawalAmount() {
-        return -1;
+    static int combatFoodWithdrawalAmount(int loadoutSize) {
+        return Math.max(0, 28 - loadoutSize);
     }
 
     @Override

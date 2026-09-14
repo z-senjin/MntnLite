@@ -107,7 +107,7 @@ public class ForgingTask implements Task {
         }
 
         if (Rs2Player.isAnimating() || Rs2Player.isMoving()) {
-            debugLog(context, "Already animating/moving, waiting");
+//            debugLog(context, "Already animating/moving, waiting");
             return TaskStatus.RUNNING;
         }
 

@@ -74,7 +74,7 @@ public class WoodcuttingStrategy implements Strategy {
                 new int[]{4536, 5121, 10822, 10823},
                 "Chop down",
                 "Yew logs",
-                new WorldPoint(3166, 3490, 0)
+                new WorldPoint(3208, 3503, 0)
         );
 
         public final int requiredLevel;
@@ -104,9 +104,9 @@ public class WoodcuttingStrategy implements Strategy {
         DRAYNOR_OAK(Method.OAK_TREE, new WorldPoint(3093, 3245, 0)),
         LUMBRIDGE_GENERAL_STORE_OAK(Method.OAK_TREE, new WorldPoint(3212, 3244, 0)),
         DRAYNOR_WILLOW(Method.WILLOW_TREE, new WorldPoint(3086, 3228, 0)),
-        EDGEVILLE_WILLOW(Method.WILLOW_TREE, new WorldPoint(3094, 3491, 0)),
+        EDGEVILLE_WILLOW(Method.WILLOW_TREE, new WorldPoint(3117, 3499, 0)),
         PORT_SARIM_WILLOW(Method.WILLOW_TREE, new WorldPoint(3048, 3235, 0)),
-        VARROCK_GRAND_EXCHANGE_YEW(Method.YEW_TREE, new WorldPoint(3166, 3490, 0));
+        VARROCK_GRAND_EXCHANGE_YEW(Method.YEW_TREE, new WorldPoint(3208, 3503, 0));
 
         public final Method method;
         public final WorldPoint point;

@@ -334,7 +334,7 @@ public class DoricQuestTask implements Task {
 
         if (Rs2Player.isAnimating() || Rs2Player.isMoving()) {
             mineGuard.reset();
-            debugLog(context, "Already animating/moving, waiting");
+//            debugLog(context, "Already animating/moving, waiting");
             return TaskStatus.RUNNING;
         }
 

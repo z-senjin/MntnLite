@@ -364,7 +364,7 @@ public class MntnBuilderScript extends Script {
                 }
 
                 if (!super.run()) {
-                    debugLog("super.run() returned false, skipping tick");
+//                    debugLog("super.run() returned false, skipping tick");
                     return;
                 }
                 resumeFromScriptGuard();
@@ -442,7 +442,7 @@ public class MntnBuilderScript extends Script {
                 }
 
                 TaskStatus status = taskManager.tick(context);
-                debugLog("Task tick returned: " + status);
+//                debugLog("Task tick returned: " + status);
                 if (status.needsPlannerDecision()) {
                     if (retryTransientTaskFailure(status)) {
                         return;

@@ -215,7 +215,7 @@ public class FishingTask implements Task {
             }
         } else {
             fishGuard.reset();
-            debugLog(context, "Already animating/moving, waiting");
+//            debugLog(context, "Already animating/moving, waiting");
         }
 
         spotGuard.reset();

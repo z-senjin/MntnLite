@@ -149,7 +149,7 @@ public class WoodcuttingTask implements Task {
         boolean isMovingOrAnimating = Rs2Player.isAnimating() || Rs2Player.isMoving();
         if (isMovingOrAnimating) {
             chopGuard.reset();
-            debugLog(context, "Already animating/moving, waiting");
+//            debugLog(context, "Already animating/moving, waiting");
             return TaskStatus.RUNNING;
         }
         TaskActionGuard.Result chopResult = chopGuard.evaluate("chop " + method.name(), false);
