@@ -67,17 +67,17 @@ public class FishingStrategy implements Strategy {
                 30, 70, 1527, "Lure", "Raw salmon", new ToolRequirement[]{
                 new ToolRequirement("Fly fishing rod", 1), new ToolRequirement("Feather", WITHDRAW_ALL)
         }, new WorldPoint(3241, 3243, 0)
-        ),
-        CAGE_LOBSTER(
-                40, 90,
-                2, // TODO verify - placeholder
-                "Cage",
-                "Raw lobster",
-                new ToolRequirement[]{
-                        new ToolRequirement("Lobster pot", 1)
-                },
-                new WorldPoint(2924, 3178, 0)
         );
+//        CAGE_LOBSTER(
+//                40, 90,
+//                2, // TODO verify - placeholder
+//                "Cage",
+//                "Raw lobster",
+//                new ToolRequirement[]{
+//                        new ToolRequirement("Lobster pot", 1)
+//                },
+//                new WorldPoint(2924, 3178, 0)
+//        );
 
         public final int requiredLevel;
         public final double xpValue;
@@ -108,8 +108,8 @@ public class FishingStrategy implements Strategy {
         LUMBRIDGE_SWAMP_SHRIMP(Method.NET_SHRIMP, new WorldPoint(3242, 3149, 0)),
         DRAYNOR_SHRIMP(Method.NET_SHRIMP, new WorldPoint(3084, 3231, 0)),
         LUMBRIDGE_RIVER_FLY(Method.FLY_FISH_SALMON, new WorldPoint(3241, 3243, 0)),
-        BARBARIAN_VILLAGE_FLY(Method.FLY_FISH_SALMON, new WorldPoint(3107, 3432, 0)),
-        KARAMJA_LOBSTER(Method.CAGE_LOBSTER, new WorldPoint(2924, 3178, 0));
+        BARBARIAN_VILLAGE_FLY(Method.FLY_FISH_SALMON, new WorldPoint(3107, 3432, 0));
+//        KARAMJA_LOBSTER(Method.CAGE_LOBSTER, new WorldPoint(2924, 3178, 0));
 
         public final Method method;
         public final WorldPoint point;

@@ -27,6 +27,7 @@ import net.runelite.client.plugins.microbot.util.tabs.Rs2Tab;
 import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 public class CombatTask implements Task {
@@ -226,9 +227,18 @@ public class CombatTask implements Task {
             for (String gear : plannedLoadout) {
                 withdrawals.add(new BankingTask.ItemWithdrawal(gear, 1));
             }
-            for (String food : CombatStrategy.foodNamesForCombatLoadout(context)) {
-                withdrawals.add(new BankingTask.ItemWithdrawal(food, combatFoodWithdrawalAmount(plannedLoadout.size())));
+//            for (String food : CombatStrategy.foodNamesForCombatLoadout(context)) {
+//                withdrawals.add(new BankingTask.ItemWithdrawal(food, combatFoodWithdrawalAmount(plannedLoadout.size())));
+//            }
+
+            //TODO:
+            withdrawals.add(new BankingTask.ItemWithdrawal(CombatStrategy.foodNamesForCombatLoadout(context).get(0), 5));
+
+            System.out.println("ZACH IS DEBUGGING HERE ================withdrawl=============");
+            for (BankingTask.ItemWithdrawal item : withdrawals) {
+                System.out.println(item.itemName);
             }
+
 
             debugLog(context, "Creating clean combat loadout banking task with " + withdrawals.size() + " withdrawals");
             bankingTask = new BankingTask(
