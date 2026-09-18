@@ -19,11 +19,15 @@ import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.Script;
 import net.runelite.client.plugins.microbot.mntn.aio.core.*;
 import net.runelite.client.plugins.microbot.mntn.aio.strategies.skilling.mining.CopperTinMiningStrategy;
+import net.runelite.client.plugins.microbot.util.antiban.Rs2AntibanSettings;
+import net.runelite.client.plugins.microbot.util.camera.Rs2Camera;
+import net.runelite.client.plugins.microbot.util.player.Rs2Player;
 
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
 public class MntnAIOBuilderScript extends Script
@@ -61,12 +65,16 @@ public class MntnAIOBuilderScript extends Script
     private boolean debugLogging = true;
     private boolean finished;
     private String lastStatus;
+    private long nextWalkingCameraTurnAt = 0L;
 
     /**
      * Starts the account builder and its scheduled execution loop.
      */
     public boolean run(MntnAIOBuilderConfig config)
     {
+
+        Rs2AntibanSettings.simulateMistakes = true;
+        Rs2AntibanSettings.simulateFatigue = true;
         /*
          * Cancel an existing scheduled loop if run() is called again.
          */
@@ -124,6 +132,8 @@ public class MntnAIOBuilderScript extends Script
                                 {
                                     return;
                                 }
+
+                                handleWalkingCamera();
 
                                 runPlannerTick();
                             }
@@ -395,6 +405,75 @@ public class MntnAIOBuilderScript extends Script
 
             activePlan = null;
         }
+    }
+
+    /**
+     * Occasionally makes a small horizontal camera rotation while walking.
+     *
+     * The timer resets whenever the player stops, so standing still does not
+     * cause an immediate camera movement when walking begins again.
+     */
+    private void handleWalkingCamera() {
+
+        if(Rs2Camera.getPitch() < 3064){
+            Rs2Camera.setPitch(3064);
+        }
+
+        if (!Rs2Player.isMoving()) {
+            nextWalkingCameraTurnAt = 0L;
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+
+        // Walking has just started. Schedule the first possible rotation.
+        if (nextWalkingCameraTurnAt == 0L) {
+            scheduleNextCameraTurn(now);
+            return;
+        }
+
+        if (now < nextWalkingCameraTurnAt) {
+            return;
+        }
+
+        rotateCameraSlightly();
+        scheduleNextCameraTurn(now);
+    }
+
+    private void scheduleNextCameraTurn(long now) {
+        // Wait between 15 and 35 seconds.
+        long delayMs = ThreadLocalRandom.current()
+                .nextLong(15_000L, 35_001L);
+
+        nextWalkingCameraTurnAt = now + delayMs;
+    }
+
+    private void rotateCameraSlightly() {
+        ThreadLocalRandom random = ThreadLocalRandom.current();
+
+        // Rotate between 8 and 22 degrees.
+        int degrees = random.nextInt(8, 23);
+
+        if (random.nextBoolean()) {
+            degrees = -degrees;
+        }
+
+        /*
+         * Rs2Camera yaw uses 0-2047 rather than degrees.
+         * Convert the desired degree change into camera units.
+         */
+        int yawChange = (int) Math.round(degrees * (2048.0 / 360.0));
+        int currentYaw = Rs2Camera.getYaw();
+        int targetYaw = Math.floorMod(currentYaw + yawChange, 2048);
+
+        Rs2Camera.setYaw(targetYaw);
+
+        debugLog(
+                "Walking camera rotation: "
+                        + degrees
+                        + " degrees, target yaw: "
+                        + targetYaw
+        );
     }
 
     /**

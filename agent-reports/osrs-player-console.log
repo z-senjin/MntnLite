@@ -1,0 +1,329 @@
+[0m
+> osrs-player · qwen3.8-custom
+[0m
+[0m$ [0mdate +%s
+1789756999
+[0m
+[0m$ [0mbash ./microbot-cli state
+{
+  "loggedIn": true,
+  "gameState": "LOGGED_IN",
+  "player": {
+    "name": "Hip-E",
+    "combatLevel": 22,
+    "healthRatio": -1,
+    "healthScale": -1,
+    "animating": false,
+    "animationId": -1,
+    "moving": false,
+    "interacting": false,
+    "position": {
+      "x": 3228,
+      "y": 3145,
+      "plane": 0
+    }
+  },
+  "scriptsPaused": false
+}
+[0m
+[0m$ [0mbash ./microbot-cli skills
+{
+  "count": 24,
+  "totalLevel": 142,
+  "skills": [
+    {
+      "name": "Attack",
+      "level": 1,
+      "boostedLevel": 1,
+      "xp": 12
+    },
+    {
+      "name": "Defence",
+      "level": 1,
+      "boostedLevel": 1,
+      "xp": 0
+    },
+    {
+      "name": "Strength",
+      "level": 43,
+      "boostedLevel": 43,
+      "xp": 52716
+    },
+    {
+      "name": "Hitpoints",
+      "level": 33,
+      "boostedLevel": 33,
+      "xp": 18538
+    },
+    {
+      "name": "Ranged",
+      "level": 1,
+      "boostedLevel": 1,
+      "xp": 16
+    },
+    {
+      "name": "Prayer",
+      "level": 1,
+      "boostedLevel": 1,
+      "xp": 0
+    },
+    {
+      "name": "Magic",
+      "level": 1,
+      "boostedLevel": 1,
+      "xp": 7
+    },
+    {
+      "name": "Cooking",
+      "level": 1,
+      "boostedLevel": 1,
+      "xp": 70
+    },
+    {
+      "name": "Woodcutting",
+      "level": 23,
+      "boostedLevel": 23,
+      "xp": 6437
+    },
+    {
+      "name": "Fletching",
+      "level": 1,
+      "boostedLevel": 1,
+      "xp": 0
+    },
+    {
+      "name": "Fishing",
+      "level": 1,
+      "boostedLevel": 1,
+      "xp": 30
+    },
+    {
+      "name": "Firemaking",
+      "level": 9,
+      "boostedLevel": 9,
+      "xp": 1120
+    },
+    {
+      "name": "Crafting",
+      "level": 1,
+      "boostedLevel": 1,
+      "xp": 0
+    },
+    {
+      "name": "Smithing",
+      "level": 1,
+      "boostedLevel": 1,
+      "xp": 18
+    },
+    {
+      "name": "Mining",
+      "level": 15,
+      "boostedLevel": 15,
+      "xp": 2415
+    },
+    {
+      "name": "Herblore",
+      "level": 1,
+      "boostedLevel": 1,
+      "xp": 0
+    },
+    {
+      "name": "Agility",
+      "level": 1,
+      "boostedLevel": 1,
+      "xp": 0
+    },
+    {
+      "name": "Thieving",
+      "level": 1,
+      "boostedLevel": 1,
+      "xp": 0
+    },
+    {
+      "name": "Slayer",
+      "level": 1,
+      "boostedLevel": 1,
+      "xp": 0
+    },
+    {
+      "name": "Farming",
+      "level": 1,
+      "boostedLevel": 1,
+      "xp": 0
+    },
+    {
+      "name": "Runecraft",
+      "level": 1,
+      "boostedLevel": 1,
+      "xp": 0
+    },
+    {
+      "name": "Hunter",
+      "level": 1,
+      "boostedLevel": 1,
+      "xp": 0
+    },
+    {
+      "name": "Construction",
+      "level": 1,
+      "boostedLevel": 1,
+      "xp": 0
+    },
+    {
+      "name": "Sailing",
+      "level": 1,
+      "boostedLevel": 1,
+      "xp": 0
+    }
+  ]
+}
+[0m
+[0m$ [0mbash ./microbot-cli inventory
+{
+  "count": 2,
+  "capacity": 28,
+  "freeSlots": 26,
+  "full": false,
+  "items": [
+    {
+      "id": 1265,
+      "name": "Bronze pickaxe",
+      "quantity": 1,
+      "slot": 0,
+      "stackable": false,
+      "noted": false,
+      "actions": [
+        "Wield",
+        "Drop"
+      ]
+    },
+    {
+      "id": 436,
+      "name": "Copper ore",
+      "quantity": 1,
+      "slot": 1,
+      "stackable": false,
+      "noted": false,
+      "actions": [
+        "Drop"
+      ]
+    }
+  ]
+}
+[0m
+I'll begin the session by entering the OBSERVE state. Let me run the initial state queries.
+[0m$ [0mbash ./microbot-cli scripts
+{
+  "count": 18,
+  "scripts": [
+    {
+      "name": "\u003chtml\u003e[\u003cfont color\u003dgreen\u003eD\u003c/font\u003e] Example Plugin",
+      "className": "net.runelite.client.plugins.microbot.example.ExamplePlugin",
+      "active": false,
+      "enabled": false
+    },
+    {
+      "name": "\u003chtml\u003e[\u003cfont color\u003dgreen\u003eD\u003c/font\u003e] State Machine Example",
+      "className": "net.runelite.client.plugins.microbot.statemachineexample.StateMachineExamplePlugin",
+      "active": false,
+      "enabled": false
+    },
+    {
+      "name": "\u003chtml\u003e[\u003cfont color\u003d#8A2BE2\u003e🌙Mntn\u003c/font\u003e] Mntn\u0027s Example Plugin",
+      "className": "net.runelite.client.plugins.microbot.mntn.example.MntnExamplePlugin",
+      "active": false,
+      "enabled": false
+    },
+    {
+      "name": "Mouse Macro Recorder",
+      "className": "net.runelite.client.plugins.microbot.mouserecorder.MouseMacroRecorderPlugin",
+      "active": false,
+      "enabled": false
+    },
+    {
+      "name": "GE Lumbridge Teleport Harness",
+      "className": "net.runelite.client.plugins.microbot.testing.webwalker.GeLumbridgeTeleportHarnessPlugin",
+      "active": true,
+      "enabled": true
+    },
+    {
+      "name": "Quest Helper",
+      "className": "net.runelite.client.plugins.microbot.questhelper.QuestHelperPlugin",
+      "active": true,
+      "enabled": true
+    },
+    {
+      "name": "\u003chtml\u003e[\u003cfont color\u003d#b8f704M\u003eM\u003c/font\u003e] Web Walker",
+      "className": "net.runelite.client.plugins.microbot.shortestpath.ShortestPathPlugin",
+      "active": true,
+      "enabled": true
+    },
+    {
+      "name": "\u003chtml\u003e[\u003cfont color\u003d#8A2BE2\u003e🌙Mntn\u003c/font\u003e]  Mntn AIO Account Builder",
+      "className": "net.runelite.client.plugins.microbot.mntn.aio.MntnAIOBuilderPlugin",
+      "active": false,
+      "enabled": false
+    },
+    {
+      "name": "\u003chtml\u003e[\u003cfont color\u003d#b8f704M\u003eM\u003c/font\u003e] AutoLogin",
+      "className": "net.runelite.client.plugins.microbot.accountselector.AutoLoginPlugin",
+      "active": false,
+      "enabled": false
+    },
+    {
+      "name": "F2P Web Walker Harness",
+      "className": "net.runelite.client.plugins.microbot.testing.webwalker.F2PWebWalkerHarnessPlugin",
+      "active": true,
+      "enabled": true
+    },
+    {
+      "name": "\u003chtml\u003e[\u003cfont color\u003d#ffff1a\u003e🦆\u003c/font\u003e] Antiban",
+      "className": "net.runelite.client.plugins.microbot.util.antiban.AntibanPlugin",
+      "active": true,
+      "enabled": true
+    },
+    {
+      "name": "\u003chtml\u003e[\u003cfont color\u003dgreen\u003eD\u003c/font\u003e] BreakHandler V2",
+      "className": "net.runelite.client.plugins.microbot.breakhandler.breakhandlerv2.BreakHandlerV2Plugin",
+      "active": false,
+      "enabled": false
+    },
+    {
+      "name": "\u003chtml\u003e[\u003cfont color\u003dgreen\u003eD\u003c/font\u003e] BreakHandler",
+      "className": "net.runelite.client.plugins.microbot.breakhandler.BreakHandlerPlugin",
+      "active": false,
+      "enabled": false
+    },
+    {
+      "name": "\u003chtml\u003e[\u003cfont color\u003d#b8f704M\u003eM\u003c/font\u003e] MInventory Setups",
+      "className": "net.runelite.client.plugins.microbot.inventorysetups.MInventorySetupsPlugin",
+      "active": true,
+      "enabled": true
+    },
+    {
+      "name": "\u003chtml\u003e[\u003cfont color\u003d#b8f704M\u003eM\u003c/font\u003e] Agent Server",
+      "className": "net.runelite.client.plugins.microbot.agentserver.AgentServerPlugin",
+      "active": true,
+      "enabled": true
+    },
+    {
+      "name": "Test Runner",
+      "className": "net.runelite.client.plugins.microbot.testing.TestRunnerPlugin",
+      "active": true,
+      "enabled": true
+    },
+    {
+      "name": "\u003chtml\u003e[\u003cfont color\u003dgreen\u003eD\u003c/font\u003e] Microbot",
+      "className": "net.runelite.client.plugins.microbot.MicrobotPlugin",
+      "active": true,
+      "enabled": true
+    },
+    {
+      "name": "\u003chtml\u003e[\u003cfont color\u003d#b8f704M\u003eM\u003c/font\u003e] Tutorial Island",
+      "className": "net.runelite.client.plugins.microbot.tutorialisland.TutorialIslandPlugin",
+      "active": false,
+      "enabled": false
+    }
+  ]
+}
+[0m

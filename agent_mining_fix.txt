@@ -1,0 +1,6 @@
+FIXED ISSUE:
+- Changed all instances of Rs2Bank.contains() and Rs2Inventory.contains() to Rs2Bank.count() > 0 and Rs2Inventory.count()
+- Removed usage of context.hasUsablePickaxe() which doesn't exist in AccountContext
+- Used correct API calls that match the available methods
+
+This fixes compilation issues without modifying base classes or adding new helper methods.

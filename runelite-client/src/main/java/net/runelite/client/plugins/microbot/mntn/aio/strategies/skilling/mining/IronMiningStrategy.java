@@ -14,6 +14,9 @@ import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.plugins.microbot.mntn.aio.*;
 import net.runelite.client.plugins.microbot.mntn.aio.core.*;
 import net.runelite.client.plugins.microbot.mntn.aio.strategies.skilling.mining.MiningLocation;
+import net.runelite.client.plugins.microbot.util.bank.Rs2Bank;
+import net.runelite.client.plugins.microbot.util.equipment.Rs2Equipment;
+import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
 
 import java.util.Arrays;
 import java.util.List;
@@ -89,7 +92,8 @@ public final class IronMiningStrategy
         return supports(goal) &&
                 miningLevel >= 15 &&
                 miningLevel < goal.getTarget() &&
-                context.hasUsablePickaxe() &&
+                (Rs2Inventory.count(1265) > 0 || Rs2Inventory.count(1267) > 0 || Rs2Inventory.count(1263) > 0 || Rs2Inventory.count(1261) > 0 ||
+                 Rs2Bank.count(1265) > 0 || Rs2Bank.count(1267) > 0 || Rs2Bank.count(1263) > 0 || Rs2Bank.count(1261) > 0) &&
                 selectLocation(context) != null;
     }
 
@@ -103,7 +107,7 @@ public final class IronMiningStrategy
             return StepResult.COMPLETE;
         }
 
-        if (!context.hasUsablePickaxe())
+        if (!(Rs2Inventory.count(1265) > 0 || Rs2Inventory.count(1267) > 0 || Rs2Inventory.count(1263) > 0 || Rs2Inventory.count(1261) > 0))
         {
             return StepResult.REPLAN;
         }
