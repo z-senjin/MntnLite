@@ -151,7 +151,6 @@ public class AgentServerPlugin extends Plugin {
 				new KeyboardHandler(gson),
 				new QuestHelperHandler(gson),
 				new StateMachineDebugHandler(gson),
-				new MntnBuilderStatusHandler(gson),
 				new ProfileHandler(gson),
 				new DynamicScriptDeployHandler(gson)
 		);
