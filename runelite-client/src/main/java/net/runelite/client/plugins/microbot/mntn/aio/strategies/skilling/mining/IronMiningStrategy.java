@@ -293,7 +293,7 @@ public final class IronMiningStrategy
 
         // Deposit everything except our pickaxe
         sleepUntil(
-                () -> Rs2Bank.depositAllExcept(PICKAXES_NAME),
+                () -> Rs2Bank.depositAllExcept(Arrays.asList(PICKAXES_NAME)),
                 Rs2Random.between(400, 1200)
         );
 
