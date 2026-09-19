@@ -17,6 +17,7 @@ import net.runelite.client.plugins.microbot.mntn.aio.*;
 import net.runelite.client.plugins.microbot.mntn.aio.core.*;
 import net.runelite.client.plugins.microbot.mntn.aio.strategies.skilling.mining.MiningLocation;
 import net.runelite.client.plugins.microbot.mntn.aio.strategies.skilling.mining.items.Items;
+import net.runelite.client.plugins.microbot.mntn.aio.utils.MiningUtils;
 import net.runelite.client.plugins.microbot.util.bank.Rs2Bank;
 import net.runelite.client.plugins.microbot.util.equipment.Rs2Equipment;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
@@ -32,6 +33,8 @@ import java.util.stream.Stream;
 
 import static net.runelite.client.plugins.microbot.mntn.aio.strategies.skilling.mining.items.Items.PICKAXES_ID;
 import static net.runelite.client.plugins.microbot.mntn.aio.strategies.skilling.mining.items.Items.PICKAXES_NAME;
+import static net.runelite.client.plugins.microbot.mntn.aio.utils.MiningUtils.canUsePickaxe;
+import static net.runelite.client.plugins.microbot.mntn.aio.utils.MiningUtils.getBestPickaxe;
 import static net.runelite.client.plugins.microbot.util.Global.sleep;
 import static net.runelite.client.plugins.microbot.util.Global.sleepUntil;
 
@@ -241,7 +244,11 @@ public final class IronMiningStrategy
             return;
         }
 
-        Rs2TileObjectModel rock = findNearestRock();
+        Rs2TileObjectModel rock =
+            MiningUtils.findNearestRock(
+                    11365,
+                    11364
+            );
 
         if(rock == null) return;
 
@@ -307,72 +314,6 @@ public final class IronMiningStrategy
         }
 
         return !Rs2Inventory.isEmpty();
-    }
-
-
-    // Helpers
-    private Rs2TileObjectModel findNearestRock() {
-        WorldPoint playerLocation = Rs2Player.getWorldLocation();
-        //TODO TODO TODO
-        return Stream.of(
-                        Microbot.getRs2TileObjectCache()
-                                .query()
-                                .withId(11365)
-                                .nearest(),
-
-                        Microbot.getRs2TileObjectCache()
-                                .query()
-                                .withId(11364)
-                                .nearest()
-                )
-                .filter(Objects::nonNull)
-                .min(Comparator.comparingInt(object ->
-                        playerLocation.distanceTo(object.getWorldLocation())))
-                .orElse(null);
-    }
-
-    //TODO: move these helpers to a util file and add iron pick support
-    private String getBestPickaxe(int miningLevel)
-    {
-        if (miningLevel >= 41)
-            return "Rune pickaxe";
-
-        if (miningLevel >= 31)
-            return "Adamant pickaxe";
-
-        if (miningLevel >= 21)
-            return "Mithril pickaxe";
-
-        if (miningLevel >= 11)
-            return "Black pickaxe";
-
-        if (miningLevel >= 6)
-            return "Steel pickaxe";
-
-        if (miningLevel >= 1)
-            return "Bronze pickaxe";
-
-        return null;
-    }
-
-    private boolean canUsePickaxe(String pickaxe, int miningLevel)
-    {
-        if (pickaxe.equals("Rune pickaxe"))
-            return miningLevel >= 41;
-
-        if (pickaxe.equals("Adamant pickaxe"))
-            return miningLevel >= 31;
-
-        if (pickaxe.equals("Mithril pickaxe"))
-            return miningLevel >= 21;
-
-        if (pickaxe.equals("Black pickaxe"))
-            return miningLevel >= 11;
-
-        if (pickaxe.equals("Steel pickaxe"))
-            return miningLevel >= 6;
-
-        return miningLevel >= 1;
     }
 
     @Override
