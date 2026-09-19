@@ -17,6 +17,7 @@ import net.runelite.api.ItemID;
 import net.runelite.api.Quest;
 import net.runelite.api.QuestState;
 import net.runelite.api.Skill;
+import net.runelite.client.plugins.microbot.mntn.aio.utils.bank.BankCache;
 import net.runelite.client.plugins.microbot.util.bank.Rs2Bank;
 import net.runelite.client.plugins.microbot.util.equipment.Rs2Equipment;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
@@ -26,6 +27,14 @@ import java.util.Objects;
 
 public final class AccountContext
 {
+
+    private final BankCache bankCache = new BankCache();
+
+    public BankCache getBankCache()
+    {
+        return bankCache;
+    }
+
     /**
      * Returns the account's real skill level without temporary boosts
      * or reductions.
@@ -46,6 +55,8 @@ public final class AccountContext
         return Rs2Player.getQuestState(quest)
                 == QuestState.FINISHED;
     }
+
+
 
     /**
      * Returns the total coins currently known in the inventory and bank.

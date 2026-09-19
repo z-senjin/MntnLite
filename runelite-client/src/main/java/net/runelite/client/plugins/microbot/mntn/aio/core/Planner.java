@@ -16,6 +16,7 @@
  */
 package net.runelite.client.plugins.microbot.mntn.aio.core;
 
+import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.mntn.aio.core.AccountStrategy;
 import net.runelite.client.plugins.microbot.mntn.aio.core.Goal;
 import net.runelite.client.plugins.microbot.mntn.aio.core.AccountContext;

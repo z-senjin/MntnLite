@@ -24,6 +24,7 @@ public final class MiningLocation
     private final WorldPoint mineDestination;
     private final WorldPoint bankDestination;
     private final Predicate<AccountContext> requirement;
+    private final Boolean powermine;
 
     public MiningLocation(
             String name,
@@ -44,7 +45,32 @@ public final class MiningLocation
                 requirement,
                 "requirement"
         );
+
+        this.powermine = false;
     }
+
+    public MiningLocation(
+        String name,
+        WorldPoint mineDestination,
+        WorldPoint bankDestination,
+        Predicate<AccountContext> requirement, Boolean powermine)
+{
+    this.name = Objects.requireNonNull(name, "name");
+    this.mineDestination = Objects.requireNonNull(
+            mineDestination,
+            "mineDestination"
+    );
+    this.bankDestination = Objects.requireNonNull(
+            bankDestination,
+            "bankDestination"
+    );
+    this.requirement = Objects.requireNonNull(
+            requirement,
+            "requirement"
+    );
+
+    this.powermine = powermine;
+}
 
     public boolean canUse(AccountContext context)
     {
@@ -65,6 +91,8 @@ public final class MiningLocation
     {
         return bankDestination;
     }
+
+    public boolean getPowermine() {return powermine; }
 
     @Override
     public String toString()
