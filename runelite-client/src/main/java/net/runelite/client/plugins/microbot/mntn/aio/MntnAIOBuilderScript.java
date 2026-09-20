@@ -61,6 +61,20 @@ public class MntnAIOBuilderScript extends Script
 
     private MntnAIOBuilderConfig config;
 
+    /*
+     * Each plan runs for a random time between
+     * COMMITMENT_MINUTES_MIN and COMMITMENT_MINUTES_MAX, after which the
+     * planner picks the next goal or strategy.
+     */
+    private static final int COMMITMENT_MINUTES_MIN = 60;
+    private static final int COMMITMENT_MINUTES_MAX = 180;
+
+    /*
+     * When the active plan should stop and the planner should choose
+     * again. Reset whenever a new plan is selected.
+     */
+    private long activePlanDeadlineMs = 0;
+
     private boolean hasInitialized = false;
     private boolean debugLogging = true;
     private boolean finished;
@@ -203,6 +217,21 @@ public class MntnAIOBuilderScript extends Script
         }
 
         /*
+         * The plan's random time limit has expired, so pick a new
+         * goal or strategy even if the current goal is still
+         * incomplete.
+         */
+        if (activePlan != null &&
+                isCommitmentExpired(System.currentTimeMillis()))
+        {
+            debugLog(
+                    "Plan time limit reached, replanning"
+            );
+
+            clearActivePlan();
+        }
+
+        /*
          * Only ask the Planner for work when no Plan is currently active.
          */
         if (activePlan == null)
@@ -231,6 +260,10 @@ public class MntnAIOBuilderScript extends Script
 
                 return;
             }
+
+            activePlanDeadlineMs =
+                    System.currentTimeMillis() +
+                            randomCommitmentMs();
 
             debugLog(
                     "Selected plan: " +
@@ -384,6 +417,28 @@ public class MntnAIOBuilderScript extends Script
     }
 
     /**
+     * Returns true when the active plan has run long enough that it
+     * should hand control back to the Planner.
+     */
+    public boolean isCommitmentExpired(long nowMs)
+    {
+        return activePlan != null && nowMs >= activePlanDeadlineMs;
+    }
+
+    /**
+     * A random commitment length between 60 and 180 minutes.
+     */
+    private static long randomCommitmentMs()
+    {
+        int minutes = Rs2Random.betweenInclusive(
+                COMMITMENT_MINUTES_MIN,
+                COMMITMENT_MINUTES_MAX
+        );
+
+        return TimeUnit.MINUTES.toMillis(minutes);
+    }
+
+    /**
      * Resets the active strategy and removes the current Plan.
      */
     private void clearActivePlan()
@@ -405,6 +460,7 @@ public class MntnAIOBuilderScript extends Script
             }
 
             activePlan = null;
+            activePlanDeadlineMs = 0;
         }
     }
 
@@ -458,6 +514,20 @@ public class MntnAIOBuilderScript extends Script
     public Plan getActivePlan()
     {
         return activePlan;
+    }
+
+    /**
+     * Useful for an overlay. Milliseconds left before the active plan
+     * replans, or 0 when no plan is active.
+     */
+    public long getActivePlanRemainingMs()
+    {
+        if (activePlan == null)
+        {
+            return 0;
+        }
+
+        return Math.max(0, activePlanDeadlineMs - System.currentTimeMillis());
     }
 
     /**
