@@ -3,6 +3,7 @@ package net.runelite.client.plugins.microbot.shortestpath.pathfinder;
 import net.runelite.api.Quest;
 import net.runelite.api.QuestState;
 import net.runelite.api.Skill;
+import net.runelite.client.plugins.microbot.shortestpath.Transport;
 import net.runelite.client.plugins.microbot.shortestpath.TransportVarPlayer;
 import net.runelite.client.plugins.microbot.shortestpath.TransportVarbit;
 import net.runelite.client.plugins.microbot.util.magic.Runes;
@@ -116,6 +117,26 @@ public class PathfinderConfigTransportRefreshHashTest {
         assertNotEquals("A boosted level for a skill transports require must invalidate the cache",
                 hashWithLevels(sortedSkillOrdinals, before),
                 hashWithLevels(sortedSkillOrdinals, after));
+    }
+
+    @Test
+    public void requiredSpecialLevelChangeInvalidates() {
+        int[] tracked = new int[]{
+                Transport.TOTAL_LEVEL_INDEX,
+                Transport.COMBAT_LEVEL_INDEX,
+                Transport.QUEST_POINTS_INDEX,
+        };
+        int[] before = new int[Transport.REQUIREMENT_LEVEL_COUNT];
+        before[Transport.TOTAL_LEVEL_INDEX] = 2000;
+        before[Transport.COMBAT_LEVEL_INDEX] = 39;
+        before[Transport.QUEST_POINTS_INDEX] = 100;
+
+        for (int ordinal : tracked) {
+            int[] after = before.clone();
+            after[ordinal]++;
+            assertNotEquals("special requirement changes must invalidate ordinal " + ordinal,
+                    hashWithLevels(tracked, before), hashWithLevels(tracked, after));
+        }
     }
 
     /**

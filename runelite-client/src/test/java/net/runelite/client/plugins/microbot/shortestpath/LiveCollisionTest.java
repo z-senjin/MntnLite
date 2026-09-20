@@ -252,6 +252,7 @@ public class LiveCollisionTest {
                 assertEquals(plain.isBlocked(x, y, 0), withEmptyOverlay.isBlocked(x, y, 0));
             }
         }
+        assertEquals(0L, withEmptyOverlay.getLiveEdgeQueries());
     }
 
     @Test
@@ -287,12 +288,19 @@ public class LiveCollisionTest {
         // overlay wins inside the scene
         assertTrue("precondition: static edge open", staticMap.n(tx, ty, 0));
         assertFalse("overlay must block the edge", live.n(tx, ty, 0));
+        assertEquals(1L, live.getLiveEdgeQueries());
 
         // a tile far outside the snapshot falls back to the static map
         int farX = baseX + 5000;
         int farY = baseY + 5000;
         assertEquals(staticMap.n(farX, farY, 0), live.n(farX, farY, 0));
         assertEquals(staticMap.e(farX, farY, 0), live.e(farX, farY, 0));
+        assertEquals("static fallback must not count as live evidence", 1L,
+                live.getLiveEdgeQueries());
+
+        live.beginSearch();
+        assertEquals("a new search resets the live evidence counter", 0L,
+                live.getLiveEdgeQueries());
     }
 
     // ---- Stage 3: route validation (LiveRouteValidator) ----

@@ -119,4 +119,47 @@ public class LiveCollisionConflictsTest {
         assertTrue(LiveCollisionConflicts.tally(null, staticMap).isEmpty());
         assertTrue(LiveCollisionConflicts.tally(allUnknown, null).isEmpty());
     }
+
+    // ---- overlay coverage: is the persistent store actually paying off? -----------------------------
+
+    /**
+     * The Tally buckets compare live against STATIC, so they read the same whether or not the persistent
+     * store works — they measure how wrong the shipped map is, not whether we had already learned it.
+     * Coverage is the number that tells you the store is earning its keep.
+     */
+    @Test
+    public void coverage_countsUnknownEdgesAsNewInformation() {
+        boolean statik = staticMap.get(PROBE_X, PROBE_Y, 0, LiveCollisionSnapshot.FLAG_NORTH);
+        LiveCollisionConflicts.Coverage c = LiveCollisionConflicts.coverage(
+                snapshotWithNorthEdge(!statik), staticMap, null);
+        assertEquals(1, c.newInformation);
+        assertEquals(0, c.alreadyKnown);
+        assertEquals(0, c.alreadyKnownPercent());
+    }
+
+    /** An edge the overlay already had, with the same value — a previous visit spared us the blind one. */
+    @Test
+    public void coverage_countsMatchingOverlayEdgesAsAlreadyKnown() {
+        boolean statik = staticMap.get(PROBE_X, PROBE_Y, 0, LiveCollisionSnapshot.FLAG_NORTH);
+        LiveCollisionSnapshot scene = snapshotWithNorthEdge(!statik);
+
+        LiveCollisionOverlay overlay = new LiveCollisionOverlay();
+        overlay.setEnabled(true);
+        overlay.mergeScene(scene);          // "previous visit"
+        LiveCollisionView prior = overlay.current();
+
+        LiveCollisionConflicts.Coverage c = LiveCollisionConflicts.coverage(scene, staticMap, prior);
+        assertEquals(1, c.alreadyKnown);
+        assertEquals(0, c.newInformation);
+        assertEquals(100, c.alreadyKnownPercent());
+    }
+
+    /** Agreement with static is not the store's business and must not be counted either way. */
+    @Test
+    public void coverage_ignoresEdgesWhereStaticWasRight() {
+        boolean statik = staticMap.get(PROBE_X, PROBE_Y, 0, LiveCollisionSnapshot.FLAG_NORTH);
+        LiveCollisionConflicts.Coverage c = LiveCollisionConflicts.coverage(
+                snapshotWithNorthEdge(statik), staticMap, null);
+        assertEquals(0, c.total());
+    }
 }

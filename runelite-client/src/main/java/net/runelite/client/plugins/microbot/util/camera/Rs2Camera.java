@@ -136,13 +136,9 @@ public class Rs2Camera {
         Microbot.getClient().setCameraSpeed(3f);
 
         if (getAngleTo(targetDegrees) > maxAngle) {
-            Rs2Keyboard.keyHold(KeyEvent.VK_LEFT);
-            Global.sleepUntilTrue(() -> Math.abs(getAngleTo(targetDegrees)) <= maxAngle, 50, 5000);
-            Rs2Keyboard.keyRelease(KeyEvent.VK_LEFT);
+            holdUntil(KeyEvent.VK_LEFT, () -> Math.abs(getAngleTo(targetDegrees)) <= maxAngle);
         } else if (getAngleTo(targetDegrees) < -maxAngle) {
-            Rs2Keyboard.keyHold(KeyEvent.VK_RIGHT);
-            Global.sleepUntilTrue(() -> Math.abs(getAngleTo(targetDegrees)) <= maxAngle, 50, 5000);
-            Rs2Keyboard.keyRelease(KeyEvent.VK_RIGHT);
+            holdUntil(KeyEvent.VK_RIGHT, () -> Math.abs(getAngleTo(targetDegrees)) <= maxAngle);
         }
         Microbot.getClient().setCameraSpeed((float) defaultCameraSpeed);
     }
@@ -151,13 +147,23 @@ public class Rs2Camera {
         float currentPitchPercentage = cameraPitchPercentage();
 
         if (currentPitchPercentage < percentage) {
-            Rs2Keyboard.keyHold(KeyEvent.VK_UP);
-            Global.sleepUntilTrue(() -> cameraPitchPercentage() >= percentage, 50, 5000);
-            Rs2Keyboard.keyRelease(KeyEvent.VK_UP);
+            holdUntil(KeyEvent.VK_UP, () -> cameraPitchPercentage() >= percentage);
         } else {
-            Rs2Keyboard.keyHold(KeyEvent.VK_DOWN);
-            Global.sleepUntilTrue(() -> cameraPitchPercentage() <= percentage, 50, 5000);
-            Rs2Keyboard.keyRelease(KeyEvent.VK_DOWN);
+            holdUntil(KeyEvent.VK_DOWN, () -> cameraPitchPercentage() <= percentage);
+        }
+    }
+
+    /**
+     * Holds an arrow key until the camera arrives, then always releases it. The {@code finally}
+     * matters: if the condition throws in between, the key stays down at the client with nothing
+     * to clear it, since releaseHeldKeys only runs on a takeover.
+     */
+    private static void holdUntil(int keyCode, java.util.function.BooleanSupplier reached) {
+        Rs2Keyboard.keyHold(keyCode);
+        try {
+            Global.sleepUntilTrue(reached, 50, 5000);
+        } finally {
+            Rs2Keyboard.keyRelease(keyCode);
         }
     }
 

@@ -295,3 +295,54 @@ Sticky interim targets should also clear when route-index progress goes stale. I
 When a route-following minimap click is outside the minimap clip, fallback clicks must stay on the raw path. A generic "reachable tile closer to target" fallback can select a tile far away from the route in open areas, especially near the final destination.
 
 For adjacent same-plane shortcuts, do not treat any movement away from the origin as success. Some shortcuts, such as stepping stones, can fail and place the player on a fallback tile; once the player is settled away from the expected destination, stop the landing wait and replan from the actual tile.
+
+## 14. Match transport execution to its interaction mechanism and interface family
+
+Transport rows do not all represent scene-object clicks, and related networks can use different widget groups. Before admitting new transport data, verify that the walker has an execution branch for the row's actual interaction and selects the interface from the origin object ID. Fail closed for unknown object IDs and tightly identify object-less item actions by their exact origin, destination, action, target, and item requirement.
+
+**Why this matters:** Barrows mound entries use a spade inventory action and therefore have object ID `0`; the generic object executor skips them. River Lum and River Dougne canoe stations open different map interfaces, so waiting unconditionally for the Lum map makes every Dougne route time out.
+
+**Pattern to follow:**
+
+```java
+if (isExactItemActionTransport(transport)) {
+    interactRequiredItem();
+    awaitDestination();
+    return finishHandledTransport(transport);
+}
+
+int mapComponent = mapComponentForOriginObject(transport.getObjectId());
+if (mapComponent < 0) {
+    return false;
+}
+```
+
+**Where this applies:** `Rs2Walker.handleTransports`, specialized transport handlers, and shortest-path transport resource additions.
+
+**Defensive check:** Add pure unit tests for exact item-action recognition and for every supported origin-object-to-interface mapping, plus a loader test proving required item and unlock fields survive TSV parsing.
+
+## 15. Apply the same click guards to every route entry point
+
+Direct and fallback scene clicks must validate the projected click area against the viewport on the client thread. Reuse the validated canvas point when dispatching the click. An on-screen tile check alone can still produce a point outside the usable viewport.
+
+Checkpoint handoffs in the main click branch must use the same close/expiry policy as the start-of-pass check. In particular, entering the preclick distance while moving does not bypass the retarget cooldown.
+
+## 16. Scope global interaction recovery across nested door dispatch
+
+When an object or NPC interaction reacts to the global can't-reach flag by starting a walker approach, keep ownership of that recovery on the current thread until the approach returns. Door interactions issued by that nested walk must bypass the outer can't-reach trigger while leaving the global flag and retry counter intact for the original interaction.
+
+**Why this matters:** The legacy walker lock is reentrant. Without scoped ownership, opening a closed door during an object or NPC recovery starts another recovery walk from inside the first one, replaces the route target, and spends the shared retry budget instead of clicking the door.
+
+**Pattern to follow:**
+
+```java
+if (CantReachTargetRecovery.shouldStart(detectionEnabled, cantReachTarget)) {
+    if (CantReachTargetRecovery.walkTo(originalTarget, 2)) {
+        clearCantReachState();
+    }
+}
+```
+
+**Where this applies:** `Rs2GameObject.clickObject`, `Rs2Npc.interact`, `Rs2NpcModel.interact`, legacy walker door dispatch, and any future interaction helper that starts `Rs2Walker.walkTo` in response to the global can't-reach flag.
+
+**Defensive check:** During a recovery route through a closed door, assert that the door click occurs once, the original object or NPC target is passed unchanged to the walker, nested recovery is suppressed, and retry exhaustion still returns failure.

@@ -503,6 +503,119 @@ public abstract class Rs2Tile implements Tile {
         return runClientReadBoolean(() -> isTileReachableInternal(targetPoint));
     }
 
+    /**
+     * Whether a single step from {@code from} to {@code to} is currently permitted by the CLIENT's
+     * collision data — the live flags the server drives, so a door that has just opened clears its
+     * blocking flag here on the same tick.
+     * <p>
+     * This is the direct answer to "can I walk through that door now", and it is deliberately not
+     * {@link #isTileReachable}: that runs a BFS, so a shut door with a long way round it still reports
+     * the far tile as reachable, and it costs a whole scene search. This reads one flag.
+     * <p>
+     * Answers {@code false} for anything it cannot decide — off-scene, an instance (raw coordinates
+     * make the scene conversion unreliable), or a plane other than the one loaded. Callers use it to
+     * release early, so an unknown must never read as "open".
+     *
+     * @return true only when the step is known to be unobstructed
+     */
+    public static boolean isEdgePassable(WorldPoint from, WorldPoint to) {
+        return runClientReadBoolean(() -> isEdgePassableInternal(from, to));
+    }
+
+    /**
+     * Why the last {@link #isEdgePassable} call answered as it did. A bare {@code false} is ambiguous
+     * between "the door is shut" and "this could not be decided", and callers that release a wait on
+     * {@code true} behave very differently depending on which it was.
+     */
+    private static volatile String lastEdgeDecision = "-";
+
+    /** @see #lastEdgeDecision */
+    public static String lastEdgeDecision() {
+        return lastEdgeDecision;
+    }
+
+    private static boolean isEdgePassableInternal(WorldPoint from, WorldPoint to) {
+        if (from == null || to == null || from.getPlane() != to.getPlane()) {
+            lastEdgeDecision = "bad-args";
+            return false;
+        }
+
+        final int dx = to.getX() - from.getX();
+        final int dy = to.getY() - from.getY();
+        if (dx == 0 && dy == 0) {
+            lastEdgeDecision = "same-tile";
+            return true;
+        }
+        if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+            lastEdgeDecision = "not-adjacent";
+            return false;
+        }
+
+        final WorldView wv = Microbot.getClient().getTopLevelWorldView();
+        if (wv == null) {
+            lastEdgeDecision = "no-worldview";
+            return false;
+        }
+        if (wv.getPlane() != from.getPlane()) {
+            lastEdgeDecision = "plane-not-loaded";
+            return false;
+        }
+        // Instance scenes repeat template chunks, so world -> scene by base offset is wrong there.
+        if (wv.getScene() != null && wv.getScene().isInstance()) {
+            lastEdgeDecision = "instance";
+            return false;
+        }
+
+        final int[][] flags = getFlagsInternal();
+        if (flags == null) {
+            lastEdgeDecision = "no-flags";
+            return false;
+        }
+
+        final int fx = from.getX() - Microbot.getClient().getBaseX();
+        final int fy = from.getY() - Microbot.getClient().getBaseY();
+        final int tx = fx + dx;
+        final int ty = fy + dy;
+        if (!isWithinBounds(fx, fy) || !isWithinBounds(tx, ty)) {
+            lastEdgeDecision = "off-scene";
+            return false;
+        }
+
+        boolean allowed = isStepAllowed(flags, fx, fy, dx, dy);
+        lastEdgeDecision = allowed ? "open" : "blocked";
+        return allowed;
+    }
+
+    /**
+     * The collision rule alone, with no client reads: is a single {@code (dx, dy)} step out of
+     * {@code (fx, fy)} unobstructed by these flags? Split out so the cardinal/diagonal rules are
+     * covered by a decision table rather than only by a live client.
+     */
+    static boolean isStepAllowed(int[][] flags, int fx, int fy, int dx, int dy) {
+        if (dx == 0 && dy == 0) return true;
+        final int tx = fx + dx;
+        final int ty = fy + dy;
+
+        if ((flags[tx][ty] & CollisionDataFlag.BLOCK_MOVEMENT_FULL) != 0) return false;
+
+        if (dx == 0 || dy == 0) {
+            return (flags[fx][fy] & cardinalBlockFlag(dx, dy)) == 0;
+        }
+        // Diagonal: both cardinal components must be clear, and so must the two tiles cut through —
+        // the same rule the reachability search uses for corners.
+        return (flags[fx][fy] & cardinalBlockFlag(dx, 0)) == 0
+                && (flags[fx][fy] & cardinalBlockFlag(0, dy)) == 0
+                && (flags[tx][fy] & (CollisionDataFlag.BLOCK_MOVEMENT_FULL | cardinalBlockFlag(0, dy))) == 0
+                && (flags[fx][ty] & (CollisionDataFlag.BLOCK_MOVEMENT_FULL | cardinalBlockFlag(dx, 0))) == 0;
+    }
+
+    private static int cardinalBlockFlag(int dx, int dy) {
+        if (dx > 0) return CollisionDataFlag.BLOCK_MOVEMENT_EAST;
+        if (dx < 0) return CollisionDataFlag.BLOCK_MOVEMENT_WEST;
+        if (dy > 0) return CollisionDataFlag.BLOCK_MOVEMENT_NORTH;
+        return CollisionDataFlag.BLOCK_MOVEMENT_SOUTH;
+    }
+
     private static boolean isTileReachableInternal(WorldPoint targetPoint) {
         if (targetPoint == null) return false;
 

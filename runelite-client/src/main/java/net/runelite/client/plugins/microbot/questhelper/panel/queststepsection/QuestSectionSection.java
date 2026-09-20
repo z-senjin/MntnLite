@@ -52,7 +52,7 @@ public class QuestSectionSection extends AbstractQuestSection implements MouseLi
 {
 	// Idea is to contain multiple sections or queststeppanel
 	private static final int TITLE_PADDING = 5;
-	private static final ImageIcon DRAG_ICON = new ImageIcon(ImageUtil.loadImageResource(QuestHelperPlugin.class, "/hamburger.png"));
+	private static final ImageIcon DRAG_ICON = new ImageIcon(ImageUtil.loadImageResource(QuestHelperPlugin.class, "hamburger.png"));
 
 	private final QuestOverviewPanel questOverviewPanel;
 	private final QuestHelperPlugin questHelperPlugin;

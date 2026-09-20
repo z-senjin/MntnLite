@@ -34,12 +34,14 @@ import net.runelite.api.Client;
 import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.VarbitChanged;
 import net.runelite.api.gameval.VarPlayerID;
+import net.runelite.api.gameval.VarbitID;
 import net.runelite.client.Notifier;
 import net.runelite.client.config.Notification;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.ui.overlay.OverlayManager;
 import net.runelite.client.ui.overlay.infobox.InfoBoxManager;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import org.junit.Before;
 import org.junit.Test;
@@ -135,6 +137,33 @@ public class CannonPluginTest
 
 		assertEquals(0, plugin.getCballsLeft());
 		verify(infoBoxManager).addInfoBox(any(CannonCounter.class));
+	}
+
+	@Test
+	public void testDecayedCannonRemovesInfoBoxUntilRepaired()
+	{
+		when(config.showInfobox()).thenReturn(true);
+
+		VarbitChanged placed = new VarbitChanged();
+		placed.setVarpId(VarPlayerID.DROPCANNON);
+		placed.setValue(4);
+		plugin.onVarbitChanged(placed);
+
+		VarbitChanged decayed = new VarbitChanged();
+		decayed.setVarbitId(VarbitID.MCANNON_DECAYED);
+		decayed.setValue(1);
+		plugin.onVarbitChanged(decayed);
+		assertTrue(plugin.isCannonDecayed());
+		assertTrue(plugin.isCannonPlaced());
+		verify(infoBoxManager).removeInfoBox(any(CannonCounter.class));
+
+		plugin.onVarbitChanged(placed);
+		verify(infoBoxManager, times(1)).addInfoBox(any(CannonCounter.class));
+
+		decayed.setValue(0);
+		plugin.onVarbitChanged(decayed);
+		assertFalse(plugin.isCannonDecayed());
+		verify(infoBoxManager, times(2)).addInfoBox(any(CannonCounter.class));
 	}
 
 	@Test

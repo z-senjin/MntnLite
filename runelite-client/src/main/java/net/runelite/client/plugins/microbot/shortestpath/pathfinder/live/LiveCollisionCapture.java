@@ -46,12 +46,15 @@ public final class LiveCollisionCapture {
      * disagree with what a fresh capture would now produce, so {@link LiveCollisionPersistence} rejects the
      * stale data on load instead of trusting it. This is what removes the manual "Reset learned collision"
      * step: e.g. adding the rockfall exemption changed what a rockfall tile records, so that data must not
-     * survive the change. History: v1 = original translation; v2 = rockfall (26679/26680) exemption.
+     * survive the change. History: v1 = original translation; v2 = rockfall (26679/26680) exemption;
+     * v3 = wall-door FOOTPRINT deferral — v2 stores could hold known+blocked diagonal edges around a
+     * closed door (the oriented mask missed them), and two such doors sealed the Falador farm interior,
+     * so every v2 store is potentially door-poisoned and must be discarded.
      * (Door edges changing from unknown to known-passable did NOT need a bump: v2 stores hold no door
      * edges at all — they were always unknown — so old data cannot disagree, it is merely less informed
      * and gets filled in by the next capture.)
      */
-    public static final int CAPTURE_VERSION = 2;
+    public static final int CAPTURE_VERSION = 3;
 
     /**
      * Actions that mark a wall object as a door the walker opens at runtime. Mirrors the door-action set
@@ -164,6 +167,14 @@ public final class LiveCollisionCapture {
                     if (wall != null && wallDoorIds.computeIfAbsent(
                             wall.getId(), LiveCollisionCapture::isOpenableDoor)) {
                         doorEdges.markWall(z, sx, sy, wall.getOrientationA(), wall.getOrientationB());
+                        // A closed door blocks more than its oriented edge in the live flags: the
+                        // wall also blocks the DIAGONAL edges cutting its corners, which the
+                        // oriented mask missed — those were captured known+blocked and PERSISTED,
+                        // and two such doors sealed the Falador farm interior (2026-08-14 17:43),
+                        // turning every plan to it into a SEARCH_EXHAUSTED partial-segment crawl.
+                        // Defer every edge touching the door's tile to the static map, exactly the
+                        // treatment a game-object door footprint already gets.
+                        doorEdges.markGameObject(z, sx, sy, sx, sy);
                     }
                     final GameObject[] gameObjects = tile.getGameObjects();
                     if (gameObjects == null) {

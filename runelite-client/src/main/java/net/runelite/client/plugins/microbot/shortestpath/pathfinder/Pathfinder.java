@@ -25,8 +25,7 @@ public class Pathfinder implements Runnable {
     }
 
     private static final Comparator<Node> NODE_ORDER = Comparator
-            .comparingInt(Node::fCost)
-            .thenComparingInt(n -> n.cost)
+            .comparingInt((Node n) -> n.cost)
             .thenComparingInt(n -> n.tiebreaker);
 
     /**
@@ -39,6 +38,11 @@ public class Pathfinder implements Runnable {
     @Getter
     private volatile boolean done = false;
     private volatile boolean cancelled = false;
+    @Getter
+    private volatile PathTerminationReason terminationReason;
+    /** Search cost of the returned raw path, or {@code -1} when no path node was selected. */
+    @Getter
+    private volatile long selectedPathCost = -1L;
 
     private final int start;
     private final Set<Integer> targets;
@@ -50,39 +54,36 @@ public class Pathfinder implements Runnable {
     private CollisionMap map;
     private final boolean targetInWilderness;
 
-    // Walking subgraph uses A* (boundary is a PQ keyed on f = g + Chebyshev heuristic),
-    // so among walking nodes the search picks the most promising direction first.
-    // Transports stay in a separate PQ keyed on g-cost only — they're picked when their
-    // travel cost is cheaper than any frontier walking node's g-cost, preserving the
-    // existing "try cheap transports before walking farther" selection behavior.
+    // Both walking and transport frontiers are ordered by travelled cost. A geometric
+    // heuristic is not admissible in a graph containing canoes, teleports and other
+    // long-distance edges: it can permanently visit a farther transport origin before
+    // a cheaper origin whose straight-line direction initially points away from the
+    // target. Cost ordering matches the reviewed upstream search semantics and keeps
+    // exact selected transport identity stable across the engine boundary.
     //
-    // Comparator chain is (fCost, gCost, tiebreaker):
-    //   1. fCost — standard A* primary ordering.
-    //   2. gCost — required for correctness under early-discovery. addNeighbors() marks
-    //      a neighbor visited at insert time (not at pop), so a node only ever enters
-    //      the PQ once. If two equal-fCost nodes have different gCost, popping the
-    //      higher-gCost one first would fix their shared neighbor's gCost to a
-    //      suboptimal value (because visited is already set when the lower-g node later
-    //      tries to discover the same neighbor). Preferring lower gCost on ties keeps
-    //      early-discovery optimal.
-    //   3. tiebreaker — per-node random. Among nodes with identical (f, g) — common in
-    //      open-grid regions where many tiles share the same distance-from-start and
-    //      distance-to-goal — this rotates the exploration order each run so paths
+    // Comparator chain is (gCost, tiebreaker):
+    //   1. gCost — required for correctness because addNeighbors() marks a neighbor
+    //      visited at insert time and therefore never relaxes it later.
+    //   2. tiebreaker — per-node random. Among nodes with identical cost — common in
+    //      open-grid regions — this rotates the exploration order each run so paths
     //      diverge tile-by-tile between successive searches with the same endpoints.
     //      Kills the deterministic "identical route every trip" fingerprint.
     private final Queue<Node> boundary = new PriorityQueue<>(4096, NODE_ORDER);
-    private final Queue<Node> pending = new PriorityQueue<>(256);
+    private final Queue<Node> pending = new PriorityQueue<>(256, NODE_ORDER);
     private final Queue<Node> boundaryBackward = new PriorityQueue<>(4096, NODE_ORDER);
-    private final Queue<Node> pendingBackward = new PriorityQueue<>(256);
+    private final Queue<Node> pendingBackward = new PriorityQueue<>(256, NODE_ORDER);
     private VisitedTiles visited;
 
     private volatile List<WorldPoint> path = Collections.emptyList();
     private volatile List<WorldPoint> smoothedPath = Collections.emptyList();
-    private volatile boolean pathNeedsUpdate = false;
+    /** Node identity represented by {@link #path}; avoids a lost-update race with live path readers. */
+    private volatile Node materializedPathLastNode;
     private volatile boolean smoothed = false;
     private volatile Node bestLastNode;
     /** When set, {@link #getPath()} returns this list (bidirectional join or early exact hit). */
     private volatile List<WorldPoint> joinedPath;
+    /** Edge-preserving counterpart to {@link #joinedPath}. */
+    private volatile List<PathEdge> joinedPathEdges;
     /**
      * Teleportation transports are updated when this changes.
      * Can be either:
@@ -120,6 +121,71 @@ public class Pathfinder implements Runnable {
         this(config, start, Set.of(target));
     }
 
+    /**
+     * Materialize a completed planner-independent route behind the legacy concrete pathfinder surface.
+     *
+     * <p>This is a transitional adapter for the shortest-path overlays and out-of-tree callers that still
+     * consume {@code ShortestPathPlugin.pathfinder}. New walker code must consume the immutable route
+     * contract instead. Remove this factory with the local planner after the staged rollout sunset.</p>
+     */
+    public static Pathfinder completedRoute(
+            PathfinderConfig config,
+            WorldPoint start,
+            Set<WorldPoint> targets,
+            List<WorldPoint> path,
+            List<Transport> transportsByStep,
+            PathTerminationReason terminationReason,
+            long selectedPathCost,
+            long searchNanos,
+            long nodesChecked,
+            long transportsChecked,
+            long liveCollisionEdgesChecked) {
+        Objects.requireNonNull(config, "config");
+        Objects.requireNonNull(start, "start");
+        Objects.requireNonNull(targets, "targets");
+        Objects.requireNonNull(path, "path");
+        Objects.requireNonNull(transportsByStep, "transportsByStep");
+        Objects.requireNonNull(terminationReason, "terminationReason");
+        if (!path.isEmpty() && !start.equals(path.get(0))) {
+            throw new IllegalArgumentException("materialized route must start at the requested start");
+        }
+        if (terminationReason == PathTerminationReason.TARGET_REACHED
+                && (path.isEmpty() || !targets.contains(path.get(path.size() - 1)))) {
+            throw new IllegalArgumentException("reached route must end at a requested target");
+        }
+        if (selectedPathCost < -1L || searchNanos < -1L || nodesChecked < -1L
+                || transportsChecked < -1L || liveCollisionEdgesChecked < -1L) {
+            throw new IllegalArgumentException("materialized route metrics must be non-negative or unavailable");
+        }
+
+        Pathfinder completed = new Pathfinder(config, start, targets);
+        List<WorldPoint> immutablePath = Collections.unmodifiableList(new ArrayList<>(path));
+        completed.map = config.getMap();
+        completed.joinedPath = immutablePath;
+        completed.joinedPathEdges = PathEdge.fromMaterializedRoute(immutablePath, transportsByStep);
+        completed.terminationReason = terminationReason;
+        completed.selectedPathCost = selectedPathCost;
+        completed.cancelled = false;
+        completed.done = true;
+        completed.stats.complete(
+                metricOrZero(searchNanos),
+                metricAsInt(nodesChecked),
+                metricAsInt(transportsChecked),
+                metricOrZero(liveCollisionEdgesChecked));
+        return completed;
+    }
+
+    private static long metricOrZero(long metric) {
+        return metric < 0L ? 0L : metric;
+    }
+
+    private static int metricAsInt(long metric) {
+        if (metric < 0L) {
+            return 0;
+        }
+        return (int) Math.min(Integer.MAX_VALUE, metric);
+    }
+
     public WorldPoint getStart() {
         return WorldPointUtil.unpackWorldPoint(start);
     }
@@ -151,13 +217,30 @@ public class Pathfinder implements Runnable {
             return path;
         }
 
-        if (pathNeedsUpdate) {
-            path = lastNode.getPath();
-            pathNeedsUpdate = false;
+        List<WorldPoint> currentPath = path;
+        if (materializedPathLastNode != lastNode) {
+            // The walker may read a partial path while this search is still running. Identity-based
+            // invalidation is required here: a reader clearing a shared dirty flag can otherwise erase
+            // a newer pathfinder-thread update, leaving getPath() and getPathEdges() on different nodes.
+            currentPath = Collections.unmodifiableList(lastNode.getPath());
+            path = currentPath;
+            materializedPathLastNode = lastNode;
             smoothed = false;
         }
 
-        return path;
+        return currentPath;
+    }
+
+    /**
+     * Materialized edges for the current best route. Transport edges retain the exact catalog entry
+     * selected by the search; callers outside shortest-path should map them to owned immutable values.
+     */
+    public List<PathEdge> getPathEdges() {
+        List<PathEdge> joined = joinedPathEdges;
+        if (joined != null) {
+            return joined;
+        }
+        return PathEdge.fromForwardChain(bestLastNode);
     }
 
     /**
@@ -203,7 +286,6 @@ public class Pathfinder implements Runnable {
 
     private void addNeighbors(Node node) {
         List<Node> nodes = map.getNeighbors(node, visited, config, targets);
-        boolean afterTransport = node instanceof TransportNode;
         for (Node neighbor : nodes) {
             if (config.avoidWilderness(node.packedPosition, neighbor.packedPosition, targetInWilderness)) {
                 continue;
@@ -214,187 +296,10 @@ public class Pathfinder implements Runnable {
                 pending.add(neighbor);
                 ++stats.transportsChecked;
             } else {
-                neighbor.heuristic = afterTransport ? 0 : heuristicToNearestTarget(neighbor.packedPosition);
                 boundary.add(neighbor);
                 ++stats.nodesChecked;
             }
         }
-    }
-
-    // Admissible A* heuristic: Chebyshev 2D to the nearest target, with a modulo-6400
-    // fallback for the surface↔underground Y-offset convention (OSRS shifts underground
-    // coords by +6400 on the Y axis, so Varrock sewers live at y≈9800 while Varrock sits
-    // at y≈3400). Plain Chebyshev would claim ~6200 tiles to any underground point, which
-    // misdirects A* into expanding the surface southward instead of routing through a
-    // nearby ladder/stairs transport. Taking min(direct, mod-6400) stays admissible
-    // because reaching a y-mirrored underground point still requires ≥ one transport
-    // (cost ≥ 0) on top of the mod-6400 walking distance. The band-aware distance lives in
-    // WorldPointUtil.undergroundAwareDistance so the walker uses the same metric.
-
-    private int heuristicToNearestTarget(int packedPos) {
-        return applyLandmarks(packedPos, baseHeuristicToNearestTarget(packedPos),
-                fwdLandmark, fwdLandmarkResidual);
-    }
-
-    private int baseHeuristicToNearestTarget(int packedPos) {
-        int posX = WorldPointUtil.unpackWorldX(packedPos);
-        int posY = WorldPointUtil.unpackWorldY(packedPos);
-        int best = Integer.MAX_VALUE;
-        for (int target : targetsPacked) {
-            int tx = WorldPointUtil.unpackWorldX(target);
-            int ty = WorldPointUtil.unpackWorldY(target);
-            int h = WorldPointUtil.undergroundAwareDistance(posX, posY, tx, ty);
-            if (h < best) {
-                best = h;
-            }
-        }
-        return best;
-    }
-
-    private int heuristicFromStart(int packedPos) {
-        return applyLandmarks(packedPos, baseHeuristicFromStart(packedPos),
-                backLandmark, backLandmarkResidual);
-    }
-
-    private int baseHeuristicFromStart(int packedPos) {
-        int posX = WorldPointUtil.unpackWorldX(packedPos);
-        int posY = WorldPointUtil.unpackWorldY(packedPos);
-        int sx = WorldPointUtil.unpackWorldX(start);
-        int sy = WorldPointUtil.unpackWorldY(start);
-        return WorldPointUtil.undergroundAwareDistance(posX, posY, sx, sy);
-    }
-
-    // --- Network-transport-aware heuristic ---------------------------------------------------
-    //
-    // Network transports (fairy rings, spirit trees, gnome gliders, quetzals) are fully-connected
-    // hubs: reaching ANY origin lets you hop to ANY destination of that network for ~free. Plain
-    // Chebyshev is blind to this — a node next to the Ardougne fairy ring reads "~1350 tiles from
-    // the Farming Guild" by straight line, so A* buries the (optimal) cloak->fairy->CIR chain under
-    // a single direct teleport that the heuristic makes look closer. We fold the hubs into the
-    // heuristic as landmarks: for each enabled network whose destinations reach near the goal, every
-    // network origin is a landmark with residual = min(dest -> goal). Then
-    //     h(node) = min(directWalk, dist(node, nearestOrigin) + residual).
-    // Each landmark term is a true lower bound (walking to the origin, a free-ish hop, then the
-    // residual walk to goal), so taking min with the admissible Chebyshev keeps the result both
-    // admissible AND consistent (the landmark set is fixed for the whole search). A* optimality is
-    // therefore preserved, while the search is now pulled toward useful hubs instead of ignoring
-    // them. The backward (bidirectional) arrays are symmetric: landmarks are destinations, residual
-    // is min(origin -> start). Unlike the reverted chain-bridge injection this adds no graph edges
-    // (so it can never teleport the player out of a building), and unlike the reverted post-transport
-    // cascade it never zeroes the heuristic (so it can never collapse into a whole-map Dijkstra).
-    private static final EnumSet<TransportType> NETWORK_HEURISTIC_TYPES = EnumSet.of(
-            TransportType.FAIRY_RING, TransportType.SPIRIT_TREE,
-            TransportType.GNOME_GLIDER, TransportType.QUETZAL);
-
-    private int[] fwdLandmark = null;          // packed network origins (reach a hub -> hop toward target)
-    private int[] fwdLandmarkResidual = null;  // parallel: that network's min(dest -> nearest target) Chebyshev
-    private int[] backLandmark = null;         // packed network destinations (symmetric, for backward search)
-    private int[] backLandmarkResidual = null; // parallel: that network's min(origin -> start) Chebyshev
-
-    private int applyLandmarks(int packedPos, int base, int[] landmarks, int[] residuals) {
-        if (landmarks == null || landmarks.length == 0) {
-            return base;
-        }
-        int px = WorldPointUtil.unpackWorldX(packedPos);
-        int py = WorldPointUtil.unpackWorldY(packedPos);
-        int best = base;
-        for (int i = 0; i < landmarks.length; i++) {
-            int lx = WorldPointUtil.unpackWorldX(landmarks[i]);
-            int ly = WorldPointUtil.unpackWorldY(landmarks[i]);
-            int viaHub = Math.max(Math.abs(px - lx), Math.abs(py - ly)) + residuals[i];
-            if (viaHub < best) {
-                best = viaHub;
-            }
-        }
-        return best;
-    }
-
-    /**
-     * Builds {@link #fwdLandmark}/{@link #backLandmark} once per pathfind from the enabled network
-     * transports. A network only contributes landmarks if it gets you strictly closer to the goal
-     * (resp. start) than you already are — otherwise it is pure heuristic overhead with no benefit.
-     */
-    private void computeNetworkLandmarks() {
-        Map<WorldPoint, Set<Transport>> all = config.getTransports();
-        if (all == null || all.isEmpty()) {
-            return;
-        }
-
-        EnumMap<TransportType, Set<Integer>> originsByType = new EnumMap<>(TransportType.class);
-        EnumMap<TransportType, Set<Integer>> destsByType = new EnumMap<>(TransportType.class);
-        for (Set<Transport> set : all.values()) {
-            if (set == null) {
-                continue;
-            }
-            for (Transport t : set) {
-                TransportType type = t.getType();
-                if (type == null || !NETWORK_HEURISTIC_TYPES.contains(type)) {
-                    continue;
-                }
-                WorldPoint o = t.getOrigin();
-                WorldPoint d = t.getDestination();
-                if (o == null || d == null) {
-                    continue;
-                }
-                originsByType.computeIfAbsent(type, k -> new HashSet<>()).add(WorldPointUtil.packWorldPoint(o));
-                destsByType.computeIfAbsent(type, k -> new HashSet<>()).add(WorldPointUtil.packWorldPoint(d));
-            }
-        }
-        if (originsByType.isEmpty()) {
-            return;
-        }
-
-        int startToGoal = minChebyshevStartToAnyTarget();
-        List<int[]> fwd = new ArrayList<>();   // {originPacked, residual}
-        List<int[]> back = new ArrayList<>();  // {destPacked, residual}
-        for (Map.Entry<TransportType, Set<Integer>> e : originsByType.entrySet()) {
-            Set<Integer> origins = e.getValue();
-            Set<Integer> dests = destsByType.getOrDefault(e.getKey(), Collections.emptySet());
-            if (origins.isEmpty() || dests.isEmpty()) {
-                continue;
-            }
-
-            int residualFwd = Integer.MAX_VALUE;
-            for (int d : dests) {
-                residualFwd = Math.min(residualFwd, baseHeuristicToNearestTarget(d));
-            }
-            if (residualFwd < startToGoal) {
-                for (int o : origins) {
-                    fwd.add(new int[]{o, residualFwd});
-                }
-            }
-
-            int residualBack = Integer.MAX_VALUE;
-            for (int o : origins) {
-                residualBack = Math.min(residualBack, baseHeuristicFromStart(o));
-            }
-            if (residualBack < startToGoal) {
-                for (int d : dests) {
-                    back.add(new int[]{d, residualBack});
-                }
-            }
-        }
-
-        fwdLandmark = packLandmarkPositions(fwd);
-        fwdLandmarkResidual = packLandmarkResiduals(fwd);
-        backLandmark = packLandmarkPositions(back);
-        backLandmarkResidual = packLandmarkResiduals(back);
-    }
-
-    private static int[] packLandmarkPositions(List<int[]> landmarks) {
-        int[] out = new int[landmarks.size()];
-        for (int i = 0; i < out.length; i++) {
-            out[i] = landmarks.get(i)[0];
-        }
-        return out;
-    }
-
-    private static int[] packLandmarkResiduals(List<int[]> landmarks) {
-        int[] out = new int[landmarks.size()];
-        for (int i = 0; i < out.length; i++) {
-            out[i] = landmarks.get(i)[1];
-        }
-        return out;
     }
 
     private int minChebyshevStartToAnyTarget() {
@@ -408,6 +313,197 @@ public class Pathfinder implements Runnable {
             }
         }
         return best;
+    }
+
+    // ---- sealed-target fast path ---------------------------------------------------------------
+
+    /** Reverse-flood budget: clears any fenced yard or walled room in well under this, ~1-3ms. */
+    private static final int SEALED_PROBE_NODE_BUDGET = 1024;
+    private static final int SEALED_SUBSTITUTE_TARGET_CAP = 8;
+    /** The rim substitutes can themselves prove unreachable; they get a short leash, not 18s. */
+    private static final long SEALED_SUBSTITUTE_CUTOFF_MS = 2_000L;
+    /**
+     * Node budget for the substitute pass. The time leash alone still allowed a 2-million-node flood
+     * (a sealed moat tile whose rim is itself an unreachable pocket): two seconds at search speed IS
+     * the flood. Truncating a genuinely long approach to a sealed destination is fine — the walker
+     * walks the partial path, replans closer, and the next probe answers from nearer.
+     */
+    private static final long SEALED_SUBSTITUTE_NODE_BUDGET = 50_000L;
+
+    /** The targets the search LOOPS actually chase; equals {@link #targetsPacked} except in sealed mode. */
+    private volatile int[] searchTargetsPacked;
+    private volatile boolean sealedTargetMode;
+    private long cutoffOverrideMillis = -1L;
+    /** See {@link #getReachedSealedSubstitute()}. Volatile: written by the search thread, read by the walker. */
+    private volatile int reachedSealedSubstitutePacked = -1;
+
+    private long effectiveCutoffMillis() {
+        long configured = config.getCalculationCutoffMillis();
+        return cutoffOverrideMillis > 0 ? Math.min(cutoffOverrideMillis, configured) : configured;
+    }
+
+    /**
+     * The rim substitute the sealed-target search actually REACHED, or {@code null}. Non-null only
+     * when the destination was proven sealed AND the substitute pass ended ON a walkable rim tile —
+     * i.e. this run's path is a complete route to the closest standable spot beside the sealed
+     * pocket. The walker uses it to retarget the walk to the rim ONCE: without that, the
+     * SEARCH_EXHAUSTED termination made every pass treat the plan as partial and replan it, and
+     * each replan re-ran this substitute search — the 17:54 walk burned 50k nodes per replan
+     * crawling ~300 tiles toward a destination one tile inside a fence.
+     */
+    public WorldPoint getReachedSealedSubstitute() {
+        int packed = reachedSealedSubstitutePacked;
+        return packed == -1 ? null : WorldPointUtil.unpackWorldPoint(packed);
+    }
+
+    /**
+     * The nearest normalized walkable rim tile of a proven-sealed destination, even when the
+     * bounded substitute search did not reach it. The walker can plan this ordinary tile with its
+     * normal full budget instead of chaining partial sealed-target searches.
+     */
+    public WorldPoint getNearestSealedRimSubstitute() {
+        int[] chased = searchTargetsPacked;
+        if (!sealedTargetMode || chased == null || chased.length == 0) {
+            return null;
+        }
+        return WorldPointUtil.unpackWorldPoint(chased[0]);
+    }
+
+    /**
+     * Bounded reverse flood from the single target, deciding whether its graph component is provably
+     * SEALED — unreachable by walking, by any transport whose origin exists, and not landed in by any
+     * anywhere-teleport.
+     * <p>
+     * Exists because an unreachable destination made the forward search flood the ENTIRE world
+     * component before giving up: measured 37 times in one evening at ~1.1M nodes and 1.2-3.8s of CPU
+     * each, mostly for destinations TWO TILES away (a sealed map-data tile, or an interaction target
+     * the caller asked for by coordinate). The reverse flood explores only the target's own component,
+     * which for every observed case is tiny, and answers in ~1ms.
+     * <p>
+     * Correctness leans on three things. The flood uses {@code getReverseNeighbors} with the
+     * incoming-transports index, so a room entered by a staircase or door transport GROWS past its
+     * walls and reads reachable — an upstairs destination is never falsely sealed. Anywhere-teleports
+     * (null origin, excluded from that index) are checked per component tile instead. And the budget
+     * makes big components INCONCLUSIVE rather than sealed: only a frontier that genuinely drains
+     * under budget without touching {@code start} proves anything.
+     *
+     * @return {@code null} when reachable or inconclusive (run the normal search); otherwise the
+     * component's walkable rim — same-plane cardinal neighbours just outside it with at least one
+     * open edge — nearest-first to the goal, possibly empty (a void tile with a void rim).
+     */
+    private int[] sealedTargetSubstitutes(int goalPacked) {
+        final Map<Integer, Set<Transport>> incoming = new HashMap<>(512);
+        final Set<Integer> anywhereTeleportDests = new HashSet<>();
+        for (Map.Entry<WorldPoint, Set<Transport>> e : config.getTransports().entrySet()) {
+            for (Transport t : e.getValue()) {
+                if (t.getDestination() == null) {
+                    continue;
+                }
+                int dp = WorldPointUtil.packWorldPoint(t.getDestination());
+                if (t.getOrigin() == null) {
+                    anywhereTeleportDests.add(dp);
+                } else {
+                    incoming.computeIfAbsent(dp, k -> new HashSet<>()).add(t);
+                }
+            }
+        }
+        final Set<Integer> puzzleAllow = new HashSet<>(4);
+        puzzleAllow.add(goalPacked);
+        puzzleAllow.add(start);
+        final VisitedTiles probeVisited = new VisitedTiles(map);
+        final ArrayDeque<Node> frontier = new ArrayDeque<>();
+        final Set<Integer> component = new LinkedHashSet<>();
+        frontier.add(new Node(goalPacked, null));
+        probeVisited.set(goalPacked);
+        int expanded = 0;
+        while (!frontier.isEmpty()) {
+            if (expanded >= SEALED_PROBE_NODE_BUDGET) {
+                return null; // big component: inconclusive, let the real search decide
+            }
+            Node n = frontier.poll();
+            expanded++;
+            if (anywhereTeleportDests.contains(n.packedPosition)) {
+                return null; // an anywhere-teleport lands inside: reachable
+            }
+            component.add(n.packedPosition);
+            for (Node pred : map.getReverseNeighbors(n, probeVisited, config, puzzleAllow, incoming)) {
+                if (pred.packedPosition == start) {
+                    return null; // reachable
+                }
+                probeVisited.set(pred.packedPosition);
+                frontier.add(pred);
+            }
+        }
+
+        final int[][] dirs = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+        final Set<Integer> rim = new LinkedHashSet<>();
+        for (int packed : component) {
+            final int x = WorldPointUtil.unpackWorldX(packed);
+            final int y = WorldPointUtil.unpackWorldY(packed);
+            final int z = WorldPointUtil.unpackWorldPlane(packed);
+            for (int[] d : dirs) {
+                final int nx = x + d[0];
+                final int ny = y + d[1];
+                final int np = WorldPointUtil.packWorldPoint(nx, ny, z);
+                if (component.contains(np) || rim.contains(np)) {
+                    continue;
+                }
+                for (int[] out : dirs) {
+                    if (map.canStep(nx, ny, z, out[0], out[1])) {
+                        rim.add(np);
+                        break;
+                    }
+                }
+            }
+        }
+        // Nearest to START, not to the goal: the reachable rim is on the approach side, and ranking
+        // it first lets the substitute search REACH a target in hundreds of nodes. Goal-side rim
+        // tiles are usually inside the sealed pocket's far side — unreachable by construction — and
+        // ranking them first burned the whole substitute node budget on best-effort (measured 50k
+        // nodes at Shantay Pass vs a direct walk to the near-side rim).
+        final List<Integer> nearest = new ArrayList<>(rim);
+        nearest.sort(Comparator.comparingInt(p -> WorldPointUtil.distanceBetween(p, start)));
+        final int take = Math.min(SEALED_SUBSTITUTE_TARGET_CAP, nearest.size());
+        final int[] substitutes = new int[take];
+        for (int i = 0; i < take; i++) {
+            substitutes[i] = nearest.get(i);
+        }
+        WebWalkLog.pf("target_sealed dst={} component={} rim={} probeNodes={}",
+                WorldPointUtil.toString(goalPacked), component.size(), rim.size(), expanded);
+        return substitutes;
+    }
+
+    /**
+     * A sealed component's nearest rim tile can itself be another sealed map-data tile. Resolve
+     * those nested shells here, before publishing a substitute to the walker, so one requested goal
+     * produces one effective approach target instead of a chain of recursive retargets.
+     */
+    private int[] normalizeSealedRim(int[] initial) {
+        List<Integer> current = Arrays.stream(initial).boxed().collect(Collectors.toList());
+        Set<Integer> probed = new HashSet<>();
+        for (int depth = 0; depth < 4 && !current.isEmpty(); depth++) {
+            int candidate = current.get(0);
+            if (!probed.add(candidate)) {
+                break;
+            }
+            int[] nested = sealedTargetSubstitutes(candidate);
+            if (nested == null || nested.length == 0) {
+                break;
+            }
+            LinkedHashSet<Integer> next = new LinkedHashSet<>(current);
+            next.remove(candidate);
+            for (int substitute : nested) {
+                if (!probed.contains(substitute)) {
+                    next.add(substitute);
+                }
+            }
+            current = new ArrayList<>(next);
+            current.sort(Comparator.comparingInt(p -> WorldPointUtil.distanceBetween(p, start)));
+            if (current.size() > SEALED_SUBSTITUTE_TARGET_CAP) {
+                current = new ArrayList<>(current.subList(0, SEALED_SUBSTITUTE_TARGET_CAP));
+            }
+        }
+        return current.stream().mapToInt(Integer::intValue).toArray();
     }
 
     private void buildIncomingByDestination(Map<Integer, Set<Transport>> out) {
@@ -436,16 +532,19 @@ public class Pathfinder implements Runnable {
         List<WorldPoint> head = forwardAtMeet.getPath();
         List<WorldPoint> full = new ArrayList<>(head.size() + 64);
         full.addAll(head);
-        for (Node n = backwardAtMeet.previous; n != null; n = n.previous) {
-            full.add(WorldPointUtil.unpackWorldPoint(n.packedPosition));
+
+        List<PathEdge> edges = PathEdge.fromBidirectionalChains(forwardAtMeet, backwardAtMeet);
+        for (Node from = backwardAtMeet; from != null && from.previous != null; from = from.previous) {
+            Node to = from.previous;
+            full.add(WorldPointUtil.unpackWorldPoint(to.packedPosition));
         }
+        joinedPathEdges = edges;
         return full;
     }
 
     private void addNeighborsForwardWithMeet(Node node, Map<Integer, Node> forwardAt, Map<Integer, Node> backwardAt,
             long[] bestMeetingCost, Node[] meetF, Node[] meetB) {
         List<Node> nodes = map.getNeighbors(node, visited, config, targets);
-        boolean afterTransport = node instanceof TransportNode;
         for (Node neighbor : nodes) {
             if (config.avoidWilderness(node.packedPosition, neighbor.packedPosition, targetInWilderness)) {
                 continue;
@@ -456,7 +555,6 @@ public class Pathfinder implements Runnable {
                 pending.add(neighbor);
                 ++stats.transportsChecked;
             } else {
-                neighbor.heuristic = afterTransport ? 0 : heuristicToNearestTarget(neighbor.packedPosition);
                 boundary.add(neighbor);
                 ++stats.nodesChecked;
             }
@@ -472,7 +570,6 @@ public class Pathfinder implements Runnable {
             Set<Integer> puzzleAllow, Map<Integer, Node> forwardAt, Map<Integer, Node> backwardAt,
             long[] bestMeetingCost, Node[] meetF, Node[] meetB) {
         List<Node> nodes = map.getReverseNeighbors(node, visitedB, config, puzzleAllow, incoming);
-        boolean afterTransport = node instanceof TransportNode;
         for (Node pred : nodes) {
             if (config.avoidWilderness(pred.packedPosition, node.packedPosition, targetInWilderness)) {
                 continue;
@@ -483,7 +580,6 @@ public class Pathfinder implements Runnable {
                 pendingBackward.add(pred);
                 ++stats.transportsChecked;
             } else {
-                pred.heuristic = afterTransport ? 0 : heuristicFromStart(pred.packedPosition);
                 boundaryBackward.add(pred);
                 ++stats.nodesChecked;
             }
@@ -497,12 +593,11 @@ public class Pathfinder implements Runnable {
 
     private void runUnidirectional() {
         Node startNode = new Node(start, null);
-        startNode.heuristic = heuristicToNearestTarget(start);
         boundary.add(startNode);
 
         int bestDistance = Integer.MAX_VALUE;
         long bestHeuristic = Integer.MAX_VALUE;
-        long cutoffDurationMillis = config.getCalculationCutoffMillis();
+        long cutoffDurationMillis = effectiveCutoffMillis();
         long cutoffTimeMillis = System.currentTimeMillis() + cutoffDurationMillis;
         config.refreshTeleports(start, 31);
         boolean reachedGoal = false;
@@ -539,10 +634,9 @@ public class Pathfinder implements Runnable {
 
             final int nodePos = node.packedPosition;
             boolean reached = false;
-            for (int target : targetsPacked) {
+            for (int target : searchTargetsPacked) {
                 if (nodePos == target) {
                     bestLastNode = node;
-                    pathNeedsUpdate = true;
                     reached = true;
                     break;
                 }
@@ -550,7 +644,6 @@ public class Pathfinder implements Runnable {
                 long heuristic = distance + (long) WorldPointUtil.distanceBetween(nodePos, target, 2);
                 if (heuristic < bestHeuristic || (heuristic <= bestHeuristic && distance < bestDistance)) {
                     bestLastNode = node;
-                    pathNeedsUpdate = true;
                     bestDistance = distance;
                     bestHeuristic = heuristic;
                     cutoffTimeMillis = System.currentTimeMillis() + cutoffDurationMillis;
@@ -561,9 +654,10 @@ public class Pathfinder implements Runnable {
                 break;
             }
 
-            if (System.currentTimeMillis() > cutoffTimeMillis) {
+            if (System.currentTimeMillis() > cutoffTimeMillis
+                    || (sealedTargetMode && stats.getNodesChecked() > SEALED_SUBSTITUTE_NODE_BUDGET)) {
                 timedOut = true;
-                WebWalkLog.pf("cutoff bestDist={} nodes={}", bestDistance, stats.getNodesChecked());
+                WebWalkLog.pf("cutoff bestDist={} nodes={} sealedMode={}", bestDistance, stats.getNodesChecked(), sealedTargetMode);
                 break;
             }
 
@@ -585,15 +679,20 @@ public class Pathfinder implements Runnable {
         WebWalkLog.pf("uni_loop_exit cancelled={} bEmpty={} pEmpty={} bestLast={}",
                 cancelled, boundary.isEmpty(), pending.isEmpty(),
                 bestLastNode == null ? "null" : WorldPointUtil.toString(bestLastNode.packedPosition));
+
+        terminationReason = cancelled ? PathTerminationReason.CANCELLED
+                : reachedGoal ? PathTerminationReason.TARGET_REACHED
+                : timedOut ? PathTerminationReason.CUTOFF_REACHED
+                : PathTerminationReason.SEARCH_EXHAUSTED;
     }
 
     private void runBidirectional() {
-        int goalPacked = targetsPacked[0];
+        int goalPacked = searchTargetsPacked[0];
         Map<Integer, Set<Transport>> incoming = new HashMap<>(512);
         buildIncomingByDestination(incoming);
 
         Set<Integer> puzzleAllow = new HashSet<>(targets.size() + 1);
-        for (int t : targetsPacked) {
+        for (int t : searchTargetsPacked) {
             puzzleAllow.add(t);
         }
         puzzleAllow.add(start);
@@ -606,20 +705,19 @@ public class Pathfinder implements Runnable {
         Node[] meetB = new Node[1];
 
         Node startNode = new Node(start, null);
-        startNode.heuristic = heuristicToNearestTarget(start);
         boundary.add(startNode);
         forwardAt.put(start, startNode);
 
         Node goalNode = new Node(goalPacked, null);
-        goalNode.heuristic = heuristicFromStart(goalPacked);
         boundaryBackward.add(goalNode);
         backwardAt.put(goalPacked, goalNode);
 
         int bestDistance = Integer.MAX_VALUE;
         long bestHeuristic = Integer.MAX_VALUE;
-        long cutoffDurationMillis = config.getCalculationCutoffMillis();
+        long cutoffDurationMillis = effectiveCutoffMillis();
         long cutoffTimeMillis = System.currentTimeMillis() + cutoffDurationMillis;
         config.refreshTeleports(start, 31);
+        boolean timedOut = false;
 
         while (!cancelled && (!boundary.isEmpty() || !pending.isEmpty() || !boundaryBackward.isEmpty() || !pendingBackward.isEmpty())) {
             if (!boundary.isEmpty() || !pending.isEmpty()) {
@@ -653,19 +751,19 @@ public class Pathfinder implements Runnable {
 
                 final int nodePos = node.packedPosition;
                 if (nodePos == goalPacked) {
+                    joinedPathEdges = PathEdge.fromForwardChain(node);
                     joinedPath = node.getPath();
-                    pathNeedsUpdate = false;
+                    selectedPathCost = node.cost;
                     bestLastNode = null;
                     WebWalkLog.pf("bidir forward_hit_goal");
                     break;
                 }
 
-                for (int target : targetsPacked) {
+                for (int target : searchTargetsPacked) {
                     int distance = WorldPointUtil.distanceBetween(nodePos, target);
                     long heuristic = distance + (long) WorldPointUtil.distanceBetween(nodePos, target, 2);
                     if (heuristic < bestHeuristic || (heuristic <= bestHeuristic && distance < bestDistance)) {
                         bestLastNode = node;
-                        pathNeedsUpdate = true;
                         bestDistance = distance;
                         bestHeuristic = heuristic;
                         cutoffTimeMillis = System.currentTimeMillis() + cutoffDurationMillis;
@@ -691,7 +789,7 @@ public class Pathfinder implements Runnable {
 
                 if (node.packedPosition == start) {
                     joinedPath = combineBidirectionalPath(forwardAt.get(start), node);
-                    pathNeedsUpdate = false;
+                    selectedPathCost = node.cost;
                     bestLastNode = null;
                     WebWalkLog.pf("bidir backward_hit_start");
                     break;
@@ -700,15 +798,17 @@ public class Pathfinder implements Runnable {
                 addNeighborsBackwardWithMeet(node, visitedB, incoming, puzzleAllow, forwardAt, backwardAt, bestMeetingCost, meetF, meetB);
             }
 
-            if (System.currentTimeMillis() > cutoffTimeMillis) {
-                WebWalkLog.pf("bidir_cutoff nodes={}", stats.getNodesChecked());
+            if (System.currentTimeMillis() > cutoffTimeMillis
+                    || (sealedTargetMode && stats.getNodesChecked() > SEALED_SUBSTITUTE_NODE_BUDGET)) {
+                timedOut = true;
+                WebWalkLog.pf("bidir_cutoff nodes={} sealedMode={}", stats.getNodesChecked(), sealedTargetMode);
                 break;
             }
         }
 
         if (joinedPath == null && meetF[0] != null && meetB[0] != null && bestMeetingCost[0] < Long.MAX_VALUE) {
             joinedPath = combineBidirectionalPath(meetF[0], meetB[0]);
-            pathNeedsUpdate = false;
+            selectedPathCost = bestMeetingCost[0];
             bestLastNode = null;
             WebWalkLog.pf("bidir meet_at={} cost={}",
                     WorldPointUtil.toString(meetF[0].packedPosition), bestMeetingCost[0]);
@@ -726,26 +826,73 @@ public class Pathfinder implements Runnable {
         WebWalkLog.pf("bidir_exit joined={} meetCost={}",
                 joinedPath == null ? "null" : Integer.toString(joinedPath.size()),
                 bestMeetingCost[0] == Long.MAX_VALUE ? "n/a" : Long.toString(bestMeetingCost[0]));
+
+        terminationReason = cancelled ? PathTerminationReason.CANCELLED
+                : joinedPath != null ? PathTerminationReason.TARGET_REACHED
+                : timedOut ? PathTerminationReason.CUTOFF_REACHED
+                : PathTerminationReason.SEARCH_EXHAUSTED;
     }
 
     @Override
     public void run() {
         WebWalkLog.pf("run_start src={} dst={} cutoffMs={}",
                 WorldPointUtil.toString(start), WorldPointUtil.toString(targets), config.getCalculationCutoffMillis());
+        path = Collections.emptyList();
+        smoothedPath = Collections.emptyList();
+        materializedPathLastNode = null;
+        smoothed = false;
         joinedPath = null;
-        // Pathfinder instances are commonly constructed on the client thread and submitted to the
-        // shortest-path executor. Resolve both ThreadLocal-backed objects here so the collision map,
-        // visited state and pinned live snapshot all belong to the search thread for this run.
-        map = config.getMap();
-        visited = new VisitedTiles(map);
-        // Pin the live-collision snapshot for this whole search so a mid-search swap on the client
-        // thread cannot mix two scenes into one path. No-op when live collision is disabled.
-        map.beginSearch();
+        joinedPathEdges = null;
+        terminationReason = null;
+        selectedPathCost = -1L;
         try {
+            // Pathfinder instances are commonly constructed on the client thread and submitted to the
+            // shortest-path executor. Resolve both ThreadLocal-backed objects here so the collision map,
+            // visited state and pinned live snapshot all belong to the search thread for this run.
+            map = config.getMap();
+            visited = new VisitedTiles(map);
+            // Pin the live-collision snapshot for this whole search so a mid-search swap on the client
+            // thread cannot mix two scenes into one path. No-op when live collision is disabled.
+            map.beginSearch();
             stats.start();
-            computeNetworkLandmarks();
+
+            searchTargetsPacked = targetsPacked;
+            sealedTargetMode = false;
+            cutoffOverrideMillis = -1L;
+            reachedSealedSubstitutePacked = -1;
+            if (targetsPacked.length == 1 && targetsPacked[0] != start) {
+                int[] rim = null;
+                try {
+                    rim = sealedTargetSubstitutes(targetsPacked[0]);
+                    if (rim != null && rim.length > 0) {
+                        rim = normalizeSealedRim(rim);
+                    }
+                } catch (RuntimeException probeFailure) {
+                    // The probe is an optimisation; any anomaly degrades to the full search, never
+                    // to a failed run. (First seen with a mocked CollisionMap whose VisitedTiles had
+                    // no region planes.)
+                    log.debug("[Pathfinder] sealed-target probe failed, running full search: {}",
+                            probeFailure.toString());
+                }
+                if (rim != null) {
+                    sealedTargetMode = true;
+                    if (rim.length == 0) {
+                        // A sealed component with a void rim (off-map or instance-template garbage):
+                        // nothing to walk toward, nothing to search for.
+                        WebWalkLog.pf("target_sealed no_walkable_rim dst={}",
+                                WorldPointUtil.toString(targetsPacked[0]));
+                        terminationReason = PathTerminationReason.SEARCH_EXHAUSTED;
+                        return;
+                    }
+                    // Search for the rim instead: the walk still ends beside the sealed area — the
+                    // same best-effort the old full flood produced — at a thousandth of the cost.
+                    searchTargetsPacked = rim;
+                    cutoffOverrideMillis = SEALED_SUBSTITUTE_CUTOFF_MS;
+                }
+            }
+
             int minCheb = minChebyshevStartToAnyTarget();
-            boolean useBidir = targetsPacked.length == 1
+            boolean useBidir = searchTargetsPacked.length == 1
                     && minCheb >= BIDIRECTIONAL_MIN_CHEBYSHEV;
             pathfinderDiag("run mode decision useBidir=%s minCheb=%d bidirThreshold=%d targetsPacked=%d cutoffMs=%d cancelAlready=%s",
                     useBidir,
@@ -760,27 +907,59 @@ public class Pathfinder implements Runnable {
             } else {
                 runUnidirectional();
             }
+            // Reaching a rim substitute is not reaching the caller's target, and the substitute pass
+            // hitting its short leash (the rim itself can be unreachable — a sealed tile inside a
+            // locked interior) changes nothing either: the original destination's unreachability is
+            // already PROVEN, and callers keying decisions off the termination must hear exactly that.
+            // A genuinely REACHED rim is remembered before the remap, though — it is the walker's
+            // signal to retarget the walk to the rim once instead of replaying this search forever.
+            if (sealedTargetMode && (terminationReason == PathTerminationReason.TARGET_REACHED
+                    || terminationReason == PathTerminationReason.CUTOFF_REACHED)) {
+                if (terminationReason == PathTerminationReason.TARGET_REACHED) {
+                    if (bestLastNode != null) {
+                        reachedSealedSubstitutePacked = bestLastNode.packedPosition;
+                    } else if (joinedPath != null && !joinedPath.isEmpty()) {
+                        reachedSealedSubstitutePacked = WorldPointUtil.packWorldPoint(
+                                joinedPath.get(joinedPath.size() - 1));
+                    }
+                }
+                terminationReason = PathTerminationReason.SEARCH_EXHAUSTED;
+            }
         } catch (Exception e) {
+            terminationReason = PathTerminationReason.FAILED;
             log.error("[Pathfinder] Exception in run(): ", e);
         } finally {
+            if (terminationReason == null) {
+                terminationReason = cancelled
+                        ? PathTerminationReason.CANCELLED
+                        : PathTerminationReason.SEARCH_EXHAUSTED;
+            }
+            if (selectedPathCost < 0 && bestLastNode != null) {
+                selectedPathCost = bestLastNode.cost;
+            }
             done = !cancelled;
 
             boundary.clear();
             pending.clear();
             boundaryBackward.clear();
             pendingBackward.clear();
-            visited.clear();
+            if (visited != null) {
+                visited.clear();
+            }
 
-            stats.end();
+            stats.end(map == null ? 0L : map.getLiveEdgeQueries());
 
-            WebWalkLog.pf("run_done done={} cancelled={} stats={}",
-                    done, cancelled, getStats() != null ? getStats().toString() : "null");
+            WebWalkLog.pf("run_done done={} cancelled={} termination={} stats={}",
+                    done, cancelled, terminationReason,
+                    getStats() != null ? getStats().toString() : "null");
         }
     }
 
     public static class PathfinderStats {
         @Getter
         private int nodesChecked = 0, transportsChecked = 0;
+		@Getter
+		private long liveCollisionEdgesChecked = 0L;
         private long startNanos, endNanos;
         private volatile boolean started = false, ended = false;
 
@@ -799,14 +978,31 @@ public class Pathfinder implements Runnable {
             startNanos = System.nanoTime();
         }
 
-        private void end() {
+		private void complete(
+				long elapsedNanos,
+				int nodesChecked,
+				int transportsChecked,
+				long liveCollisionEdgesChecked) {
+			this.started = true;
+			this.nodesChecked = nodesChecked;
+			this.transportsChecked = transportsChecked;
+			this.liveCollisionEdgesChecked = liveCollisionEdgesChecked;
+			this.startNanos = 0L;
+			this.endNanos = elapsedNanos;
+			this.ended = true;
+		}
+
+		private void end(long liveCollisionEdgesChecked) {
+			this.liveCollisionEdgesChecked = liveCollisionEdgesChecked;
             endNanos = System.nanoTime();
             ended = true;
         }
 
         @Override
         public String toString() {
-            return String.format("PathfinderStats(nodes=%d,transports=%d,time=%dms)", nodesChecked, transportsChecked, getElapsedTimeNanos() / 1_000_000);
+			return String.format("PathfinderStats(nodes=%d,transports=%d,liveEdges=%d,time=%dms)",
+				nodesChecked, transportsChecked, liveCollisionEdgesChecked,
+				getElapsedTimeNanos() / 1_000_000);
         }
     }
 }

@@ -18,8 +18,6 @@ import net.runelite.client.plugins.loottracker.LootTrackerItem;
 import net.runelite.client.plugins.loottracker.LootTrackerRecord;
 import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.api.player.models.Rs2PlayerModel;
-import net.runelite.client.plugins.microbot.shortestpath.ShortestPathPlugin;
-import net.runelite.client.plugins.microbot.shortestpath.pathfinder.Pathfinder;
 import net.runelite.client.plugins.microbot.util.antiban.Rs2AntibanSettings;
 import net.runelite.client.plugins.microbot.util.bank.enums.BankLocation;
 import net.runelite.client.plugins.microbot.util.coords.Rs2WorldPoint;
@@ -41,6 +39,10 @@ import net.runelite.client.plugins.microbot.util.security.LoginManager;
 import net.runelite.client.config.ConfigProfile;
 import net.runelite.client.plugins.microbot.util.settings.Rs2Settings;
 import net.runelite.client.plugins.microbot.util.tile.Rs2Tile;
+import net.runelite.client.plugins.microbot.util.walker.Rs2InteractionApproach;
+import net.runelite.client.plugins.microbot.util.walker.Rs2PathApi;
+import net.runelite.client.plugins.microbot.util.walker.Rs2RouteRequest;
+import net.runelite.client.plugins.microbot.util.walker.Rs2RouteResult;
 import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
 import net.runelite.client.plugins.microbot.util.widget.Rs2Widget;
 
@@ -78,11 +80,14 @@ public class Rs2Bank {
     // Bank data caching system
     private static final String CONFIG_GROUP = "microbot";
     private static final String BANK_KEY = "bankitems";
+    private static final String BANK_LAST_OPENED_KEY = "bankLastOpenedAt";
     private static final Rs2BankData rs2BankData = new Rs2BankData();
     private static final Gson gson = new Gson();
     private static final AtomicReference<String> rsProfileKey = new AtomicReference<>("");
     private static RuneScapeProfileType worldType;
     private static final AtomicBoolean validLoadedCache = new AtomicBoolean(false);
+    private static volatile long bankLastOpenedAt;
+    private static volatile int[] lastSavedSnapshot;
     // Used to synchronize calls
     private static final Object lock = new Object();
 
@@ -101,14 +106,82 @@ public class Rs2Bank {
         return BANK_LIVE_EPOCH.get();
     }
 
+    /** Time of the last observed bank opening, in epoch milliseconds; zero if unknown. */
+    public static long getBankLastOpenedAt() {
+        return bankLastOpenedAt;
+    }
+
+    /** A restored profile snapshot can inform route planning; bank actions still require a fresh live epoch. */
+    public static boolean hasBankMirrorSnapshot() {
+        return BANK_LIVE_EPOCH.get() > 0
+                || (validLoadedCache.get() && lastSavedSnapshot != null && bankLastOpenedAt > 0L);
+    }
+
+    /** Restore only the current RuneScape profile's last bank snapshot. A restored snapshot is not a live bank epoch. */
+    public static void restoreBankMirrorCache() {
+        if (Microbot.getClient() == null || Microbot.getConfigManager() == null) {
+            return;
+        }
+        String profile = Microbot.getConfigManager().getRSProfileKey();
+        if (profile == null || profile.isEmpty()) {
+            return;
+        }
+        RuneScapeProfileType type = RuneScapeProfileType.getCurrent(Microbot.getClient());
+        synchronized (lock) {
+            if (validLoadedCache.get() && profile.equals(rsProfileKey.get()) && type == worldType) {
+                return;
+            }
+            rs2BankData.setEmpty();
+            BANK_LIVE_EPOCH.set(0);
+            rsProfileKey.set(profile);
+            worldType = type;
+            bankLastOpenedAt = 0L;
+            lastSavedSnapshot = null;
+            try {
+                String saved = Microbot.getConfigManager().getRSProfileConfiguration(CONFIG_GROUP, BANK_KEY);
+                int[] data = saved == null ? null : gson.fromJson(saved, int[].class);
+                if (data != null && data.length % 3 == 0) {
+                    rs2BankData.setIdQuantityAndSlot(data);
+                    lastSavedSnapshot = data;
+                }
+                String opened = Microbot.getConfigManager().getRSProfileConfiguration(CONFIG_GROUP, BANK_LAST_OPENED_KEY);
+                if (opened != null) {
+                    bankLastOpenedAt = Math.max(0L, Long.parseLong(opened));
+                }
+            } catch (RuntimeException ex) {
+                rs2BankData.setEmpty();
+                bankLastOpenedAt = 0L;
+                lastSavedSnapshot = null;
+                log.debug("Ignoring invalid saved bank snapshot");
+            }
+            validLoadedCache.set(true);
+        }
+    }
+
+    /** The bank widget load marks an opening; the following BANK container event refreshes its contents. */
+    public static void onBankWidgetLoaded() {
+        restoreBankMirrorCache();
+        bankLastOpenedAt = System.currentTimeMillis();
+        if (Microbot.getConfigManager() != null && Microbot.getConfigManager().getRSProfileKey() != null) {
+            Microbot.getConfigManager().setRSProfileConfiguration(CONFIG_GROUP, BANK_LAST_OPENED_KEY,
+                    Long.toString(bankLastOpenedAt));
+        }
+    }
+
     /**
      * Clears mirrored bank state when game-mode world context changes (for example seasonal <-> non-seasonal).
      * This prevents stale bank mirror data from prior world context leaking into routing and setup checks.
      */
     public static void invalidateBankMirrorCache(String reason)
     {
-        rs2BankData.setEmpty();
-        BANK_LIVE_EPOCH.set(0);
+        synchronized (lock) {
+            rs2BankData.setEmpty();
+            BANK_LIVE_EPOCH.set(0);
+            validLoadedCache.set(false);
+            rsProfileKey.set("");
+            bankLastOpenedAt = 0L;
+            lastSavedSnapshot = null;
+        }
         if (log.isInfoEnabled())
         {
             String suffix = (reason == null || reason.isBlank()) ? "" : " reason=" + reason;
@@ -349,12 +422,11 @@ public class Rs2Bank {
 		if (event.getContainerId() != InventoryID.BANK || event.getItemContainer() == null) {
 			return;
 		}
+		restoreBankMirrorCache();
 
-		BANK_LIVE_EPOCH.incrementAndGet();
 
 		final Item[] items = event.getItemContainer().getItems();
 		if (items == null) {
-			rs2BankData.setEmpty();
 			return;
 		}
 
@@ -375,11 +447,21 @@ public class Rs2Bank {
 
 		if (bankItems.isEmpty()) {
 			rs2BankData.setEmpty();
-			return;
+		} else {
+			rs2BankData.set(bankItems);
+			updateTabCounts();
 		}
-
-		rs2BankData.set(bankItems);
-		updateTabCounts();
+		BANK_LIVE_EPOCH.incrementAndGet();
+		synchronized (lock) {
+			if (validLoadedCache.get() && Rs2Widget.isWidgetVisible(12, 1)) {
+				int[] snapshot = rs2BankData.getIdQuantityAndSlot();
+				if (!Arrays.equals(snapshot, lastSavedSnapshot)) {
+					Microbot.getConfigManager().setRSProfileConfiguration(CONFIG_GROUP, BANK_KEY,
+							gson.toJson(snapshot));
+					lastSavedSnapshot = snapshot;
+				}
+			}
+		}
 	}
 
 	/**
@@ -1340,7 +1422,7 @@ public class Rs2Bank {
         Microbot.status = "Empty containers";
         if (!Rs2Bank.isOpen()) return false;
 
-        Widget widget = Rs2Widget.getWidget(786471); // Empty containers button ID
+        Widget widget = Rs2Widget.getWidget(InterfaceID.Bankmain.DEPOSITCONTAINERS);
         if (widget == null) return false;
 
         Rs2Widget.clickWidget(widget);
@@ -2327,15 +2409,8 @@ public class Rs2Bank {
                 .map(BankLocation::getWorldPoint)
                 .collect(Collectors.toSet());
 
-        if (ShortestPathPlugin.getPathfinderConfig().getTransports().isEmpty()) {
-            ShortestPathPlugin.getPathfinderConfig().refresh();
-        }
-
-        long originalStart = System.nanoTime();
-        Pathfinder pf = new Pathfinder(ShortestPathPlugin.getPathfinderConfig(), worldPoint, targets);
-        pf.run();
-        List<WorldPoint> path = pf.getPath();
-        long originalTime = System.nanoTime() - originalStart;
+        Rs2RouteResult route = Rs2PathApi.plan(Rs2RouteRequest.toAny(worldPoint, targets));
+        List<WorldPoint> path = route.getPath();
 
         if (path.isEmpty()) {
             Microbot.log("Unable to find path to nearest bank");
@@ -2442,8 +2517,9 @@ public class Rs2Bank {
         if (Rs2Bank.isOpen()) return true;
         Rs2Player.toggleRunEnergy(toggleRun);
         Microbot.status = "Walking to nearest bank " + bankLocation.toString();
-        Rs2Walker.walkTo(bankLocation.getWorldPoint(), 4);
-        return bankLocation.getWorldPoint().distanceTo2D(Rs2Player.getWorldLocation()) <= 4;
+        walkUntilBankReady(bankLocation);
+        return readyBankObject(bankLocation) != null
+                || bankLocation.getWorldPoint().distanceTo(Rs2Player.getWorldLocation()) <= 4;
     }
 
     /**
@@ -2508,10 +2584,12 @@ public class Rs2Bank {
         if (Rs2Bank.isOpen()) return true;
         Rs2Player.toggleRunEnergy(toggleRun);
         Microbot.status = "Walking to nearest bank " + bankLocation.toString();
-        boolean result = Rs2Walker.getDistanceBetween(Rs2Player.getWorldLocation(), bankLocation.getWorldPoint()) <= 8;
+        boolean result = readyBankObject(bankLocation) != null;
         if (!result) {
-            Rs2Walker.walkTo(bankLocation.getWorldPoint());
+            walkUntilBankReady(bankLocation);
         }
+        TileObject ready = readyBankObject(bankLocation);
+        if (ready != null) return openBank(ready);
         return Rs2Bank.openBank();
     }
 
@@ -3536,5 +3614,29 @@ public class Rs2Bank {
             }
         }
         return anyLocked;
+    }
+
+    private static void walkUntilBankReady(BankLocation bankLocation) {
+        Rs2Walker.walkUntil(bankLocation.getWorldPoint(), 1, () -> readyBankObject(bankLocation) != null);
+    }
+
+    private static TileObject readyBankObject(BankLocation bankLocation) {
+        WorldPoint player = Rs2Player.getWorldLocation();
+        if (player == null || player.distanceTo(bankLocation.getWorldPoint()) > 24) return null;
+        return Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            TileObject[] candidates = {Rs2GameObject.findBank(), Rs2GameObject.findGrandExchangeBooth()};
+            for (TileObject candidate : candidates) {
+                boolean ready = candidate instanceof GameObject
+                        ? Rs2InteractionApproach.isReady((GameObject) candidate)
+                        : candidate instanceof WallObject
+                                && Rs2InteractionApproach.isReady((WallObject) candidate);
+                if (candidate != null
+                        && candidate.getWorldLocation().distanceTo(bankLocation.getWorldPoint()) <= 12
+                        && ready) {
+                    return candidate;
+                }
+            }
+            return (TileObject) null;
+        }).orElse(null);
     }
 }

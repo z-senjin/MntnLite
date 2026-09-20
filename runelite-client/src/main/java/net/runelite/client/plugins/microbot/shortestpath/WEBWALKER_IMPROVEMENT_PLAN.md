@@ -60,7 +60,7 @@ The "completeness of navigating the world" half.
 | 19 | DONE | After a door interact, if the player didn't move and `isQuestLockedDoorDialogue()` matches ("quest" / "you need to" / "you must" / "cannot enter" / "requires you" / …), log `warn` with door details + dialogue text, add the tile to `sessionBlacklistedDoors`, close the dialogue, refresh `PathfinderConfig` (re-read quest/varbit state) and `recalculatePath()`. Entry of `handleDoors` short-circuits on blacklisted tiles to break the retry loop. | `Rs2Walker.java:1256–1275, 1376–1396` | M |
 | 20 | DONE | POH `convertInstancedWorldPoint()` null-path diagnostics added: `handleDoors` null log now includes rawFrom/rawTo/fromWp/toWp and `idx/pathSize`; `setTarget` POH instance start now null-checks `WorldPoint.fromLocalInstance` (falls back to raw world location with a `warn` when it returns null) | `Rs2Walker.java:1206–1213, 1473–1486` | M |
 | 21 | DONE | Minimap click now scans forward from first past-threshold tile to the furthest same-plane, non-transport-origin tile within ~14-tile Chebyshev reach, then advances the loop index past the intermediate tiles. Cuts tick count on long diagonal runs by ~30-40% since Chebyshev reach is 1.4× the cardinal step count. | `Rs2Walker.java:476–531` | M |
-| 22 | DONE | `Telemetry.recordUnreachable(cause, player, target, pathEndpoint, pathSize, threshold, pathfinder)` logs at `warn` with pathfinder stats; wired into both UNREACHABLE exits (no-walkable-path and partial-retries-exhausted) with `unreachableCount` counter exposed to probes | `Rs2Walker.java:108, 128–141, 158, 306–308, 532–533` | S |
+| 22 | DONE | `Telemetry.recordUnreachable(cause, player, target, pathEndpoint, pathSize, threshold, routeMetrics)` logs at `warn` with planner-independent route metrics; wired into both UNREACHABLE exits (no-walkable-path and partial-retries-exhausted) with `unreachableCount` counter exposed to probes | `Rs2Walker.java` | S |
 
 ---
 
@@ -127,6 +127,14 @@ Items already catalogued in `UPSTREAM_COMPARISON.md` are surfaced here only wher
 ---
 
 ## Facade migration (2026-07-20)
+
+> **2026-08-05 boundary review:** direct `ShortestPathPlugin` state access has been migrated back behind
+> `Rs2PathApi` and is now CI-enforced by `scripts/check-shortest-path-boundary.py`. The class remains a
+> compatibility seam rather than the final stable API because it still exposes concrete `Pathfinder`,
+> mutable `PathfinderConfig` and `Transport` values. The canonical next steps are in
+> `docs/walker-roadmap.md` “Tighten the planner boundary.” The first operation-level slice now provides
+> immutable route requests/results and has migrated bank, deposit-box and banked-destination searches off
+> direct `Pathfinder` construction.
 
 **Goal:** decouple automation from the shortest-path *internals* so future upstream backports stop rippling into `Rs2Walker` and the other consumers. The fork stays a fork; this is a boundary, not a rewrite. Once the boundary exists, backporting an upstream fix means changing code behind the facade only.
 

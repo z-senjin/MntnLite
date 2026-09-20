@@ -21,7 +21,9 @@ public abstract class Mouse {
 	Point lastClick = new Point(-1, -1); // getter for last click
     // getter for click before last click
     Point lastClick2 = new Point(-1, -1);
-    Point lastMove = new Point(-1, -1); // getter for last move
+    // No lastMove: it was written only by the bot, so NaturalMouse.moveTo compared its target
+    // against a point human input could never update, and early-returned. Position lives in
+    // PointerState. `points` stays for the debug overlay's trail and is not a position source.
     float hue = 0.0f; // Initial hue value
 	Timer timer = new Timer(POINT_LIFETIME, e -> points.pollFirst());
 
@@ -46,8 +48,6 @@ public abstract class Mouse {
 
 
     public abstract void setLastClick(Point point);
-
-    public abstract void setLastMove(Point point);
 
 
     public abstract Mouse click(int x, int y);

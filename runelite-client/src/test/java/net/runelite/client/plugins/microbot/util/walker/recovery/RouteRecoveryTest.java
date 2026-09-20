@@ -1,25 +1,23 @@
 package net.runelite.client.plugins.microbot.util.walker.recovery;
 
 import net.runelite.api.coords.WorldPoint;
-import net.runelite.client.plugins.microbot.shortestpath.Transport;
 import org.junit.Test;
 
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
+import java.util.function.BiPredicate;
+import java.util.function.Predicate;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
-import static org.mockito.Mockito.mock;
 
 /**
  * Headless scenario tests for {@link RouteRecovery} decisions — the foundation of the walker test harness.
  * <p>
  * Each test constructs a stuck situation entirely in memory — a raw path, the set of tiles reachable from
- * the player, and the transports map — with no live client, and asserts the recovery decision. This is what
+ * the player, and a transport-origin predicate — with no live client, and asserts the recovery decision. This is what
  * turns "verify a recovery change with a 5-minute live walk" into "verify it in milliseconds", which is the
  * prerequisite for safely rewriting the walker's recovery/executor rather than patching it live. New
  * recovery decisions are extracted into {@code RouteRecovery} as pure functions and exercised here.
@@ -38,10 +36,12 @@ public class RouteRecoveryTest {
                 wp(3153, 3363), wp(3152, 3363), wp(3151, 3363), wp(3150, 3363), wp(3149, 3363));
     }
 
-    private static Map<WorldPoint, Set<Transport>> transportAt(WorldPoint origin) {
-        Map<WorldPoint, Set<Transport>> t = new HashMap<>();
-        t.put(origin, new HashSet<>(Arrays.asList(mock(Transport.class))));
-        return t;
+	private static Predicate<WorldPoint> transportAt(WorldPoint origin) {
+		return origin::equals;
+    }
+
+    private static BiPredicate<WorldPoint, WorldPoint> transportStep(WorldPoint origin, WorldPoint destination) {
+        return (from, to) -> origin.equals(from) && destination.equals(to);
     }
 
     @Test
@@ -67,7 +67,7 @@ public class RouteRecoveryTest {
         reachable.add(player);
 
         assertNull(RouteRecovery.findReachableTransportOriginAhead(
-                path, 0, player, reachable, new HashMap<>(), 15, 40));
+				path, 0, player, reachable, ignored -> false, 15, 40));
     }
 
     @Test
@@ -92,6 +92,72 @@ public class RouteRecoveryTest {
         assertNull("origin beyond the minimap reach must not be targeted",
                 RouteRecovery.findReachableTransportOriginAhead(
                         path, 0, player, reachable, transportAt(origin), 1, 40));
+    }
+
+    @Test
+    public void walksToReachableApproachWhenFairyRingOriginIsOccupied() {
+        WorldPoint player = wp(1364, 2936);
+        WorldPoint approach = wp(1359, 2940);
+        WorldPoint origin = wp(1359, 2941);
+        WorldPoint destination = wp(3108, 3149);
+        List<WorldPoint> path = Arrays.asList(
+                player, wp(1363, 2937), wp(1361, 2939), approach, origin, destination);
+        Set<WorldPoint> reachable = new HashSet<>(Arrays.asList(
+                player, wp(1363, 2937), wp(1361, 2939), approach));
+
+        WorldPoint chosen = RouteRecovery.findReachableTransportApproachAhead(
+                path, 0, player, reachable, transportStep(origin, destination), 15, 40);
+
+        assertEquals("recovery should approach the occupied ring instead of replanning it as a wall",
+                approach, chosen);
+    }
+
+    @Test
+    public void transportApproachUsesOriginWhenItIsReachable() {
+        List<WorldPoint> path = steppingStonePath();
+        WorldPoint player = wp(3156, 3366);
+        WorldPoint origin = wp(3154, 3363);
+        WorldPoint destination = wp(3153, 3363);
+        Set<WorldPoint> reachable = new HashSet<>(Arrays.asList(
+                player, wp(3156, 3363), wp(3155, 3363), origin));
+
+        WorldPoint chosen = RouteRecovery.findReachableTransportApproachAhead(
+                path, 0, player, reachable, transportStep(origin, destination), 15, 40);
+
+        assertEquals("a standable transport origin remains the preferred recovery target", origin, chosen);
+    }
+
+    @Test
+    public void transportApproachStopsAtFirstUnresolvedTransport() {
+        WorldPoint player = wp(100, 100);
+        WorldPoint firstApproach = wp(102, 100);
+        WorldPoint firstOrigin = wp(103, 100);
+        WorldPoint firstDestination = wp(200, 200);
+        WorldPoint laterOrigin = wp(202, 200);
+        WorldPoint laterDestination = wp(300, 300);
+        List<WorldPoint> path = Arrays.asList(
+                player, firstApproach, firstOrigin, firstDestination, laterOrigin, laterDestination);
+        Set<WorldPoint> reachable = new HashSet<>(Arrays.asList(player, firstApproach, laterOrigin));
+        BiPredicate<WorldPoint, WorldPoint> transports = (from, to) ->
+                transportStep(firstOrigin, firstDestination).test(from, to)
+                        || transportStep(laterOrigin, laterDestination).test(from, to);
+
+        WorldPoint chosen = RouteRecovery.findReachableTransportApproachAhead(
+                path, 0, player, reachable, transports, 150, 40);
+
+        assertEquals("recovery must not skip the first transport for a later reachable origin",
+                firstApproach, chosen);
+    }
+
+    @Test
+    public void transportApproachReturnsNullWhenNoTransportIsPlanned() {
+        List<WorldPoint> path = steppingStonePath();
+        WorldPoint player = wp(3156, 3366);
+        Set<WorldPoint> reachable = new HashSet<>(path);
+        reachable.add(player);
+
+        assertNull(RouteRecovery.findReachableTransportApproachAhead(
+                path, 0, player, reachable, (from, to) -> false, 15, 40));
     }
 
     @Test

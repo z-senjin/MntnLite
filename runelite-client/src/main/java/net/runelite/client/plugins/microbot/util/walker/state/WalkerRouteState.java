@@ -20,14 +20,32 @@ public final class WalkerRouteState {
     // ---- transport handoff: set when a transport (stairs, ladder, shortcut, teleport) is taken, read by
     // the post-transport settling/window logic in processWalk. ----
 
-    /** Wall-clock ms when the last transport was handled; 0 when none this session. */
+    /**
+     * Wall-clock ms when the last transport was handled; 0 when none this session.
+     *
+     * <p>This is the field every post-transport window check actually reads, so it is the one that
+     * decides whether handlers are suppressed. Clearing the locations below without clearing this
+     * leaves the window armed — see {@link #clearRecentTransportContext()}.
+     */
     public volatile long lastTransportHandledAtMs = 0L;
-    /** Player tile immediately after the last transport handoff. */
-    public volatile WorldPoint lastTransportHandledAtLocation = null;
     /** Origin tile of the last handled transport. */
     public volatile WorldPoint lastTransportOriginLocation = null;
     /** Destination tile of the last handled transport. */
     public volatile WorldPoint lastTransportDestinationLocation = null;
+
+    /**
+     * Ends the post-transport window: the handoff belongs to the route that took the transport.
+     *
+     * <p>Clear all of it together. Nulling only the locations leaves
+     * {@link #lastTransportHandledAtMs} set, and every window check keys off that timestamp — the
+     * window stays armed for its full duration while the destination it is supposed to be about is
+     * already gone.
+     */
+    public void clearRecentTransportContext() {
+        lastTransportHandledAtMs = 0L;
+        lastTransportOriginLocation = null;
+        lastTransportDestinationLocation = null;
+    }
 
     // ---- route progress: tracks how far along the current route the player has advanced, used to detect
     // real forward progress (vs thrashing) and to decide when to reset on a new/changed route. ----
@@ -44,6 +62,10 @@ public final class WalkerRouteState {
     public volatile int routeProgressPathSize = -1;
     /** Wall-clock ms when route progress last advanced. */
     public volatile long routeProgressAdvancedAtMs = 0L;
+    /** Stagnation replans this walk has spent (TailDecision.decideRouteStagnation). */
+    public volatile int stagnationReplansSpent = 0;
+    /** Furthest raw-path index the player has stood at on the current route; -1 when none. */
+    public volatile int rawProgressHighIdx = -1;
 
     // ---- interim target: a reachable point clicked toward when the true next tile is off the minimap;
     // held until the player gets close or progress stalls. ----
@@ -81,37 +103,42 @@ public final class WalkerRouteState {
     public volatile WorldPoint lastPosition = null;
     /** Wall-clock ms the player last changed tiles (or a click granted grace). */
     public volatile long lastMovedTimeMs = 0L;
+    /**
+     * Wall-clock ms the player last actually CHANGED TILE — no click grace, no pose, no animation.
+     *
+     * <p>Distinct from {@link #lastMovedTimeMs}, which several places refresh to buy grace and which
+     * therefore cannot answer "is the player really covering ground". This one only ever moves when
+     * the observed tile differs from the previous sample, which is what makes it a usable check on
+     * the pose-based movement flag.
+     */
+    public volatile long lastTileChangeAtMs = 0L;
     /** Rising-edge detection for animation progress without tile delta in the stuck check. */
     public volatile boolean prevAnimatingForStuckCheck = false;
     /** Wall-clock ms of the last walled-recovery replan (cooldown selects replan vs wait). */
     public volatile long lastWalledRecoveryReplanAtMs = 0L;
     /** Cooldown so partial-segment in-transit path recalculation does not spam. */
     public volatile long lastPartialTransRecalcMs = 0L;
+    /**
+     * The route edge the walled-click net most recently refused BECAUSE a scene door sits on it
+     * ({@code walled_edge_not_learned}). Replanning cannot help there — the planner's graph crosses
+     * that door, so it returns the same route and the refusal loops (three identical replans over
+     * 24s at the Rogues' Den pub door). Recovery consumes this to approach the door instead.
+     */
+    public volatile WorldPoint walledDoorEdgeFrom = null;
+    public volatile WorldPoint walledDoorEdgeTo = null;
+    public volatile long walledDoorEdgeAtMs = 0L;
+    /** Immutable caller intent for this walk; currentTarget may temporarily become an effective rim. */
+    public volatile WorldPoint requestedGoal = null;
+    /** Sealed-goal rim retargets consumed this walk; bounds the chain (a rim tile can itself probe sealed). */
+    public volatile int sealedRimRetargets = 0;
 
-    // ---- door interaction: settle windows, focused-door raw-scan state, attempt tracking and
-    // cooldowns shared by the door cascade, the recovery block and the movement-ownership check. ----
+    // ---- door interaction (D3 slice 4: settle window, raw-scan focus, pass budget and the global
+    // cooldown migrated to DoorAttemptLedger; the diagnostics timestamps below remain). ----
 
-    /** Path index of the door the raw scene scan is currently focused on; null when none. */
-    public volatile Integer rawScanFocusedDoorIdx = null;
-    /** Wall-clock ms the focused door was selected. */
-    public volatile long rawScanFocusedDoorSetAtMs = 0L;
-    /** Interaction attempts spent on the focused door so far. */
-    public volatile int rawScanFocusedDoorAttempts = 0;
-    /** Door settle window ceiling; 0 when no settle is pending. */
-    public volatile long doorInteractionSettleUntilMs = 0L;
-    /** When the current door settle window started, and the door's far-side tile — the early-exit signal. */
-    public volatile long doorInteractionSettleStartedAtMs = 0L;
-    public volatile WorldPoint doorSettleFarSideWp = null;
     /** Wall-clock ms a door-edge pass was last skipped (per-edge cooldown diagnostics). */
     public volatile long lastDoorEdgePassSkipAtMs = 0L;
     /** Cooldown for the expensive path-adjacent door scan on unreachable tiles. */
     public volatile long lastDoorPathAdjAttemptAtMs = 0L;
-    /** Origin/destination/time of the last door interaction attempt (wrong-traversal detection reads these). */
-    public volatile WorldPoint lastDoorAttemptFrom = null;
-    public volatile WorldPoint lastDoorAttemptTo = null;
-    public volatile long lastDoorAttemptAtMs = 0L;
-    /** Global door-interaction throttle: no door interaction may fire before this wall-clock ms. */
-    public volatile long nextDoorInteractionAllowedAtMs = 0L;
     /**
      * When the walker first held off a door interaction because an option menu was open; 0 when no
      * such hold-off is active. Bounds the wait so an unanswered conversation cannot stall the walk.

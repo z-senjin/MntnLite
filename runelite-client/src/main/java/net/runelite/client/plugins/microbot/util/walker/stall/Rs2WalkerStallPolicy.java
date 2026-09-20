@@ -31,6 +31,35 @@ public final class Rs2WalkerStallPolicy {
     }
 
     /**
+     * Whether the pose-based movement flag may be credited as route progress.
+     *
+     * <p>{@code Rs2Player.isMoving()} compares the pose animation against the idle pose, so it reads
+     * TRUE while the player merely TURNS ON THE SPOT. Stall accounting credited that as progress and
+     * refreshed the clock, so a player wedged against a wall or a door who kept re-facing it could
+     * never be declared stuck — the one state the stall detector exists to catch.
+     *
+     * <p>Requiring a tile change outright would be worse: a walking step takes ~600ms and the check
+     * samples faster than that, so "same tile as last sample" is the normal state of a healthy walk.
+     * The question is not whether the tile changed since the last sample but whether it has changed
+     * at all RECENTLY — walking changes tile continuously, spinning never does.
+     *
+     * @param sinceTileChangeMs ms since the player last actually changed tile; negative when unknown,
+     *                          which is treated as "cannot disprove movement" and credits the pose
+     */
+    public static boolean poseCountsAsProgress(boolean poseMoving,
+                                               boolean nearPath,
+                                               long sinceTileChangeMs,
+                                               long tileChangeWindowMs) {
+        if (!poseMoving || !nearPath) {
+            return false;
+        }
+        if (sinceTileChangeMs < 0L) {
+            return true;
+        }
+        return sinceTileChangeMs < tileChangeWindowMs;
+    }
+
+    /**
      * Computes the stall threshold by multiplying {@code baseMs} by the maximum applicable multiplier.
      * Result uses {@link Math#round(double)}.
      *

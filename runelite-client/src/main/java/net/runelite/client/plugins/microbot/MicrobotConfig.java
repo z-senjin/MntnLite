@@ -230,4 +230,46 @@ public interface MicrobotConfig extends Config
 	default boolean disableTelemetry() {
 		return false;
 	}
+
+	String keyDisableInputYielding = "disableInputYielding";
+	@ConfigItem(
+		keyName = keyDisableInputYielding,
+		name = "Disable input yielding",
+		description = "Stop scripts pausing when you use the real mouse or keyboard on the game canvas. " +
+				"Enabled by default; turn this off to opt into human-input yielding.",
+		position = 7,
+		section = generalSection
+	)
+	default boolean disableInputYielding()
+	{
+		return true;
+	}
+
+	String keyInputMotionThresholdPx = "inputMotionThresholdPx";
+	@ConfigItem(
+		keyName = keyInputMotionThresholdPx,
+		name = "Input yield: motion threshold",
+		description = "How far the real mouse must move, in pixels from where the bot last put it, before scripts yield. " +
+				"Lower reacts sooner and risks yielding on an accidental nudge.",
+		position = 8,
+		section = generalSection
+	)
+	default int inputMotionThresholdPx()
+	{
+		return 10;
+	}
+
+	String keyInputIdleResumeMs = "inputIdleResumeMs";
+	@ConfigItem(
+		keyName = keyInputIdleResumeMs,
+		name = "Input yield: resume delay (ms)",
+		description = "How long the real mouse and keyboard must stay quiet before scripts resume. " +
+				"Never resumes while you are holding a button or key, whatever this is set to.",
+		position = 9,
+		section = generalSection
+	)
+	default int inputIdleResumeMs()
+	{
+		return 1800;
+	}
 }

@@ -5,11 +5,15 @@ import net.runelite.api.Perspective;
 import net.runelite.api.Point;
 import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.client.plugins.microbot.util.input.InputArbiter;
+import net.runelite.client.plugins.microbot.util.input.InputDiagnostics;
 import net.runelite.client.plugins.microbot.util.player.Rs2Player;
 import net.runelite.client.plugins.microbot.util.tile.Rs2Tile;
 import net.runelite.client.ui.overlay.OverlayPanel;
 import net.runelite.client.ui.overlay.OverlayPosition;
 import net.runelite.client.ui.overlay.OverlayUtil;
+import net.runelite.client.ui.overlay.components.LineComponent;
+import net.runelite.client.ui.overlay.components.TitleComponent;
 
 import javax.annotation.Nullable;
 import javax.inject.Inject;
@@ -30,7 +34,29 @@ public class MicrobotOverlay extends OverlayPanel {
 
     @Override
     public Dimension render(Graphics2D graphics) {
-        panelComponent.setPreferredSize(new Dimension(200, 300));
+        panelComponent.setPreferredSize(new Dimension(InputDiagnostics.isEnabled() ? 260 : 200, 300));
+        panelComponent.getChildren().clear();
+
+        // A silent pause is indistinguishable from a crash. Empty, and so invisible, otherwise.
+        if (InputArbiter.isHuman()) {
+            panelComponent.getChildren().add(TitleComponent.builder()
+                    .text("Paused for your input")
+                    .color(Color.YELLOW)
+                    .build());
+        }
+
+        if (InputDiagnostics.isEnabled()) {
+            panelComponent.getChildren().add(TitleComponent.builder()
+                    .text("input")
+                    .color(Color.WHITE)
+                    .build());
+            for (Map.Entry<String, String> row : InputDiagnostics.readout().entrySet()) {
+                panelComponent.getChildren().add(LineComponent.builder()
+                        .left(row.getKey())
+                        .right(row.getValue())
+                        .build());
+            }
+        }
 
         for (Map.Entry<WorldPoint, Integer> dangerousTile : Rs2Tile.getDangerousGraphicsObjectTiles().entrySet()) {
             drawTile(graphics, dangerousTile.getKey(), Color.RED, dangerousTile.getValue().toString());

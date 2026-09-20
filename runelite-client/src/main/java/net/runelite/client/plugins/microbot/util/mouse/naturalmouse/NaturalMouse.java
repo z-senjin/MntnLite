@@ -154,17 +154,28 @@ public class NaturalMouse {
      *                         0.0 and 0.99; use values representing a whole percentage (e.g., 25.0, 50.0).
      */
     public void moveOffScreen(double chancePercentage) {
-        if (chancePercentage >= 100 || Rs2Random.dicePercentage(chancePercentage)) {
-            // Move off screen if the chance is met
-            int horizontal = random.nextBoolean() ? -1 : client.getCanvasWidth() + 1;
-            int vertical = random.nextBoolean() ? -1 : client.getCanvasHeight() + 1;
+        if (chancePercentage < 100 && !Rs2Random.dicePercentage(chancePercentage)) {
+            return;
+        }
 
-            boolean exitHorizontally = random.nextBoolean();
-            if (exitHorizontally) {
-                moveTo(horizontal, random.nextInt(0, client.getCanvasHeight() + 1));
-            } else {
-                moveTo(random.nextInt(0, client.getCanvasWidth() + 1), vertical);
-            }
+        int horizontal = random.nextBoolean() ? -1 : client.getCanvasWidth() + 1;
+        int vertical = random.nextBoolean() ? -1 : client.getCanvasHeight() + 1;
+
+        boolean exitHorizontally = random.nextBoolean();
+        int targetX = exitHorizontally ? horizontal : random.nextInt(0, client.getCanvasWidth() + 1);
+        int targetY = exitHorizontally ? random.nextInt(0, client.getCanvasHeight() + 1) : vertical;
+
+        Runnable travelThenCross = () -> {
+            // MouseMotion clamps to the canvas, so this reaches the edge and the next call crosses.
+            move(targetX, targetY);
+            Microbot.getMouse().move(targetX, targetY);
+        };
+
+        // One task: moveTo is async on the client thread, where two calls would cross first.
+        if (Microbot.getClient().isClientThread()) {
+            executorService.submit(travelThenCross);
+        } else {
+            travelThenCross.run();
         }
     }
 

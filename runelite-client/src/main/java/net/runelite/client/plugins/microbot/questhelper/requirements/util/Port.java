@@ -66,6 +66,7 @@ public enum Port
 //	, PRIFDDINAS(-1, "Prifddinas", ObjectID.SAILING_DOCKING_BUOY_PRIFDDINAS, null, null, null, null, ObjectID.PORT_TASK_BOARD_PRIFDDINAS, null)
 //	, PISCATORIS(-1, "Piscatoris", ObjectID.SAILING_DOCKING_BUOY_PISCATORIS, null, null, null, null, -1, null)
 //	, LUNAR_ISLE(-1, "Lunar Isle", ObjectID.SAILING_DOCKING_BUOY_LUNAR_ISLE, null, null, null, null, ObjectID.PORT_TASK_BOARD_LUNAR_ISLE, null)
+	, WYRMSCRAIG(-1, "Wyrmscraig", ObjectID.SAILING_DOCKING_BUOY_WYRMSCRAIG, new WorldPoint(2569, 2298, 0), new Zone(new WorldPoint(2557, 2284, 0), new WorldPoint(2577, 2306, 0)), new WorldPoint(2568, 2295, 0), null, -1, null)
 	;
 
 

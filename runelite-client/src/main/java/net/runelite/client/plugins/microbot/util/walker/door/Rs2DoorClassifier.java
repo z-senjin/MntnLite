@@ -17,7 +17,7 @@ import net.runelite.api.ObjectComposition;
 public final class Rs2DoorClassifier {
 
     private static final String[] DOOR_LIKE_NAME_FRAGMENTS = {
-            "door", "gate", "barrier", "stile", "portcullis", "archway", "cattlegate", "fence"
+            "door", "gate", "barrier", "stile", "portcullis", "archway", "cattlegate", "fence", "curtain"
     };
 
     /** {@code fence} must be whole-word — substring matches {@code defence} ("fence" inside) otherwise. */
@@ -29,7 +29,42 @@ public final class Rs2DoorClassifier {
             "push", "climb-over", "climb-through", "squeeze-through", "cross", "force", "exit"
     );
 
+    /**
+     * Actions that carry the player ACROSS the obstacle rather than opening an edge in it.
+     *
+     * <p>The distinction decides who owns the crossing. The door cascade's completion contract is
+     * "the blocked edge became passable" — it clicks, then waits for the edge to open. A stile never
+     * opens: you climb over it and end up on the far side, so that wait can only ever time out.
+     *
+     * <p>Measured near Ardougne: a Stile at (2637,3350) with action Climb-over classified as a door
+     * on its name, was taken by the door cascade, logged {@code door_edge_post_unresolved}, and cost
+     * twenty seconds of refused clicks, a recovery wander and a replan before the transport handler
+     * finally crossed it in one action. See {@code walker-transport-doors}: moves-you obstacles are
+     * their own class and belong to the transport handler.
+     */
+    private static final List<String> MOVES_YOU_ACTIONS = List.of(
+            "climb-over", "climb-through", "squeeze-through", "cross"
+    );
+
     private Rs2DoorClassifier() {
+    }
+
+    /**
+     * Whether {@code action} moves the player across the obstacle instead of opening it.
+     *
+     * @see #MOVES_YOU_ACTIONS
+     */
+    public static boolean isMovesYouAction(String action) {
+        if (action == null) {
+            return false;
+        }
+        String al = action.toLowerCase(Locale.ROOT).trim();
+        for (String movesYou : MOVES_YOU_ACTIONS) {
+            if (al.startsWith(movesYou)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public static boolean isNullOrPlaceholderObjectName(String name) {
@@ -110,6 +145,48 @@ public final class Rs2DoorClassifier {
             }
         }
         return false;
+    }
+
+    /**
+     * Actions whose VERB alone proves traversal — a chest never says Walk-through. Deliberately
+     * excludes open/enter/push/force/exit, which scenery shares (Open on a chest, Enter on a cave).
+     */
+    private static final List<String> TRAVERSAL_PROOF_ACTIONS = List.of(
+            "pay-toll", "pick-lock", "walk-through", "go-through", "pass"
+    );
+
+    public static boolean isTraversalProofAction(String action) {
+        if (action == null) {
+            return false;
+        }
+        String al = action.toLowerCase(Locale.ROOT).trim();
+        for (String t : TRAVERSAL_PROOF_ACTIONS) {
+            if (al.startsWith(t)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Route-door classification — the decide table's first column (D3 requirement #3).
+     *
+     * <p>WALL objects: any walk action proves doorhood — a wall that opens is a door, whatever its
+     * name (unchanged semantics).
+     *
+     * <p>GAME objects: the NAME must prove doorhood, or the ACTION must be traversal-proof. Bare
+     * Open/Enter/Push on a non-door name is scenery: the Gift of Peace chest (Stronghold,
+     * 2026-08-13) was Open-clicked as a route door en route, costing 7-9s of failed traversal per
+     * encounter — and any Open-actioned coffin, cupboard or sarcophagus on a route segment would do
+     * the same. Large double gates ARE GameObjects, which is why the rule is name-or-verb rather
+     * than a flat name filter.
+     */
+    public static boolean isRouteDoorObject(boolean wallObject, String name, String walkAction) {
+        if (wallObject) {
+            return isDoorLikeGameObjectName(name)
+                    || (walkAction != null && doorActionPriorityIndex(walkAction) < Integer.MAX_VALUE);
+        }
+        return isDoorLikeGameObjectName(name) || isTraversalProofAction(walkAction);
     }
 
     /** Whether a (real, non-impostor) composition exposes one of {@code doorActions}. */

@@ -21,6 +21,12 @@ Config UI uses the custom `MicrobotConfigPanel` (`plugins/microbot/ui`), not Run
 
 Check `docs/entity-guides/README.md` before modifying anything under `util/` — each entity type has documented footguns.
 
+## Waits and multi-action helpers
+- **A wait that returned is not a wait that succeeded.** Every `sleepUntil*` ends early on a timeout, an interrupt, or a human taking over. Discarding the result means acting as though the previous game action landed when nothing observed that.
+- **Never report success you did not observe.** A helper returning `true` unconditionally after a wait leaves its caller no way to find out.
+- **A helper spanning more than one game action exposes a step.** The game is a remote asynchronous server, so no sequence of actions can be made atomic; the only option is re-deriving from observed state, which the 600ms `Script.run()` tick already does. A helper blocking for seconds is reimplementing that loop inside one iteration of it.
+- Copy `Rs2Walker`: `walkStep` issues one click and returns a `WalkerState`, with the blocking `walkTo` built on top. The enum matters as much as the split, since `if (walkStep(...))` does not compile while `if (someBooleanHelper(...))` silently discards the answer.
+
 ## Scripts
 - Extend `Script` (or `StateMachineScript<S>` for 3+ phase scripts — see `statemachine/AGENTS.md`).
 - Implement `run(TConfig)`; return `true` to signal successful start.

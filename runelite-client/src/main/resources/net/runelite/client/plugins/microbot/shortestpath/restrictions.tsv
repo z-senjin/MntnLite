@@ -1,8 +1,8 @@
 # Origin	Item IDs	Quests	Skills	isMembers	Varbits	Varplayers
-# Varrock museum						
-3265 3442 0						
-3264 3442 0						
-3261 3446 0						
+# Varrock museum south doors + interior gate were unconditionally restricted here (Feb 2025,
+# bulk commit, no stated reason) which made every interior target unroutable — the Kudos museum
+# script's interactions all dead-ended at the gate. The doors are ordinary openable scene doors
+# the runtime handles; restrictions removed 2026-08-08.
 # Gate between digsite and varrock						
 3296 3429 0					3637>152	
 3296 3428 0					3637>152	

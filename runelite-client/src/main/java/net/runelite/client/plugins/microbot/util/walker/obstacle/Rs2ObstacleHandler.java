@@ -70,7 +70,7 @@ public final class Rs2ObstacleHandler {
         if (path == null || path.isEmpty() || index < 0 || index >= path.size()) {
             return RockfallResult.NOT_APPLICABLE;
         }
-        if (Rs2PathApi.getPathfinder() == null) return RockfallResult.NOT_APPLICABLE;
+        if (!Rs2PathApi.getActiveRouteStatus().isPresent()) return RockfallResult.NOT_APPLICABLE;
 
         if (index == path.size() - 1) return RockfallResult.NOT_APPLICABLE;
 

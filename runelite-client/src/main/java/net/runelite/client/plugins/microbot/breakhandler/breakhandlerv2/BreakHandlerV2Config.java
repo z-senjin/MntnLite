@@ -66,6 +66,124 @@ public interface BreakHandlerV2Config extends Config {
         return 15;
     }
 
+    @ConfigItem(
+        keyName = "enableLongBreaks",
+        name = "Enable Long Breaks",
+        description = "Enable a second independent long-break timer",
+        position = 4,
+        section = breakTimingSettings
+    )
+    default boolean enableLongBreaks() {
+        return false;
+    }
+
+    @ConfigItem(
+        keyName = "minLongBreakInterval",
+        name = "Min Long Break Interval (minutes)",
+        description = "Minimum time to play before a long break can trigger",
+        position = 5,
+        section = breakTimingSettings
+    )
+    @Range(min = 1, max = 600)
+    default int minLongBreakInterval() {
+        return 120;
+    }
+
+    @ConfigItem(
+        keyName = "maxLongBreakInterval",
+        name = "Max Long Break Interval (minutes)",
+        description = "Maximum time to play before a long break can trigger",
+        position = 6,
+        section = breakTimingSettings
+    )
+    @Range(min = 1, max = 600)
+    default int maxLongBreakInterval() {
+        return 180;
+    }
+
+    @ConfigItem(
+        keyName = "minLongBreakDuration",
+        name = "Min Long Break Duration (minutes)",
+        description = "Minimum long-break duration",
+        position = 7,
+        section = breakTimingSettings
+    )
+    @Range(min = 1, max = 600)
+    default int minLongBreakDuration() {
+        return 8;
+    }
+
+    @ConfigItem(
+        keyName = "maxLongBreakDuration",
+        name = "Max Long Break Duration (minutes)",
+        description = "Maximum long-break duration",
+        position = 8,
+        section = breakTimingSettings
+    )
+    @Range(min = 1, max = 600)
+    default int maxLongBreakDuration() {
+        return 11;
+    }
+
+    @ConfigItem(
+        keyName = "enableMegaBreaks",
+        name = "Enable Mega Breaks",
+        description = "Enable a third independent mega-break timer",
+        position = 9,
+        section = breakTimingSettings
+    )
+    default boolean enableMegaBreaks() {
+        return false;
+    }
+
+    @ConfigItem(
+        keyName = "minMegaBreakInterval",
+        name = "Min Mega Break Interval (minutes)",
+        description = "Minimum time to play before a mega break can trigger",
+        position = 10,
+        section = breakTimingSettings
+    )
+    @Range(min = 1, max = 600)
+    default int minMegaBreakInterval() {
+        return 240;
+    }
+
+    @ConfigItem(
+        keyName = "maxMegaBreakInterval",
+        name = "Max Mega Break Interval (minutes)",
+        description = "Maximum time to play before a mega break can trigger",
+        position = 11,
+        section = breakTimingSettings
+    )
+    @Range(min = 1, max = 600)
+    default int maxMegaBreakInterval() {
+        return 360;
+    }
+
+    @ConfigItem(
+        keyName = "minMegaBreakDuration",
+        name = "Min Mega Break Duration (minutes)",
+        description = "Minimum mega-break duration",
+        position = 12,
+        section = breakTimingSettings
+    )
+    @Range(min = 1, max = 600)
+    default int minMegaBreakDuration() {
+        return 20;
+    }
+
+    @ConfigItem(
+        keyName = "maxMegaBreakDuration",
+        name = "Max Mega Break Duration (minutes)",
+        description = "Maximum mega-break duration",
+        position = 13,
+        section = breakTimingSettings
+    )
+    @Range(min = 1, max = 600)
+    default int maxMegaBreakDuration() {
+        return 30;
+    }
+
     // ========== BREAK BEHAVIOR SECTION ==========
     @ConfigSection(
         name = "Break Behavior",

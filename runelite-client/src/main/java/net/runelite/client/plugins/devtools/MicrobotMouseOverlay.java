@@ -5,6 +5,7 @@ import java.util.LinkedList;
 import net.runelite.api.Client;
 import net.runelite.api.Point;
 import net.runelite.client.plugins.microbot.Microbot;
+import net.runelite.client.plugins.microbot.util.input.PointerState;
 import net.runelite.client.ui.overlay.Overlay;
 import net.runelite.client.ui.overlay.OverlayLayer;
 import net.runelite.client.ui.overlay.OverlayPosition;
@@ -26,7 +27,9 @@ public class MicrobotMouseOverlay extends Overlay {
         this.client = client;
         this.plugin = plugin;
         setPosition(OverlayPosition.DYNAMIC);
-        setLayer(OverlayLayer.ABOVE_WIDGETS);
+        // Not ABOVE_WIDGETS: that layer is defined as "render under the right-click menu", so the
+        // crosshair vanished behind an open context menu. A real cursor draws above it.
+        setLayer(OverlayLayer.ALWAYS_ON_TOP);
         setPriority(Overlay.PRIORITY_LOW);
         setNaughty();
         // Increase the angle
@@ -51,7 +54,8 @@ public class MicrobotMouseOverlay extends Overlay {
 
     @Override
     public Dimension render(Graphics2D g) {
-        if (plugin.getMouseMovement().isActive()) {
+        Point cursor = botCursorPosition();
+        if (plugin.getMouseMovement().isActive() && cursor != null) {
             if (!Microbot.getMouse().getTimer().isRunning()) {
                 Microbot.getMouse().getPoints().clear();
                 Microbot.getMouse().getTimer().start();
@@ -124,9 +128,8 @@ public class MicrobotMouseOverlay extends Overlay {
 
 
             g2d.dispose();
-            // Mouse position
-            int x = Microbot.getMouse().getLastMove().getX();
-            int y = Microbot.getMouse().getLastMove().getY();
+            int x = cursor.getX();
+            int y = cursor.getY();
 
 
             // Draw the crosshair centered
@@ -198,5 +201,9 @@ public class MicrobotMouseOverlay extends Overlay {
         }
 
         return null;
+    }
+
+    static Point botCursorPosition() {
+        return PointerState.hasBotPoint() ? PointerState.lastBotPoint() : null;
     }
 }

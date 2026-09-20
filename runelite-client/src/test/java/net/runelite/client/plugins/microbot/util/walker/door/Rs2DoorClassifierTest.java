@@ -134,4 +134,44 @@ public class Rs2DoorClassifierTest {
         assertNull(Rs2DoorClassifier.getDoorAction(compWithActions("Examine", "Look-at"), doorActions));
         assertNull(Rs2DoorClassifier.getDoorAction(null, doorActions));
     }
+
+    // ---- route-door classification (D3 requirement #3 — the Gift of Peace lesson) ----
+    //
+    // An Open-actioned GameObject with a non-door name is scenery. The Stronghold's goal chest was
+    // Open-clicked as a route door en route (2026-08-13, 7-9s of failed traversal per encounter);
+    // the rule is name-or-traversal-verb because large double gates ARE GameObjects, so a flat name
+    // filter (the old segment-probe contains("door")) missed real doors while the flat action rule
+    // (the old segment-door site) admitted chests.
+
+    @Test
+    public void anOpenActionedChestIsNotARouteDoor() {
+        assertFalse(Rs2DoorClassifier.isRouteDoorObject(false, "Gift of Peace", "Open"));
+        assertFalse(Rs2DoorClassifier.isRouteDoorObject(false, "Sarcophagus", "Open"));
+        assertFalse(Rs2DoorClassifier.isRouteDoorObject(false, "Cupboard", "Open"));
+    }
+
+    @Test
+    public void aGameObjectGateIsARouteDoorByName() {
+        assertTrue(Rs2DoorClassifier.isRouteDoorObject(false, "Gate of War", "Open"));
+        assertTrue(Rs2DoorClassifier.isRouteDoorObject(false, "Temple door", "Open"));
+        assertTrue(Rs2DoorClassifier.isRouteDoorObject(false, "Curtain", "Open"));
+    }
+
+    @Test
+    public void aTraversalVerbProvesDoorhoodWhateverTheName() {
+        // Field entrances, tollgates and the like carry inherently-traversal verbs.
+        assertTrue(Rs2DoorClassifier.isRouteDoorObject(false, "Wheat", "Walk-through"));
+        assertTrue(Rs2DoorClassifier.isRouteDoorObject(false, "Ornate railing", "Pay-toll"));
+        assertFalse("Enter is scenery-shared, not traversal-proof",
+                Rs2DoorClassifier.isRouteDoorObject(false, "Cave entrance", "Enter"));
+    }
+
+    @Test
+    public void aWallThatOpensIsADoorWhateverItsName() {
+        // Unchanged wall semantics: quest walls with odd names still open.
+        assertTrue(Rs2DoorClassifier.isRouteDoorObject(true, "Oozing barrier", "Open"));
+        assertTrue(Rs2DoorClassifier.isRouteDoorObject(true, "Strange wall", "Push"));
+        assertFalse("an actionless, namelessly-non-door wall is still nothing",
+                Rs2DoorClassifier.isRouteDoorObject(true, "Wall", null));
+    }
 }

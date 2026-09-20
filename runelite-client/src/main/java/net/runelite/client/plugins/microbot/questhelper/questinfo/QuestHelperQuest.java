@@ -144,6 +144,7 @@ import net.runelite.client.plugins.microbot.questhelper.helpers.quests.ernestthe
 import net.runelite.client.plugins.microbot.questhelper.helpers.quests.ethicallyacquiredantiquities.EthicallyAcquiredAntiquities;
 import net.runelite.client.plugins.microbot.questhelper.helpers.quests.fairytalei.FairytaleI;
 import net.runelite.client.plugins.microbot.questhelper.helpers.quests.fairytaleii.FairytaleII;
+import net.runelite.client.plugins.microbot.questhelper.helpers.quests.fallenfromgrace.FallenFromGrace;
 import net.runelite.client.plugins.microbot.questhelper.helpers.quests.familycrest.FamilyCrest;
 import net.runelite.client.plugins.microbot.questhelper.helpers.quests.fightarena.FightArena;
 import net.runelite.client.plugins.microbot.questhelper.helpers.quests.fishingcontest.FishingContest;
@@ -228,6 +229,7 @@ import net.runelite.client.plugins.microbot.questhelper.helpers.quests.tearsofgu
 import net.runelite.client.plugins.microbot.questhelper.helpers.quests.templeofikov.TempleOfIkov;
 import net.runelite.client.plugins.microbot.questhelper.helpers.quests.templeoftheeye.TempleOfTheEye;
 import net.runelite.client.plugins.microbot.questhelper.helpers.quests.theascentofarceuus.TheAscentOfArceuus;
+import net.runelite.client.plugins.microbot.questhelper.helpers.quests.thebloodmoonrises.TheBloodMoonRises;
 import net.runelite.client.plugins.microbot.questhelper.helpers.quests.thecorsaircurse.TheCorsairCurse;
 import net.runelite.client.plugins.microbot.questhelper.helpers.quests.thecurseofarrav.TheCurseOfArrav;
 import net.runelite.client.plugins.microbot.questhelper.helpers.quests.thedepthsofdespair.TheDepthsOfDespair;
@@ -246,10 +248,12 @@ import net.runelite.client.plugins.microbot.questhelper.helpers.quests.thegrandt
 import net.runelite.client.plugins.microbot.questhelper.helpers.quests.thegreatbrainrobbery.TheGreatBrainRobbery;
 import net.runelite.client.plugins.microbot.questhelper.helpers.quests.thehandinthesand.TheHandInTheSand;
 import net.runelite.client.plugins.microbot.questhelper.helpers.quests.theheartofdarkness.TheHeartOfDarkness;
+import net.runelite.client.plugins.microbot.questhelper.helpers.quests.theidesofmilk.TheIdesOfMilk;
 import net.runelite.client.plugins.microbot.questhelper.helpers.quests.theknightssword.TheKnightsSword;
 import net.runelite.client.plugins.microbot.questhelper.helpers.quests.thelosttribe.TheLostTribe;
 import net.runelite.client.plugins.microbot.questhelper.helpers.quests.thepathofglouphrie.ThePathOfGlouphrie;
 import net.runelite.client.plugins.microbot.questhelper.helpers.quests.thequeenofthieves.TheQueenOfThieves;
+import net.runelite.client.plugins.microbot.questhelper.helpers.quests.theredreef.TheRedReef;
 import net.runelite.client.plugins.microbot.questhelper.helpers.quests.therestlessghost.TheRestlessGhost;
 import net.runelite.client.plugins.microbot.questhelper.helpers.quests.theribbitingtaleofalilypadlabourdispute.TheRibbitingTaleOfALilyPadLabourDispute;
 import net.runelite.client.plugins.microbot.questhelper.helpers.quests.theslugmenace.TheSlugMenace;
@@ -303,6 +307,7 @@ public enum QuestHelperQuest
 	ERNEST_THE_CHICKEN(new ErnestTheChicken(), Quest.ERNEST_THE_CHICKEN, QuestVarPlayer.QUEST_ERNEST_THE_CHICKEN, QuestDetails.Type.F2P, QuestDetails.Difficulty.NOVICE),
 	GOBLIN_DIPLOMACY(new GoblinDiplomacy(), Quest.GOBLIN_DIPLOMACY, QuestVarbits.QUEST_GOBLIN_DIPLOMACY, QuestDetails.Type.F2P, QuestDetails.Difficulty.NOVICE),
 	IMP_CATCHER(new ImpCatcher(), Quest.IMP_CATCHER, QuestVarPlayer.QUEST_IMP_CATCHER, QuestDetails.Type.F2P, QuestDetails.Difficulty.NOVICE),
+	THE_IDES_OF_MILK(new TheIdesOfMilk(), Quest.THE_IDES_OF_MILK, QuestVarbits.QUEST_THE_IDES_OF_MILK, QuestDetails.Type.F2P, QuestDetails.Difficulty.NOVICE),
 	THE_KNIGHTS_SWORD(new TheKnightsSword(), Quest.THE_KNIGHTS_SWORD, QuestVarPlayer.QUEST_THE_KNIGHTS_SWORD, QuestDetails.Type.F2P, QuestDetails.Difficulty.INTERMEDIATE),
 	MISTHALIN_MYSTERY(new MisthalinMystery(), Quest.MISTHALIN_MYSTERY, QuestVarbits.QUEST_MISTHALIN_MYSTERY, QuestDetails.Type.F2P, QuestDetails.Difficulty.NOVICE),
 	PIRATES_TREASURE(new PiratesTreasure(), Quest.PIRATES_TREASURE, QuestVarPlayer.QUEST_PIRATES_TREASURE, QuestDetails.Type.F2P, QuestDetails.Difficulty.NOVICE),
@@ -482,6 +487,9 @@ public enum QuestHelperQuest
 	PRYING_TIMES(new PryingTimes(), Quest.PRYING_TIMES, QuestVarbits.QUEST_PRYING_TIMES, QuestDetails.Type.P2P, QuestDetails.Difficulty.INTERMEDIATE),
 	CURRENT_AFFAIRS(new CurrentAffairs(), Quest.CURRENT_AFFAIRS, QuestVarbits.QUEST_CURRENT_AFFAIRS, QuestDetails.Type.P2P, QuestDetails.Difficulty.NOVICE),
 	TROUBLED_TORTUGANS(new TroubledTortugans(), Quest.TROUBLED_TORTUGANS, QuestVarbits.QUEST_TROUBLED_TORTUGANS, QuestDetails.Type.P2P, QuestDetails.Difficulty.EXPERIENCED),
+	THE_RED_REEF(new TheRedReef(), Quest.THE_RED_REEF, QuestVarbits.QUEST_THE_RED_REEF, QuestDetails.Type.P2P, QuestDetails.Difficulty.EXPERIENCED),
+	THE_BLOOD_MOON_RISES(new TheBloodMoonRises(), Quest.THE_BLOOD_MOON_RISES, QuestVarbits.QUEST_THE_BLOOD_MOON_RISES, QuestDetails.Type.P2P, QuestDetails.Difficulty.GRANDMASTER),
+	FALLEN_FROM_GRACE(new FallenFromGrace(), Quest.FALLEN_FROM_GRACE, QuestVarbits.QUEST_FALLEN_FROM_GRACE, QuestDetails.Type.P2P, QuestDetails.Difficulty.EXPERIENCED),
 	//Miniquests
 	ENTER_THE_ABYSS(new EnterTheAbyss(), Quest.ENTER_THE_ABYSS, QuestVarPlayer.QUEST_ENTER_THE_ABYSS, QuestDetails.Type.MINIQUEST, QuestDetails.Difficulty.MINIQUEST),
 	BEAR_YOUR_SOUL(new BearYourSoul(), Quest.BEAR_YOUR_SOUL, QuestVarbits.QUEST_BEAR_YOUR_SOUL, QuestDetails.Type.MINIQUEST, QuestDetails.Difficulty.MINIQUEST),

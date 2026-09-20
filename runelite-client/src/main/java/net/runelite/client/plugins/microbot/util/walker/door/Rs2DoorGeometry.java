@@ -19,6 +19,73 @@ public final class Rs2DoorGeometry {
         return isDoorOnSegment(object, object == null ? null : object.getWorldLocation(), fromWp, toWp);
     }
 
+    /**
+     * Whether {@code at} lies at or beyond the far side of the cardinal {@code from -> to} door edge,
+     * measured along the edge's own axis. This is the unambiguous "we are past the door" reading —
+     * unlike near-side proximity, which fires while still approaching. Door edges are cardinal;
+     * anything else answers false.
+     */
+    public static boolean crossedDoorAxis(WorldPoint from, WorldPoint to, WorldPoint at) {
+        if (from == null || to == null || at == null
+                || from.getPlane() != to.getPlane() || at.getPlane() != to.getPlane()) {
+            return false;
+        }
+        int dx = to.getX() - from.getX();
+        int dy = to.getY() - from.getY();
+        if (dx != 0 && dy == 0) {
+            int travelled = at.getX() - from.getX();
+            return dx > 0 ? travelled >= 1 : travelled <= -1;
+        }
+        if (dy != 0 && dx == 0) {
+            int travelled = at.getY() - from.getY();
+            return dy > 0 ? travelled >= 1 : travelled <= -1;
+        }
+        return false;
+    }
+
+    /**
+     * Whether {@code at} already stands on the FAR side of this wall door's face relative to
+     * {@code from} — the crossing the door exists to produce has happened, so clicking it again can
+     * only carry the player backward.
+     *
+     * <p>Anchored to the wall's own face rather than the route segment, unlike
+     * {@link #crossedDoorAxis}, which is cardinal-only and reads the segment. Both properties
+     * mattered at the Stronghold of Security's paired Gates of War (2026-08-12): the route step
+     * (1886,5244)->(1887,5243) was DIAGONAL, and the moves-you gate deposited the player at
+     * (1887,5244) — a tile off the planned to-tile — so the segment-based reading answered false
+     * while the raw scan's backtrack window kept re-finding the gate; each re-click carried the
+     * player back through it, a two-sided bounce every ~6 seconds.
+     *
+     * <p>Corner walls (orientation 16..128) answer false: their face does not divide the plane
+     * along a single axis.
+     *
+     * @param orientationA the wall's {@code getOrientationA()}: 1=west, 2=north, 4=east, 8=south
+     */
+    public static boolean playerBeyondWallFace(int orientationA, WorldPoint wallTile,
+                                               WorldPoint from, WorldPoint at) {
+        if (wallTile == null || from == null || at == null
+                || wallTile.getPlane() != from.getPlane() || at.getPlane() != from.getPlane()) {
+            return false;
+        }
+        switch (orientationA) {
+            case 1: // west face: boundary between x = wallTile.x-1 and x = wallTile.x
+                return sidesDiffer(from.getX(), at.getX(), wallTile.getX());
+            case 4: // east face: boundary between x = wallTile.x and x = wallTile.x+1
+                return sidesDiffer(from.getX(), at.getX(), wallTile.getX() + 1);
+            case 2: // north face: boundary between y = wallTile.y and y = wallTile.y+1
+                return sidesDiffer(from.getY(), at.getY(), wallTile.getY() + 1);
+            case 8: // south face: boundary between y = wallTile.y-1 and y = wallTile.y
+                return sidesDiffer(from.getY(), at.getY(), wallTile.getY());
+            default:
+                return false;
+        }
+    }
+
+    /** Opposite sides of the boundary that lies just before {@code boundary} ({@code >=} vs {@code <}). */
+    private static boolean sidesDiffer(int a, int b, int boundary) {
+        return (a >= boundary) != (b >= boundary);
+    }
+
     /** As above, with the object's location supplied (see {@link #wallDoorTouchesSegment}). */
     public static boolean isDoorOnSegment(TileObject object, WorldPoint objectLocation,
                                           WorldPoint fromWp, WorldPoint toWp) {

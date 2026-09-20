@@ -44,6 +44,80 @@ public final class LiveCollisionConflicts {
         }
     }
 
+    /**
+     * How much of this scene's disagreement with the shipped map the accumulated overlay ALREADY knew.
+     * <p>
+     * {@link Tally} answers "how wrong is the static map here", which is the disease, not the treatment —
+     * it compares live against STATIC and reads identically whether or not the persistent store is doing
+     * its job. This answers the question that actually matters once persistence exists: on arriving
+     * somewhere, had we already learned it on a previous visit?
+     */
+    public static final class Coverage {
+        /** Static was wrong and the overlay already had the right answer — a previous visit paid off. */
+        public final int alreadyKnown;
+        /** Static was wrong and the overlay had nothing — the blind first visit this store exists to end. */
+        public final int newInformation;
+        /** The overlay had a DIFFERENT value than this capture: world changed, or stale learning. */
+        public final int changed;
+
+        Coverage(int alreadyKnown, int newInformation, int changed) {
+            this.alreadyKnown = alreadyKnown;
+            this.newInformation = newInformation;
+            this.changed = changed;
+        }
+
+        public int total() {
+            return alreadyKnown + newInformation + changed;
+        }
+
+        /** Percentage of this scene's static-map errors already covered before arriving. 0 when nothing conflicts. */
+        public int alreadyKnownPercent() {
+            final int t = total();
+            return t == 0 ? 0 : (int) Math.round(100.0 * alreadyKnown / t);
+        }
+    }
+
+    /**
+     * Compares the capture against the overlay as it stood BEFORE this scene was merged in.
+     *
+     * @param priorView the overlay view pinned before the merge; {@code null} means nothing was learned
+     *                  yet, so every disagreement counts as new information
+     */
+    public static Coverage coverage(LiveCollisionSnapshot snapshot, SplitFlagMap staticMap,
+                                    LiveCollisionView priorView) {
+        if (snapshot == null || staticMap == null) {
+            return new Coverage(0, 0, 0);
+        }
+        int alreadyKnown = 0;
+        int newInformation = 0;
+        int changed = 0;
+        final int baseX = snapshot.getBaseX();
+        final int baseY = snapshot.getBaseY();
+        for (int z = 0; z < snapshot.getPlaneCount(); z++) {
+            for (int ly = 0; ly < SCENE_SIZE; ly++) {
+                for (int lx = 0; lx < SCENE_SIZE; lx++) {
+                    final int x = baseX + lx;
+                    final int y = baseY + ly;
+                    for (int flag = LiveCollisionSnapshot.FLAG_NORTH; flag <= LiveCollisionSnapshot.FLAG_EAST; flag++) {
+                        final Boolean live = snapshot.edge(x, y, z, flag);
+                        if (live == null || live == staticMap.get(x, y, z, flag)) {
+                            continue; // unknown, or static was right — nothing for the store to carry
+                        }
+                        final Boolean known = priorView == null ? null : priorView.edge(x, y, z, flag);
+                        if (known == null) {
+                            newInformation++;
+                        } else if (known.equals(live)) {
+                            alreadyKnown++;
+                        } else {
+                            changed++;
+                        }
+                    }
+                }
+            }
+        }
+        return new Coverage(alreadyKnown, newInformation, changed);
+    }
+
     private LiveCollisionConflicts() {
     }
 

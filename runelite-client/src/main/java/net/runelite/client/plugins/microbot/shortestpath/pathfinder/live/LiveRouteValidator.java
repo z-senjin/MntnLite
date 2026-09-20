@@ -4,6 +4,7 @@ import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.plugins.microbot.shortestpath.pathfinder.CollisionMap;
 
 import java.util.List;
+import java.util.function.BiPredicate;
 
 /**
  * Validates the walking steps of an in-progress route against a {@link CollisionMap}, so the walker can
@@ -50,6 +51,21 @@ public final class LiveRouteValidator {
      * route is clear. Caller must have pinned the map's snapshot ({@link CollisionMap#beginSearch()}).
      */
     public static int firstBlockedStep(List<WorldPoint> path, int fromIndex, int lookahead, CollisionMap map) {
+        return firstBlockedStep(path, fromIndex, lookahead, map, null);
+    }
+
+    /**
+     * @param transportStep answers whether the {@code a -> b} step was planned as a CATALOG TRANSPORT.
+     *                      The plane/adjacency heuristics above cannot see one class of transport: a
+     *                      door transport joins two ADJACENT SAME-PLANE tiles, so its step is
+     *                      indistinguishable from walking — and while shut it reads as blocked, which
+     *                      made this validator recalculate the route out from under the walker as it
+     *                      stood at the door handling it (observed twice, both catalog transport
+     *                      doors). A transport edge's "blocked" is its normal shut state; the runtime
+     *                      executor owns it, and it is never this validator's business.
+     */
+    public static int firstBlockedStep(List<WorldPoint> path, int fromIndex, int lookahead, CollisionMap map,
+                                       BiPredicate<WorldPoint, WorldPoint> transportStep) {
         if (path == null || map == null) {
             return -1;
         }
@@ -67,6 +83,9 @@ public final class LiveRouteValidator {
             }
             if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
                 continue; // non-adjacent: a transport jump, not a walking step
+            }
+            if (transportStep != null && transportStep.test(a, b)) {
+                continue; // planned door-transport edge: shut is its normal state, the executor owns it
             }
             if (!map.canStep(a.getX(), a.getY(), a.getPlane(), dx, dy)) {
                 return i;

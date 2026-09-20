@@ -1,4 +1,5 @@
 package net.runelite.client.plugins.microbot.util.walker;
+import net.runelite.client.plugins.microbot.util.walker.stall.Rs2WalkerStallPolicy;
 import net.runelite.client.plugins.microbot.util.walker.geometry.WalkerPathGeometry;
 import net.runelite.client.plugins.microbot.util.walker.obstacle.Rs2ObstacleHandler;
 import net.runelite.client.plugins.microbot.util.walker.recovery.RouteRecovery;
@@ -6,9 +7,9 @@ import net.runelite.client.plugins.microbot.util.walker.door.Rs2DoorGeometry;
 
 import net.runelite.api.WallObject;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.gameval.InterfaceID;
 import net.runelite.client.plugins.microbot.shortestpath.Transport;
 import net.runelite.client.plugins.microbot.shortestpath.TransportType;
-import net.runelite.client.plugins.microbot.shortestpath.pathfinder.Pathfinder;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -20,6 +21,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Predicate;
 
 import static org.junit.Assert.assertEquals;
@@ -32,7 +34,6 @@ import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -47,22 +48,373 @@ import static org.mockito.Mockito.when;
  */
 public class Rs2WalkerUnitTest {
 
+    @Test
+    public void teleportItemLeafActionSupportsNestedUpstreamLabels() {
+        assertEquals("rimmington",
+                Rs2WalkerTransports.teleportItemLeafAction("Max cape: POH Portals: Rimmington"));
+        assertEquals("fishing guild",
+                Rs2WalkerTransports.teleportItemLeafAction("Max cape: Fishing Teleports: Fishing Guild"));
+        assertEquals("teleport",
+                Rs2WalkerTransports.teleportItemLeafAction("Quest point cape: Teleport"));
+        assertEquals("chronicle", Rs2WalkerTransports.teleportItemLeafAction("Chronicle"));
+        assertEquals("", Rs2WalkerTransports.teleportItemLeafAction(null));
+    }
+
+    @Test
+    public void teleportWildernessLimitIsInclusiveWithoutOffByOne() {
+        assertTrue(Rs2WalkerTransports.isTeleportAllowedAtWildernessLevel(20, 20));
+        assertFalse(Rs2WalkerTransports.isTeleportAllowedAtWildernessLevel(21, 20));
+    }
+
+    @Test
+    public void quetzalDestinationLabelsUseCurrentLandingAndMapText() {
+        assertEquals("Quetzacalli Gorge",
+                Rs2WalkerTransports.quetzalMapLabelForDestination(new WorldPoint(1510, 3222, 0)));
+        assertEquals("Cam Torum",
+                Rs2WalkerTransports.quetzalMapLabelForDestination(new WorldPoint(1446, 3108, 0)));
+    }
+
+    @Test
+    public void terminalTravelTransport_onlyMatchesShipNpcAndBoat() {
+        assertTrue(Rs2WalkerTransports.isTerminalTravelTransport(TransportType.SHIP));
+        assertTrue(Rs2WalkerTransports.isTerminalTravelTransport(TransportType.NPC));
+        assertTrue(Rs2WalkerTransports.isTerminalTravelTransport(TransportType.BOAT));
+
+        assertFalse(Rs2WalkerTransports.isTerminalTravelTransport(TransportType.CHARTER_SHIP));
+        assertFalse(Rs2WalkerTransports.isTerminalTravelTransport(TransportType.TRANSPORT));
+        assertFalse(Rs2WalkerTransports.isTerminalTravelTransport(null));
+    }
+
+    /**
+     * The direct-travel early release (Mountain Guide burned the whole 5s dialogue wait standing
+     * at Auburn Valley): landed means moved-from-start AND at the destination, same plane.
+     */
+    @Test
+    public void terminalLanding_requiresMovementPlusDestinationProximityOnTheSamePlane() {
+        WorldPoint dest = new WorldPoint(1700, 3141, 0);
+        WorldPoint origin = new WorldPoint(3280, 3412, 0);
+
+        assertTrue("landed at the exact destination after travelling",
+                Rs2WalkerTransports.hasLandedAtTerminalDestination(dest, origin, dest));
+        assertTrue("the landing AREA counts: the guide dropped the player 4 tiles from the tile",
+                Rs2WalkerTransports.hasLandedAtTerminalDestination(new WorldPoint(1704, 3141, 0), origin, dest));
+        assertFalse("6 tiles out is not landed",
+                Rs2WalkerTransports.hasLandedAtTerminalDestination(new WorldPoint(1706, 3141, 0), origin, dest));
+        assertFalse("still standing where the wait began proves nothing (short-crossing guard)",
+                Rs2WalkerTransports.hasLandedAtTerminalDestination(dest, dest, dest));
+        assertFalse("a short crossing: stepping about near an origin beside the destination must "
+                        + "not release — the player has not closed distance on the destination",
+                Rs2WalkerTransports.hasLandedAtTerminalDestination(
+                        new WorldPoint(1704, 3143, 0), new WorldPoint(1704, 3142, 0), dest));
+        assertFalse("wrong plane is not the destination",
+                Rs2WalkerTransports.hasLandedAtTerminalDestination(new WorldPoint(1700, 3141, 1), origin, dest));
+        assertFalse(Rs2WalkerTransports.hasLandedAtTerminalDestination(null, origin, dest));
+        assertFalse(Rs2WalkerTransports.hasLandedAtTerminalDestination(dest, origin, null));
+    }
+
+    @Test
+    public void terminalNpcInteractionCandidates_onlyFallbackForLegacyShipLabels() {
+        assertEquals(Arrays.asList("Musa Point", "Travel"),
+                Rs2WalkerTransports.terminalNpcInteractionCandidates(TransportType.SHIP, "Musa Point"));
+        assertEquals(Collections.singletonList("Travel"),
+                Rs2WalkerTransports.terminalNpcInteractionCandidates(TransportType.SHIP, "Travel"));
+        assertEquals(Collections.singletonList("Talk-to"),
+                Rs2WalkerTransports.terminalNpcInteractionCandidates(TransportType.SHIP, "Talk-to"));
+        assertEquals(Collections.singletonList("Follow"),
+                Rs2WalkerTransports.terminalNpcInteractionCandidates(TransportType.NPC, "Follow"));
+        assertTrue(Rs2WalkerTransports.terminalNpcInteractionCandidates(TransportType.NPC, null).isEmpty());
+    }
+
+    @Test
+    public void terminalTravelAttempt_isOncePerExactEdgeUntilWalkStateReset() {
+        Transport ship = portSarimToMusaShip();
+
+        assertTrue(Rs2WalkerTransports.markTerminalTravelAttempt(ship));
+        assertFalse(Rs2WalkerTransports.markTerminalTravelAttempt(ship));
+
+        Rs2Walker.clearWalkerDedupeForTesting();
+        assertTrue(Rs2WalkerTransports.markTerminalTravelAttempt(ship));
+    }
+
+    @Test
+    public void terminalTravelLanding_acceptsExactOrImmediateContinuationOnly() {
+        Transport ship = portSarimToMusaShip();
+        WorldPoint modernGroundLanding = new WorldPoint(2956, 3146, 0);
+        List<WorldPoint> modernPath = Arrays.asList(
+                ship.getOrigin(),
+                ship.getDestination(),
+                modernGroundLanding);
+
+        assertTrue(Rs2WalkerTransports.hasReachedTerminalTravelLanding(
+                ship, modernPath, 1, ship.getDestination()));
+        assertTrue(Rs2WalkerTransports.hasReachedTerminalTravelLanding(
+                ship, modernPath, 1, modernGroundLanding));
+        assertFalse("standing at the origin is not a completed trip",
+                Rs2WalkerTransports.hasReachedTerminalTravelLanding(ship, modernPath, 1, ship.getOrigin()));
+
+        List<WorldPoint> loopingPath = Arrays.asList(
+                ship.getOrigin(),
+                ship.getDestination(),
+                new WorldPoint(2957, 3143, 1),
+                modernGroundLanding);
+        assertFalse("an arbitrary later path point must not prove terminal arrival",
+                Rs2WalkerTransports.hasReachedTerminalTravelLanding(ship, loopingPath, 1, modernGroundLanding));
+        assertFalse(Rs2WalkerTransports.hasReachedTerminalTravelLanding(
+                ship, modernPath, 1, new WorldPoint(3200, 3200, 0)));
+    }
+
+    private static Transport portSarimToMusaShip() {
+        return new Transport(
+                new WorldPoint(3029, 3217, 0),
+                new WorldPoint(2956, 3143, 1),
+                "Musa Point",
+                TransportType.SHIP,
+                false,
+                "Musa Point",
+                "Captain Tobias",
+                3644,
+                10);
+    }
+
+    @Test
+    public void terminalTravelObjectCandidate_matchesConfiguredSemanticTargetNearOrigin() {
+        Transport ferry = new Transport(
+                new WorldPoint(3271, 3144, 0),
+                new WorldPoint(3148, 2843, 0),
+                "",
+                TransportType.BOAT,
+                true,
+                "Board",
+                "Ferry",
+                41311,
+                8);
+
+        assertTrue(Rs2WalkerTransports.isTerminalTravelObjectCompositionCandidate(
+                ferry,
+                ferry.getOrigin(),
+                "<col=ffff00>Ferry</col>",
+                new String[]{"<col=ff9040>Board</col>"}));
+        assertTrue("nearby multi-tile object anchors remain eligible",
+                Rs2WalkerTransports.isTerminalTravelObjectCompositionCandidate(
+                        ferry,
+                        new WorldPoint(3273, 3144, 0),
+                        "Ferry",
+                        new String[]{"Board"}));
+        assertFalse(Rs2WalkerTransports.isTerminalTravelObjectCompositionCandidate(
+                ferry, ferry.getOrigin(), "Boat", new String[]{"Board"}));
+        assertFalse(Rs2WalkerTransports.isTerminalTravelObjectCompositionCandidate(
+                ferry, ferry.getOrigin(), "Ferry", new String[]{"Travel"}));
+        assertFalse(Rs2WalkerTransports.isTerminalTravelObjectCompositionCandidate(
+                ferry, new WorldPoint(3275, 3144, 0), "Ferry", new String[]{"Board"}));
+
+        // The dispatch resolves the scene object BEFORE the (contains-matching) NPC lookup, so this
+        // matcher is what keeps an NPC terminal from being hijacked by a same-named object. Veos is
+        // the case that must stay rejected: his row's id column holds an NPC id, and his menu offers
+        // Talk-to rather than the row's destination label, so no object can satisfy it.
+        Transport veos = new Transport(
+                new WorldPoint(3055, 3245, 0),
+                new WorldPoint(1824, 3695, 1),
+                "Port Piscarilius",
+                TransportType.SHIP,
+                true,
+                "Port Piscarilius",
+                "Veos",
+                10724,
+                6);
+        assertFalse("an NPC terminal must not resolve to a scene object",
+                Rs2WalkerTransports.isTerminalTravelObjectCompositionCandidate(
+                        veos, veos.getOrigin(), "Veos", new String[]{"Talk-to"}));
+
+        Transport ordinaryObject = new Transport(
+                ferry.getOrigin(), ferry.getDestination(), "", TransportType.TRANSPORT,
+                true, "Board", "Ferry", 41311, 8);
+        assertFalse(Rs2WalkerTransports.isTerminalTravelObjectCompositionCandidate(
+                ordinaryObject, ferry.getOrigin(), "Ferry", new String[]{"Board"}));
+    }
+
+    @Test
+    public void alKharidTollLanding_requiresExactSelectedDestination() {
+        Transport eastbound = new Transport(
+                new WorldPoint(3267, 3227, 0),
+                new WorldPoint(3268, 3227, 0),
+                "Gate",
+                TransportType.TRANSPORT,
+                false,
+                "Pay-toll(10gp)",
+                "Gate",
+                net.runelite.api.ObjectID.CITY_GATE_2786,
+                2);
+
+        assertTrue(Rs2WalkerTransports.hasReachedAlKharidTollDestination(
+                eastbound, eastbound.getDestination()));
+        assertFalse("the adjacent origin must never count as a crossing",
+                Rs2WalkerTransports.hasReachedAlKharidTollDestination(eastbound, eastbound.getOrigin()));
+        assertFalse(Rs2WalkerTransports.hasReachedAlKharidTollDestination(
+                eastbound, new WorldPoint(3268, 3228, 0)));
+        assertFalse(Rs2WalkerTransports.hasReachedAlKharidTollDestination(eastbound, null));
+    }
+
+    @Test
+    public void alKharidTollLanding_rejectsUnrelatedTransport() {
+        Transport door = new Transport(
+                new WorldPoint(3152, 3363, 0),
+                new WorldPoint(3153, 3363, 0),
+                "Door",
+                TransportType.TRANSPORT,
+                false,
+                "Open",
+                "Door",
+                136);
+
+        assertFalse(Rs2WalkerTransports.hasReachedAlKharidTollDestination(
+                door, door.getDestination()));
+    }
+
+    @Test
+    public void alKharidTollSegment_matchesOnlyCrossGateEdges() {
+        assertTrue(Rs2WalkerDoors.isAlKharidTollGateSegment(
+                new WorldPoint(3267, 3227, 0), new WorldPoint(3268, 3227, 0)));
+        assertTrue(Rs2WalkerDoors.isAlKharidTollGateSegment(
+                new WorldPoint(3268, 3228, 0), new WorldPoint(3267, 3228, 0)));
+
+        assertFalse("an along-gate step is not a crossing",
+                Rs2WalkerDoors.isAlKharidTollGateSegment(
+                        new WorldPoint(3267, 3227, 0), new WorldPoint(3267, 3228, 0)));
+        assertFalse(Rs2WalkerDoors.isAlKharidTollGateSegment(
+                new WorldPoint(3267, 3227, 0), new WorldPoint(3268, 3227, 1)));
+        assertFalse(Rs2WalkerDoors.isAlKharidTollGateSegment(
+                new WorldPoint(3152, 3363, 0), new WorldPoint(3153, 3363, 0)));
+    }
+
+    @Test
+    public void alKharidTollObjectCandidate_requiresGateActionAndSelectedEdgeLocation() {
+        Transport payToll = alKharidGateTransport("Pay-toll(10gp)");
+
+        assertTrue(Rs2WalkerTransports.isAlKharidTollGateCompositionCandidate(
+                payToll,
+                new WorldPoint(3268, 3227, 0),
+                "Gate",
+                new String[]{"Open", "<col=ff9040>Pay-toll(10gp)</col>"}));
+        assertFalse("a stale id collision must not make an unrelated object eligible",
+                Rs2WalkerTransports.isAlKharidTollGateCompositionCandidate(
+                        payToll,
+                        new WorldPoint(3268, 3227, 0),
+                        "Lever",
+                        new String[]{"Pay-toll(10gp)"}));
+        assertFalse(Rs2WalkerTransports.isAlKharidTollGateCompositionCandidate(
+                payToll,
+                new WorldPoint(3268, 3227, 0),
+                "Gate",
+                new String[]{"Open"}));
+        assertFalse(Rs2WalkerTransports.isAlKharidTollGateCompositionCandidate(
+                payToll,
+                new WorldPoint(3269, 3227, 0),
+                "Gate",
+                new String[]{"Pay-toll(10gp)"}));
+
+        Transport open = alKharidGateTransport("Open");
+        assertTrue(Rs2WalkerTransports.isAlKharidTollGateCompositionCandidate(
+                open,
+                new WorldPoint(3267, 3228, 0),
+                "City gate",
+                new String[]{"Open"}));
+    }
+
+    private static Transport alKharidGateTransport(String action) {
+        return new Transport(
+                new WorldPoint(3267, 3227, 0),
+                new WorldPoint(3268, 3227, 0),
+                "Gate",
+                TransportType.TRANSPORT,
+                false,
+                action,
+                "Gate",
+                net.runelite.api.ObjectID.CITY_GATE_2786,
+                2);
+    }
+
+    @Test
+    public void canoeStationsSelectTheirOwnMapInterfaceAndUnknownIdsFailClosed() {
+        assertEquals(InterfaceID.CanoeMapLum.MAIN_MAP, Rs2WalkerTransports.canoeMapMainComponentId(12163));
+        assertEquals(InterfaceID.CanoeMapLum.DESTINATIONS,
+                Rs2WalkerTransports.canoeMapDestinationsComponentId(39638));
+        assertEquals(InterfaceID.CanoeMapDougne.MAIN_MAP,
+                Rs2WalkerTransports.canoeMapMainComponentId(60845));
+        assertEquals(InterfaceID.CanoeMapDougne.DESTINATIONS,
+                Rs2WalkerTransports.canoeMapDestinationsComponentId(60849));
+        assertEquals(-1, Rs2WalkerTransports.canoeMapMainComponentId(99999));
+        assertEquals(-1, Rs2WalkerTransports.canoeMapDestinationsComponentId(99999));
+    }
+
+    @Test
+    public void recoveryReplanTestHookIsTestOnlyTargetBoundAndOneShot() {
+        String previousTestMode = System.getProperty("microbot.test.mode");
+        WorldPoint previousTarget = Rs2Walker.currentTarget;
+        try {
+            System.clearProperty("microbot.test.mode");
+            Rs2Walker.currentTarget = new WorldPoint(3029, 3217, 0);
+            assertFalse(Rs2Walker.requestRecoveryReplanForTest());
+            assertFalse(Rs2Walker.consumeRecoveryReplanForTest());
+
+            System.setProperty("microbot.test.mode", "true");
+            Rs2Walker.currentTarget = null;
+            assertFalse(Rs2Walker.requestRecoveryReplanForTest());
+
+            Rs2Walker.currentTarget = new WorldPoint(3029, 3217, 0);
+            assertTrue(Rs2Walker.requestRecoveryReplanForTest());
+            assertTrue(Rs2Walker.consumeRecoveryReplanForTest());
+            assertFalse("one request must be consumed exactly once",
+                    Rs2Walker.consumeRecoveryReplanForTest());
+        } finally {
+            Rs2Walker.clearWalkerDedupeForTesting();
+            Rs2Walker.currentTarget = previousTarget;
+            if (previousTestMode == null) {
+                System.clearProperty("microbot.test.mode");
+            } else {
+                System.setProperty("microbot.test.mode", previousTestMode);
+            }
+        }
+    }
+
+    @Test
+    public void clientThreadTimeoutDetectionWalksTheCauseChain() {
+        assertTrue(Rs2Walker.isClientThreadReadTimeout(
+                new RuntimeException("outer", new RuntimeException(
+                        "Timed out waiting for client thread", new TimeoutException()))));
+        assertFalse(Rs2Walker.isClientThreadReadTimeout(
+                new RuntimeException("ordinary failure")));
+        assertFalse(Rs2Walker.isClientThreadReadTimeout(null));
+    }
+
+    @Test
+    public void collisionFreeRouteIndexFallbackIsBoundedAndDistanceTagged() {
+        WorldPoint origin = new WorldPoint(3200, 3200, 2);
+        Map<WorldPoint, Integer> nearby = Rs2WalkerDoors.nearbyTilesIgnoringCollision(origin, 2);
+
+        assertEquals(25, nearby.size());
+        assertEquals(Integer.valueOf(0), nearby.get(origin));
+        assertEquals(Integer.valueOf(2), nearby.get(new WorldPoint(3202, 3202, 2)));
+        assertFalse(nearby.containsKey(new WorldPoint(3203, 3200, 2)));
+        assertTrue(Rs2WalkerDoors.nearbyTilesIgnoringCollision(null, 2).isEmpty());
+        assertTrue(Rs2WalkerDoors.nearbyTilesIgnoringCollision(origin, -1).isEmpty());
+    }
+
     @Before
     public void resetTelemetry() {
         Rs2Walker.clearWalkerDedupeForTesting();
         Rs2Walker.Telemetry.reset();
-        Rs2Walker.sessionBlacklistedDoors.clear();
+        Rs2WalkerDoors.doorAttemptLedgerForTesting().clearBlacklist();
     }
 
     @After
     public void tearDown() {
         Rs2Walker.clearWalkerDedupeForTesting();
         Rs2Walker.Telemetry.reset();
-        Rs2Walker.sessionBlacklistedDoors.clear();
+        Rs2WalkerDoors.doorAttemptLedgerForTesting().clearBlacklist();
     }
 
     @Test
-    public void adjacentTransportSuppression_onlyAdjacentSamePlaneTransports() {
+    public void shortTransportSuppression_coversAdjacentSamePlaneTransports() {
         Transport door = new Transport(
                 new WorldPoint(3123, 3360, 0),
                 new WorldPoint(3123, 3361, 0),
@@ -76,7 +428,7 @@ public class Rs2WalkerUnitTest {
         assertEquals(new HashSet<>(Arrays.asList(
                         new WorldPoint(3123, 3360, 0),
                         new WorldPoint(3123, 3361, 0))),
-                Rs2Walker.adjacentSamePlaneTransportSuppressionPoints(door, null));
+                Rs2WalkerTransports.adjacentSamePlaneTransportSuppressionPoints(door, null));
     }
 
     /**
@@ -103,11 +455,29 @@ public class Rs2WalkerUnitTest {
                 new HashSet<>(Arrays.asList(
                         new WorldPoint(3151, 3363, 0),
                         new WorldPoint(3150, 3363, 0))),
-                Rs2Walker.adjacentSamePlaneTransportSuppressionPoints(shortcut, null));
+                Rs2WalkerTransports.adjacentSamePlaneTransportSuppressionPoints(shortcut, null));
     }
 
     @Test
-    public void adjacentTransportSuppression_ignoresNonAdjacentTransports() {
+    public void shortTransportSuppression_coversTwoTileDoorEdges() {
+        Transport puzzleDoor = new Transport(
+                new WorldPoint(3106, 9765, 0),
+                new WorldPoint(3104, 9765, 0),
+                "Draynor basement puzzle door",
+                TransportType.TRANSPORT,
+                false,
+                "Open",
+                "Door",
+                137);
+
+        assertEquals(new HashSet<>(Arrays.asList(
+                        new WorldPoint(3106, 9765, 0),
+                        new WorldPoint(3104, 9765, 0))),
+                Rs2WalkerTransports.adjacentSamePlaneTransportSuppressionPoints(puzzleDoor, null));
+    }
+
+    @Test
+    public void shortTransportSuppression_ignoresLongTransports() {
         Transport ladder = new Transport(
                 new WorldPoint(3092, 3361, 0),
                 new WorldPoint(3117, 9753, 0),
@@ -118,7 +488,25 @@ public class Rs2WalkerUnitTest {
                 "Ladder",
                 133);
 
-        assertTrue(Rs2Walker.adjacentSamePlaneTransportSuppressionPoints(ladder, null).isEmpty());
+        assertTrue(Rs2WalkerTransports.adjacentSamePlaneTransportSuppressionPoints(ladder, null).isEmpty());
+    }
+
+    @Test
+    public void rangedObjectTransportDelegatesOriginReachabilityToServer() {
+        assertTrue(Rs2WalkerTransports.requiresReachableObjectOrigin(false));
+        assertFalse(Rs2WalkerTransports.requiresReachableObjectOrigin(true));
+    }
+
+    @Test
+    public void rangedDoorRequiresReachableNearSideSoItCannotClickThroughEarlierDoor() {
+        WorldPoint firstNearSide = new WorldPoint(2991, 3341, 1);
+        WorldPoint secondNearSide = new WorldPoint(2990, 3337, 1);
+        Map<WorldPoint, Integer> reachable = new HashMap<>();
+        reachable.put(firstNearSide, 0);
+
+        assertTrue(Rs2WalkerDoors.isDoorNearSideReachable(reachable, firstNearSide));
+        assertFalse(Rs2WalkerDoors.isDoorNearSideReachable(reachable, secondNearSide));
+        assertTrue(Rs2WalkerDoors.isDoorNearSideReachable(null, secondNearSide));
     }
 
     @Test
@@ -131,7 +519,7 @@ public class Rs2WalkerUnitTest {
                 20,
                 Collections.emptyMap());
 
-        assertTrue(Rs2Walker.shouldRecalculatePathAfterTransport(varrockTeleport));
+        assertTrue(Rs2WalkerTransports.shouldRecalculatePathAfterTransport(varrockTeleport));
     }
 
     @Test
@@ -206,7 +594,7 @@ public class Rs2WalkerUnitTest {
                 "Door",
                 136);
 
-        assertFalse(Rs2Walker.shouldRecalculatePathAfterTransport(door));
+        assertFalse(Rs2WalkerTransports.shouldRecalculatePathAfterTransport(door));
     }
 
     @Test
@@ -221,7 +609,7 @@ public class Rs2WalkerUnitTest {
                 "Door",
                 136);
 
-        assertTrue(Rs2Walker.isSettledNearAdjacentSamePlaneLanding(
+        assertTrue(Rs2WalkerTransports.isSettledNearAdjacentSamePlaneLanding(
                 door,
                 new WorldPoint(3154, 3363, 0),
                 new WorldPoint(3153, 3363, 0),
@@ -240,7 +628,7 @@ public class Rs2WalkerUnitTest {
                 "Door",
                 136);
 
-        assertFalse(Rs2Walker.isSettledNearAdjacentSamePlaneLanding(
+        assertFalse(Rs2WalkerTransports.isSettledNearAdjacentSamePlaneLanding(
                 door,
                 new WorldPoint(3152, 3363, 0),
                 new WorldPoint(3153, 3363, 0),
@@ -259,7 +647,7 @@ public class Rs2WalkerUnitTest {
                 "Door",
                 136);
 
-        assertFalse(Rs2Walker.isSettledNearAdjacentSamePlaneLanding(
+        assertFalse(Rs2WalkerTransports.isSettledNearAdjacentSamePlaneLanding(
                 door,
                 new WorldPoint(3155, 3363, 0),
                 new WorldPoint(3153, 3363, 0),
@@ -278,7 +666,7 @@ public class Rs2WalkerUnitTest {
                 "Stepping stone",
                 16533);
 
-        assertTrue(Rs2Walker.isSettledNearAdjacentSamePlaneLanding(
+        assertTrue(Rs2WalkerTransports.isSettledNearAdjacentSamePlaneLanding(
                 steppingStone,
                 new WorldPoint(3149, 3363, 0),
                 steppingStone.getDestination(),
@@ -297,17 +685,17 @@ public class Rs2WalkerUnitTest {
                 "Stepping stone",
                 16533);
 
-        assertFalse(Rs2Walker.isSettledNearAdjacentSamePlaneLanding(
+        assertFalse(Rs2WalkerTransports.isSettledNearAdjacentSamePlaneLanding(
                 steppingStone,
                 new WorldPoint(3155, 3363, 0),
                 steppingStone.getDestination(),
                 0));
-        assertFalse(Rs2Walker.isSettledNearAdjacentSamePlaneLanding(
+        assertFalse(Rs2WalkerTransports.isSettledNearAdjacentSamePlaneLanding(
                 steppingStone,
                 new WorldPoint(3147, 3363, 0),
                 steppingStone.getDestination(),
                 0));
-        assertFalse(Rs2Walker.isSettledNearAdjacentSamePlaneLanding(
+        assertFalse(Rs2WalkerTransports.isSettledNearAdjacentSamePlaneLanding(
                 steppingStone,
                 new WorldPoint(3149, 3365, 0),
                 steppingStone.getDestination(),
@@ -326,7 +714,7 @@ public class Rs2WalkerUnitTest {
                 "Gangplank",
                 2082);
 
-        assertTrue(Rs2Walker.shouldRecalculatePathAfterTransport(ship));
+        assertTrue(Rs2WalkerTransports.shouldRecalculatePathAfterTransport(ship));
     }
 
     @Test
@@ -341,7 +729,7 @@ public class Rs2WalkerUnitTest {
                 "Ladder",
                 11806);
 
-        assertTrue(Rs2Walker.shouldRecalculatePathAfterTransport(varrockSewerLadder));
+        assertTrue(Rs2WalkerTransports.shouldRecalculatePathAfterTransport(varrockSewerLadder));
     }
 
     @Test
@@ -352,7 +740,7 @@ public class Rs2WalkerUnitTest {
                 new WorldPoint(3222, 3473, 0),
                 new WorldPoint(3229, 3473, 0));
 
-        assertTrue(Rs2Walker.hasPendingRouteStepBeforeArrival(
+        assertTrue(Rs2WalkerMovement.hasPendingRouteStepBeforeArrival(
                 path,
                 new WorldPoint(3229, 3473, 0),
                 0,
@@ -367,7 +755,7 @@ public class Rs2WalkerUnitTest {
                 new WorldPoint(3228, 3473, 0),
                 new WorldPoint(3229, 3473, 0));
 
-        assertFalse(Rs2Walker.hasPendingRouteStepBeforeArrival(
+        assertFalse(Rs2WalkerMovement.hasPendingRouteStepBeforeArrival(
                 path,
                 new WorldPoint(3229, 3473, 0),
                 2,
@@ -595,10 +983,10 @@ public class Rs2WalkerUnitTest {
         }
 
         assertNotNull("anchored at the player, the scan must find a forward route point",
-                Rs2Walker.findFurthestRawPathPointMatching(raw, player, 10, 0, wp -> true));
+                Rs2WalkerMovement.findFurthestRawPathPointMatching(raw, player, 10, 0, wp -> true));
 
         assertNull("a stale anchor near the goal must yield nothing even for an always-true predicate",
-                Rs2Walker.findFurthestRawPathPointMatching(raw, player, 10, 38, wp -> true));
+                Rs2WalkerMovement.findFurthestRawPathPointMatching(raw, player, 10, 38, wp -> true));
     }
 
     /**
@@ -613,7 +1001,7 @@ public class Rs2WalkerUnitTest {
         int max = 10;
         java.util.Set<Integer> seen = new HashSet<>();
         for (int i = 0; i < 400; i++) {
-            int reach = Rs2Walker.routeClickReach(max);
+            int reach = Rs2WalkerMovement.routeClickReach(max);
             assertTrue("reach must never exceed the caller's minimap reach, got " + reach, reach <= max);
             assertTrue("reach must stay clear of the interim-close threshold, got " + reach, reach >= 7);
             seen.add(reach);
@@ -625,7 +1013,7 @@ public class Rs2WalkerUnitTest {
     @Test
     public void routeClickReach_degenerateBoundsAreSafe() {
         for (int max : new int[]{0, 1, 5, 7}) {
-            int reach = Rs2Walker.routeClickReach(max);
+            int reach = Rs2WalkerMovement.routeClickReach(max);
             assertEquals("a reach at/below the floor must pass through unchanged", max, reach);
         }
     }
@@ -677,58 +1065,41 @@ public class Rs2WalkerUnitTest {
                 Rs2ObstacleHandler.isMotherlodeRockfallCandidate(varrock, null, 0));
     }
 
-    /**
-     * A handled door/transport/blocker must NOT be charged against the partial-retry budget.
-     *
-     * <p>Regression for a walk to an underground goal that reported UNREACHABLE while still
-     * advancing. The path end sat 31 tiles short of the goal, so {@code partialPath} was true on
-     * every iteration and the budget was armed for the whole walk. Opening one door ended the
-     * iteration, landed in the partial branch and spent a retry; the next iteration spent the last
-     * one a second later without the player ever walking. Three retries were gone ~100 tiles into a
-     * route that was working, and the walker gave up on the surface having never reached the ladder.
-     */
-    @Test
-    public void routeProgressExits_areNotChargedAgainstThePartialRetryBudget() {
-        for (String progress : new String[]{
-                "door-handled",
-                "door-handled-local-reachability",
-                "door-handled-during-interim",
-                "door-handled-before-minimap-click",
-                "transport-handled",
-                "current-tile-transport-handled",
-                "post-click-current-tile-transport-handled",
-                "raw-path-scene-object-handled",
-                "post-click-raw-path-scene-object-handled",
-                "rockfall-handled",
-                "path-blocker-handled",
-                "interim-in-flight",
-                "recovery-move-in-flight",
-                "route-fold-continuation-click"}) {
-            assertTrue("'" + progress + "' means the walker advanced the route, so it must not spend "
-                            + "a partial retry", Rs2Walker.isRouteProgressExit(progress));
-        }
-    }
+    // The partial-retry budget classification moved to WalkExit; its cases, including this
+    // underground-goal regression, now live in WalkExitTest as explicit sets.
 
     /**
-     * The exemption must stay narrow: reasons that mean the walker failed to advance still have to
-     * consume the budget, otherwise a genuinely unreachable goal never terminates and the walk spins
-     * until the outer tail cap trips.
+     * How long the walker will actually tolerate a motionless player before recovering.
+     *
+     * <p>Pinned as wall-clock seconds rather than as multipliers, because the multipliers are not the
+     * thing anyone cares about — "how long does it sit there" is. It used to be up to 36s: a flat 12s
+     * grace after every successful click, refreshed each pass, and then a 12s base scaled as far as
+     * 2x. The grace is gone (tile changes already refresh the clock, so it only ever bound the case
+     * where the player was NOT moving) and the interim multiplier is 1.25 rather than 1.75.
+     *
+     * <p>The base stays 12s on purpose: the longest legitimate motionless stretch measured across
+     * four live farm runs is ~7.1s, waiting out a transport handoff. Cutting the base is how you get
+     * a walker that interrupts its own ships.
      */
     @Test
-    public void nonProgressExits_stillConsumeThePartialRetryBudget() {
-        for (String stuck : new String[]{
-                "end-of-path",
-                "not-near-path",
-                "player-location-null",
-                "click-failed-off-minimap",
-                "door-edge-waiting-retry",
-                "door-edge-nearby-waiting-retry",
-                "door-recovery-suppressed",
-                "local-reachability-miss-no-click",
-                null}) {
-            assertFalse("'" + stuck + "' is not route progress and must still spend a retry",
-                    Rs2Walker.isRouteProgressExit(stuck));
-        }
+    public void stallBudgetStaysWithinItsMeasuredEnvelope() {
+        long plain = Rs2WalkerStallPolicy.computeThresholdMs(Rs2Walker.STALL_BASE_MS,
+                Rs2Walker.STALL_COMBAT_MULTIPLIER, Rs2Walker.STALL_ANIMATING_MULTIPLIER,
+                Rs2Walker.STALL_MOVING_MULTIPLIER, Rs2Walker.STALL_INTERIM_MINIMAP_MULTIPLIER,
+                Rs2Walker.STALL_INTERACTING_MULTIPLIER, false, false, false, false, false);
+        long withInterim = Rs2WalkerStallPolicy.computeThresholdMs(Rs2Walker.STALL_BASE_MS,
+                Rs2Walker.STALL_COMBAT_MULTIPLIER, Rs2Walker.STALL_ANIMATING_MULTIPLIER,
+                Rs2Walker.STALL_MOVING_MULTIPLIER, Rs2Walker.STALL_INTERIM_MINIMAP_MULTIPLIER,
+                Rs2Walker.STALL_INTERACTING_MULTIPLIER, false, false, false, true, false);
+        long worst = Rs2WalkerStallPolicy.computeThresholdMs(Rs2Walker.STALL_BASE_MS,
+                Rs2Walker.STALL_COMBAT_MULTIPLIER, Rs2Walker.STALL_ANIMATING_MULTIPLIER,
+                Rs2Walker.STALL_MOVING_MULTIPLIER, Rs2Walker.STALL_INTERIM_MINIMAP_MULTIPLIER,
+                Rs2Walker.STALL_INTERACTING_MULTIPLIER, true, true, true, true, true);
+
+        assertEquals("plain stall budget", 12_000L, plain);
+        assertEquals("the common case: a sticky interim is live for most of a walk", 15_000L, withInterim);
+        assertEquals("worst case, everything applying at once", 24_000L, worst);
+        assertTrue("must stay clear of the ~7.1s transport handoff measured live", plain >= 10_000L);
     }
 
     /**
@@ -908,7 +1279,7 @@ public class Rs2WalkerUnitTest {
                 new WorldPoint(1009, 1000, 0),
                 new WorldPoint(1008, 1000, 0));
 
-        WorldPoint target = Rs2Walker.findFurthestRawPathPointMatching(
+        WorldPoint target = Rs2WalkerMovement.findFurthestRawPathPointMatching(
                 rawPath,
                 player,
                 13,
@@ -930,7 +1301,7 @@ public class Rs2WalkerUnitTest {
                 allowed,
                 blocked);
 
-        WorldPoint target = Rs2Walker.findFurthestRawPathPointMatching(
+        WorldPoint target = Rs2WalkerMovement.findFurthestRawPathPointMatching(
                 rawPath,
                 player,
                 13,
@@ -948,7 +1319,7 @@ public class Rs2WalkerUnitTest {
                 player,
                 new WorldPoint(3215, 3200, 0));
 
-        WorldPoint target = Rs2Walker.findFurthestRawPathPointMatching(
+        WorldPoint target = Rs2WalkerMovement.findFurthestRawPathPointMatching(
                 rawPath,
                 player,
                 10,
@@ -967,7 +1338,7 @@ public class Rs2WalkerUnitTest {
                 new WorldPoint(3210, 3200, 0),
                 new WorldPoint(3216, 3200, 0));
 
-        WorldPoint target = Rs2Walker.findFurthestRawPathPointMatching(
+        WorldPoint target = Rs2WalkerMovement.findFurthestRawPathPointMatching(
                 rawPath,
                 player,
                 13,
@@ -1071,12 +1442,12 @@ public class Rs2WalkerUnitTest {
     @Test
     public void shortWalkDirectPathCeiling_flagsGateDetours() {
         assertTrue("the Shantay detour (700 tiles for a 30-tile hop) must escalate to the bank compare",
-                700 > Rs2Walker.shortWalkDirectPathCeiling(30));
+                700 > Rs2WalkerMovement.shortWalkDirectPathCeiling(30));
         assertTrue("an honest town wiggle (150 tiles for an 80-tile hop) must stay direct",
-                150 <= Rs2Walker.shortWalkDirectPathCeiling(80));
+                150 <= Rs2WalkerMovement.shortWalkDirectPathCeiling(80));
         assertEquals("tiny distances keep a floor so building detours don't trip it",
-                60, Rs2Walker.shortWalkDirectPathCeiling(5));
-        assertEquals(300, Rs2Walker.shortWalkDirectPathCeiling(100));
+                60, Rs2WalkerMovement.shortWalkDirectPathCeiling(5));
+        assertEquals(300, Rs2WalkerMovement.shortWalkDirectPathCeiling(100));
     }
 
     /**
@@ -1140,13 +1511,13 @@ public class Rs2WalkerUnitTest {
     public void doorDialogueDeferActive_holdsOffButAlwaysReleases() {
         long max = 5_000L;
         assertTrue("hold off while the menu is fresh",
-                Rs2Walker.doorDialogueDeferActive(10_000L, 10_500L, max));
+                Rs2WalkerDoors.doorDialogueDeferActive(10_000L, 10_500L, max));
         assertTrue("still holding just inside the bound",
-                Rs2Walker.doorDialogueDeferActive(10_000L, 14_999L, max));
+                Rs2WalkerDoors.doorDialogueDeferActive(10_000L, 14_999L, max));
         assertFalse("nothing answered it — resume clicking rather than stall the walk",
-                Rs2Walker.doorDialogueDeferActive(10_000L, 15_000L, max));
+                Rs2WalkerDoors.doorDialogueDeferActive(10_000L, 15_000L, max));
         assertFalse("no hold-off recorded means no deferral",
-                Rs2Walker.doorDialogueDeferActive(0L, 99_999L, max));
+                Rs2WalkerDoors.doorDialogueDeferActive(0L, 99_999L, max));
     }
 
     @Test
@@ -1225,13 +1596,13 @@ public class Rs2WalkerUnitTest {
         WorldPoint player = new WorldPoint(3289, 3476, 0);
 
         assertFalse("A diagonal endpoint can be Chebyshev-close but outside the circular minimap reach",
-                Rs2Walker.shouldAttemptDirectMinimapTarget(
+                Rs2WalkerMovement.shouldAttemptDirectMinimapTarget(
                         new WorldPoint(3300, 3487, 0), player, 12));
         assertTrue("A cardinal endpoint on the Euclidean boundary remains eligible",
-                Rs2Walker.shouldAttemptDirectMinimapTarget(
+                Rs2WalkerMovement.shouldAttemptDirectMinimapTarget(
                         new WorldPoint(3301, 3476, 0), player, 12));
         assertFalse("A different plane is never a direct minimap target",
-                Rs2Walker.shouldAttemptDirectMinimapTarget(
+                Rs2WalkerMovement.shouldAttemptDirectMinimapTarget(
                         new WorldPoint(3289, 3476, 1), player, 12));
     }
 
@@ -1323,7 +1694,7 @@ public class Rs2WalkerUnitTest {
 
     @Test
     public void isDoorEdgeNudgeResolved_movesToWrongNeighbor_returnsFalse() {
-        assertFalse(Rs2Walker.isDoorEdgeNudgeResolved(
+        assertFalse(Rs2WalkerDoors.isDoorEdgeNudgeResolved(
                 new WorldPoint(3240, 3301, 0),
                 new WorldPoint(3239, 3302, 0),
                 new WorldPoint(3240, 3301, 0),
@@ -1332,16 +1703,63 @@ public class Rs2WalkerUnitTest {
 
     @Test
     public void isDoorEdgeNudgeResolved_crossesToDoorTarget_returnsTrue() {
-        assertTrue(Rs2Walker.isDoorEdgeNudgeResolved(
+        assertTrue(Rs2WalkerDoors.isDoorEdgeNudgeResolved(
                 new WorldPoint(3240, 3301, 0),
                 new WorldPoint(3241, 3302, 0),
                 new WorldPoint(3240, 3301, 0),
                 new WorldPoint(3241, 3302, 0)));
     }
 
+    /**
+     * The nudge now clicks a route point PAST the door, so a successful crossing keeps going. The
+     * live log's exact case: south door 3369->3368, player observed at 3365 — through the door and
+     * three tiles beyond — reported unresolved by the near-toWp rule.
+     */
+    @Test
+    public void isDoorEdgeNudgeResolved_ranOnPastTheDoor_returnsTrue() {
+        assertTrue(Rs2WalkerDoors.isDoorEdgeNudgeResolved(
+                new WorldPoint(3106, 3369, 0),
+                new WorldPoint(3106, 3365, 0),
+                new WorldPoint(3106, 3369, 0),
+                new WorldPoint(3106, 3368, 0)));
+    }
+
+    /**
+     * A running player covers two tiles a tick and may NEVER be observed on toWp itself: a nudge
+     * starting on fromWp has beforeTo=1, so "afterTo < beforeTo" could only fire on exactly toWp.
+     * Observed live as 3369 -> 3367 -> 3365 with every poll reading unresolved.
+     */
+    @Test
+    public void isDoorEdgeNudgeResolved_runningSkipsTheFarSideTile_returnsTrue() {
+        assertTrue(Rs2WalkerDoors.isDoorEdgeNudgeResolved(
+                new WorldPoint(3106, 3369, 0),
+                new WorldPoint(3106, 3367, 0),
+                new WorldPoint(3106, 3369, 0),
+                new WorldPoint(3106, 3368, 0)));
+    }
+
+    /** Walking parallel along the NEAR side of the wall is not a crossing, however far it gets. */
+    @Test
+    public void isDoorEdgeNudgeResolved_parallelOnTheNearSide_returnsFalse() {
+        assertFalse(Rs2WalkerDoors.isDoorEdgeNudgeResolved(
+                new WorldPoint(3106, 3369, 0),
+                new WorldPoint(3103, 3369, 0),
+                new WorldPoint(3106, 3369, 0),
+                new WorldPoint(3106, 3368, 0)));
+    }
+
+    @Test
+    public void isDoorEdgeNudgeResolved_eastDoorCrossedAtSpeed_returnsTrue() {
+        assertTrue(Rs2WalkerDoors.isDoorEdgeNudgeResolved(
+                new WorldPoint(3240, 3301, 0),
+                new WorldPoint(3243, 3301, 0),
+                new WorldPoint(3240, 3301, 0),
+                new WorldPoint(3241, 3301, 0)));
+    }
+
     @Test
     public void shouldClearInterimTarget_closeToCheckpoint_returnsTrue() {
-        assertTrue(Rs2Walker.shouldClearInterimTarget(
+        assertTrue(Rs2WalkerMovement.shouldClearInterimTarget(
                 new WorldPoint(2890, 3396, 0),
                 new WorldPoint(2889, 3396, 0),
                 1_000L,
@@ -1351,7 +1769,7 @@ public class Rs2WalkerUnitTest {
 
     @Test
     public void shouldClearInterimTarget_preclickDistanceStillKeepsCheckpoint() {
-        assertFalse(Rs2Walker.shouldClearInterimTarget(
+        assertFalse(Rs2WalkerMovement.shouldClearInterimTarget(
                 new WorldPoint(2890, 3396, 0),
                 new WorldPoint(2884, 3396, 0),
                 1_000L,
@@ -1361,14 +1779,14 @@ public class Rs2WalkerUnitTest {
 
     @Test
     public void distanceToInterimOrMax_samePlaneReturnsDistance() {
-        assertEquals(8, Rs2Walker.distanceToInterimOrMax(
+        assertEquals(8, Rs2WalkerMovement.distanceToInterimOrMax(
                 new WorldPoint(2850, 3506, 0),
                 new WorldPoint(2849, 3498, 0)));
     }
 
     @Test
     public void shouldClearInterimTarget_expiredCheckpoint_returnsTrue() {
-        assertTrue(Rs2Walker.shouldClearInterimTarget(
+        assertTrue(Rs2WalkerMovement.shouldClearInterimTarget(
                 new WorldPoint(2890, 3396, 0),
                 new WorldPoint(2880, 3396, 0),
                 1_000L,
@@ -1378,7 +1796,7 @@ public class Rs2WalkerUnitTest {
 
     @Test
     public void shouldClearInterimTarget_staleProgress_returnsTrue() {
-        assertTrue(Rs2Walker.shouldClearInterimTarget(
+        assertTrue(Rs2WalkerMovement.shouldClearInterimTarget(
                 new WorldPoint(2890, 3396, 0),
                 new WorldPoint(2880, 3396, 0),
                 1_000L,
@@ -1388,7 +1806,7 @@ public class Rs2WalkerUnitTest {
 
     @Test
     public void shouldClearInterimTarget_activeFarCheckpoint_returnsFalse() {
-        assertFalse(Rs2Walker.shouldClearInterimTarget(
+        assertFalse(Rs2WalkerMovement.shouldClearInterimTarget(
                 new WorldPoint(2890, 3396, 0),
                 new WorldPoint(2880, 3396, 0),
                 1_000L,
@@ -1403,7 +1821,7 @@ public class Rs2WalkerUnitTest {
      */
     @Test
     public void shouldClearInterimTarget_movingAwayFromCheckpoint_returnsTrue() {
-        assertTrue(Rs2Walker.shouldClearInterimTarget(
+        assertTrue(Rs2WalkerMovement.shouldClearInterimTarget(
                 new WorldPoint(2973, 3350, 0),
                 new WorldPoint(2960, 3343, 0),
                 1_000L,
@@ -1415,7 +1833,7 @@ public class Rs2WalkerUnitTest {
     /** Rounding a wall costs a few tiles and must not abandon a checkpoint still being approached. */
     @Test
     public void shouldClearInterimTarget_detourWithinMargin_returnsFalse() {
-        assertFalse(Rs2Walker.shouldClearInterimTarget(
+        assertFalse(Rs2WalkerMovement.shouldClearInterimTarget(
                 new WorldPoint(2890, 3396, 0),
                 new WorldPoint(2880, 3396, 0),
                 1_000L,
@@ -1427,7 +1845,7 @@ public class Rs2WalkerUnitTest {
     /** Unknown best distance leaves the abandon check inert — behaviour matches the 5-arg form. */
     @Test
     public void shouldClearInterimTarget_unknownBestDistance_returnsFalse() {
-        assertFalse(Rs2Walker.shouldClearInterimTarget(
+        assertFalse(Rs2WalkerMovement.shouldClearInterimTarget(
                 new WorldPoint(2890, 3396, 0),
                 new WorldPoint(2880, 3396, 0),
                 1_000L,
@@ -1438,12 +1856,13 @@ public class Rs2WalkerUnitTest {
 
     @Test
     public void shouldYieldForActiveRecoveryInterim_recentProgress_returnsTrue() {
-        assertTrue(Rs2Walker.shouldYieldForActiveRecoveryInterim(
+        assertTrue(Rs2WalkerMovement.shouldYieldForActiveRecoveryInterim(
                 new WorldPoint(2890, 3396, 0),
                 new WorldPoint(2884, 3396, 0),
                 1_000L,
                 2_500L,
                 3_000L,
+                Integer.MAX_VALUE,
                 0L,
                 0L,
                 false));
@@ -1451,12 +1870,13 @@ public class Rs2WalkerUnitTest {
 
     @Test
     public void shouldYieldForActiveRecoveryInterim_staleProgress_returnsFalse() {
-        assertFalse(Rs2Walker.shouldYieldForActiveRecoveryInterim(
+        assertFalse(Rs2WalkerMovement.shouldYieldForActiveRecoveryInterim(
                 new WorldPoint(2890, 3396, 0),
                 new WorldPoint(2880, 3396, 0),
                 1_000L,
                 1_500L,
                 5_000L,
+                Integer.MAX_VALUE,
                 0L,
                 0L,
                 false));
@@ -1464,15 +1884,30 @@ public class Rs2WalkerUnitTest {
 
     @Test
     public void shouldYieldForActiveRecoveryInterim_recentRecoveryClick_returnsTrue() {
-        assertTrue(Rs2Walker.shouldYieldForActiveRecoveryInterim(
+        assertTrue(Rs2WalkerMovement.shouldYieldForActiveRecoveryInterim(
                 new WorldPoint(2890, 3396, 0),
                 new WorldPoint(2880, 3396, 0),
                 1_000L,
                 0L,
                 3_000L,
+                Integer.MAX_VALUE,
                 0L,
                 2_000L,
                 false));
+    }
+
+    @Test
+    public void shouldYieldForActiveRecoveryInterim_movingAway_returnsFalse() {
+        assertFalse(Rs2WalkerMovement.shouldYieldForActiveRecoveryInterim(
+                new WorldPoint(2890, 3396, 0),
+                new WorldPoint(2880, 3396, 0),
+                1_000L,
+                4_900L,
+                5_000L,
+                5,
+                0L,
+                0L,
+                true));
     }
 
     @Test
@@ -1483,6 +1918,7 @@ public class Rs2WalkerUnitTest {
                 1_000L,
                 4_500L,
                 5_000L,
+                Integer.MAX_VALUE,
                 0L,
                 true,
                 5));
@@ -1496,6 +1932,7 @@ public class Rs2WalkerUnitTest {
                 1_000L,
                 4_900L,
                 5_000L,
+                Integer.MAX_VALUE,
                 0L,
                 false,
                 5));
@@ -1509,6 +1946,7 @@ public class Rs2WalkerUnitTest {
                 1_000L,
                 4_500L,
                 5_000L,
+                Integer.MAX_VALUE,
                 0L,
                 true,
                 5));
@@ -1522,23 +1960,68 @@ public class Rs2WalkerUnitTest {
                 1_000L,
                 1_500L,
                 5_000L,
+                Integer.MAX_VALUE,
                 0L,
                 false,
                 5));
     }
 
     @Test
+    public void shouldDeferRouteWorkForActiveInterim_movingAway_returnsFalse() {
+        assertFalse(Rs2Walker.shouldDeferRouteWorkForActiveInterim(
+                new WorldPoint(2890, 3396, 0),
+                new WorldPoint(2880, 3396, 0),
+                1_000L,
+                4_900L,
+                5_000L,
+                5,
+                0L,
+                true,
+                5));
+    }
+
+    @Test
+    public void interimPreclickKeepsCheckpointUntilCooldownExpires() {
+        Rs2WalkerMovement.clearInterimTarget("test setup");
+        WorldPoint interim = new WorldPoint(3206, 3200, 0);
+        WorldPoint player = new WorldPoint(3200, 3200, 0);
+        Rs2Walker.routeState.interimTargetWp = interim;
+        Rs2Walker.routeState.interimSetAtMs = 1000L;
+        Rs2Walker.routeState.interimLastProgressAtMs = 1000L;
+        try {
+            assertFalse(Rs2WalkerMovement.clearInterimTargetIfReachedOrExpired(player,
+                    Collections.emptyList(), 1899L));
+            assertEquals(interim, Rs2Walker.routeState.interimTargetWp);
+            assertTrue(Rs2WalkerMovement.clearInterimTargetIfReachedOrExpired(player,
+                    Collections.emptyList(), 1900L));
+            assertNull(Rs2Walker.routeState.interimTargetWp);
+        } finally {
+            Rs2WalkerMovement.clearInterimTarget("test cleanup");
+        }
+    }
+
+    @Test
+    public void sceneClickRequiresEntireClickAreaInsideViewport() {
+        java.awt.Rectangle viewport = new java.awt.Rectangle(10, 20, 500, 300);
+        assertTrue(Rs2WalkerMovement.isCanvasPointInsideViewport(new net.runelite.api.Point(250, 150), viewport));
+        assertFalse(Rs2WalkerMovement.isCanvasPointInsideViewport(new net.runelite.api.Point(700, 150), viewport));
+        assertFalse(Rs2WalkerMovement.isCanvasPointInsideViewport(new net.runelite.api.Point(12, 150), viewport));
+        assertFalse(Rs2WalkerMovement.isCanvasPointInsideViewport(new net.runelite.api.Point(250, 318), viewport));
+        assertFalse(Rs2WalkerMovement.isCanvasPointInsideViewport(null, viewport));
+    }
+
+    @Test
     public void interimPreclickTiles_runHandsOffEarlierThanWalk() {
-        assertEquals(6, Rs2Walker.interimPreclickTiles(false));
-        assertEquals(8, Rs2Walker.interimPreclickTiles(true));
+        assertEquals(6, Rs2WalkerMovement.interimPreclickTiles(false));
+        assertEquals(8, Rs2WalkerMovement.interimPreclickTiles(true));
     }
 
     @Test
     public void routeMovementClickPhase_labelsContinuationSeparatelyFromRecovery() {
-        assertEquals("stall_recovery_click", Rs2Walker.routeMovementClickPhase("stall recovery click"));
-        assertEquals("active_route_idle_nudge", Rs2Walker.routeMovementClickPhase("active route idle nudge"));
-        assertEquals("interim_close_route_click", Rs2Walker.routeMovementClickPhase("interim close route click"));
-        assertEquals("route_movement_click", Rs2Walker.routeMovementClickPhase("other"));
+        assertEquals("stall_recovery_click", Rs2WalkerMovement.routeMovementClickPhase("stall recovery click"));
+        assertEquals("active_route_idle_nudge", Rs2WalkerMovement.routeMovementClickPhase("active route idle nudge"));
+        assertEquals("interim_close_route_click", Rs2WalkerMovement.routeMovementClickPhase("interim close route click"));
+        assertEquals("route_movement_click", Rs2WalkerMovement.routeMovementClickPhase("other"));
     }
 
     @Test
@@ -1599,39 +2082,12 @@ public class Rs2WalkerUnitTest {
 
     @Test
     public void shouldRunActiveRouteIdleNudge_waitsForImmediateTransport() {
-        assertFalse(Rs2Walker.shouldRunActiveRouteIdleNudge(true, true));
-        assertTrue(Rs2Walker.shouldRunActiveRouteIdleNudge(true, false));
-        assertFalse(Rs2Walker.shouldRunActiveRouteIdleNudge(false, false));
+        assertFalse(Rs2WalkerMovement.shouldRunActiveRouteIdleNudge(true, true));
+        assertTrue(Rs2WalkerMovement.shouldRunActiveRouteIdleNudge(true, false));
+        assertFalse(Rs2WalkerMovement.shouldRunActiveRouteIdleNudge(false, false));
     }
 
-    @Test
-    public void shouldSkipStartupPreclickSegmentHandlers_skipsBeforeFirstMovementClick() {
-        assertTrue(Rs2Walker.shouldSkipStartupPreclickSegmentHandlers(
-                true,
-                5,
-                5,
-                false,
-                false,
-                false));
-    }
-
-    @Test
-    public void shouldSkipStartupPreclickSegmentHandlers_keepsDoorRecoveryAndSteadyEdges() {
-        assertFalse(Rs2Walker.shouldSkipStartupPreclickSegmentHandlers(
-                true,
-                8,
-                5,
-                true,
-                false,
-                false));
-        assertFalse(Rs2Walker.shouldSkipStartupPreclickSegmentHandlers(
-                false,
-                8,
-                5,
-                false,
-                false,
-                false));
-    }
+    // Startup-preclick skipping moved to SegmentGate; its cases live in SegmentGateTest.
 
     @Test
     public void rawPathForwardAnchorIndex_keepsFallbackAheadOfAnchor() {
@@ -1666,7 +2122,7 @@ public class Rs2WalkerUnitTest {
 
     @Test
     public void didTraverseInteractedDoor_crossesDoorTowardSegmentDestination_returnsTrue() {
-        assertTrue(Rs2Walker.didTraverseInteractedDoor(
+        assertTrue(Rs2WalkerDoors.didTraverseInteractedDoor(
                 new WorldPoint(2465, 3494, 0),
                 new WorldPoint(2465, 3493, 0),
                 new WorldPoint(2465, 3493, 0),
@@ -1676,7 +2132,7 @@ public class Rs2WalkerUnitTest {
 
     @Test
     public void didTraverseInteractedDoor_movesWithoutCrossingObject_returnsFalse() {
-        assertFalse(Rs2Walker.didTraverseInteractedDoor(
+        assertFalse(Rs2WalkerDoors.didTraverseInteractedDoor(
                 new WorldPoint(2465, 3494, 0),
                 new WorldPoint(2465, 3495, 0),
                 new WorldPoint(2465, 3493, 0),
@@ -1686,7 +2142,7 @@ public class Rs2WalkerUnitTest {
 
     @Test
     public void didTraverseInteractedDoor_crossesObjectButMovesAwayFromDestination_returnsFalse() {
-        assertFalse(Rs2Walker.didTraverseInteractedDoor(
+        assertFalse(Rs2WalkerDoors.didTraverseInteractedDoor(
                 new WorldPoint(1987, 5568, 0),
                 new WorldPoint(1986, 5568, 0),
                 new WorldPoint(1987, 5568, 0),
@@ -1696,7 +2152,7 @@ public class Rs2WalkerUnitTest {
 
     @Test
     public void shouldBlacklistDoorAfterWrongTraversal_teleportAway_returnsTrue() {
-        assertTrue(Rs2Walker.shouldBlacklistDoorAfterWrongTraversal(
+        assertTrue(Rs2WalkerDoors.shouldBlacklistDoorAfterWrongTraversal(
                 new WorldPoint(1987, 5568, 0),
                 new WorldPoint(2435, 3519, 0),
                 new WorldPoint(1987, 5568, 0),
@@ -1706,7 +2162,7 @@ public class Rs2WalkerUnitTest {
     @Test
     public void shouldBlacklistDoorAfterWrongTraversal_startedFarFromDoor_returnsFalse() {
         assertFalse("movement from an earlier minimap click must not blacklist a valid gate",
-                Rs2Walker.shouldBlacklistDoorAfterWrongTraversal(
+                Rs2WalkerDoors.shouldBlacklistDoorAfterWrongTraversal(
                         new WorldPoint(3270, 3320, 0),
                         new WorldPoint(3275, 3325, 0),
                         new WorldPoint(3262, 3322, 0),
@@ -1715,7 +2171,7 @@ public class Rs2WalkerUnitTest {
 
     @Test
     public void shouldBlacklistDoorAfterWrongTraversal_progressTowardEdge_returnsFalse() {
-        assertFalse(Rs2Walker.shouldBlacklistDoorAfterWrongTraversal(
+        assertFalse(Rs2WalkerDoors.shouldBlacklistDoorAfterWrongTraversal(
                 new WorldPoint(2465, 3494, 0),
                 new WorldPoint(2465, 3493, 0),
                 new WorldPoint(2465, 3494, 0),
@@ -1761,7 +2217,7 @@ public class Rs2WalkerUnitTest {
         // and learn-persisted — the shop's front door as permanently blocked. A same-plane sample taken
         // while the player is walking is a point along the path, never a traversal verdict.
         assertFalse("mid-walk sample must not blacklist the door",
-                Rs2Walker.shouldBlacklistDoorAfterWrongTraversal(
+                Rs2WalkerDoors.shouldBlacklistDoorAfterWrongTraversal(
                         new WorldPoint(3008, 3207, 0),   // before: en route toward the door
                         new WorldPoint(3012, 3211, 0),   // after: still walking
                         new WorldPoint(3012, 3204, 0),
@@ -1773,7 +2229,7 @@ public class Rs2WalkerUnitTest {
     public void shouldBlacklistDoorAfterWrongTraversal_settledWrongWayDisplacement_stillBlacklists() {
         // Same shape of movement, but the player has STOPPED: a door that displaced the player the wrong
         // way and left them settled there is a genuine wrong traversal — the original blacklist case.
-        assertTrue(Rs2Walker.shouldBlacklistDoorAfterWrongTraversal(
+        assertTrue(Rs2WalkerDoors.shouldBlacklistDoorAfterWrongTraversal(
                 new WorldPoint(3011, 3205, 0),           // started beside the edge
                 new WorldPoint(3016, 3206, 0),           // settled 5 tiles away on the wrong side
                 new WorldPoint(3012, 3204, 0),
@@ -1784,55 +2240,12 @@ public class Rs2WalkerUnitTest {
     @Test
     public void shouldBlacklistDoorAfterWrongTraversal_planeChangeTrustedEvenWhileMoving() {
         // A plane change cannot come from walking — the door acted. Trusted regardless of motion state.
-        assertTrue(Rs2Walker.shouldBlacklistDoorAfterWrongTraversal(
+        assertTrue(Rs2WalkerDoors.shouldBlacklistDoorAfterWrongTraversal(
                 new WorldPoint(3011, 3205, 0),
                 new WorldPoint(3011, 3205, 1),
                 new WorldPoint(3012, 3204, 0),
                 new WorldPoint(3011, 3204, 0),
                 true));
-    }
-
-    @Test
-    public void markDoorEdgeAttemptThisPass_allowsFirstAttemptOnly() {
-        java.util.Map<String, WorldPoint> attempted = new java.util.HashMap<>();
-        WorldPoint[] segment = new WorldPoint[] {
-                new WorldPoint(2465, 3494, 0),
-                new WorldPoint(2465, 3493, 0)
-        };
-
-        WorldPoint playerPos = new WorldPoint(2465, 3494, 0);
-        assertTrue(Rs2Walker.markDoorEdgeAttemptThisPass(attempted, segment, playerPos));
-        assertFalse(Rs2Walker.markDoorEdgeAttemptThisPass(attempted, segment, playerPos));
-    }
-
-    @Test
-    public void markDoorEdgeAttemptThisPass_treatsReverseEdgeAsDuplicate() {
-        java.util.Map<String, WorldPoint> attempted = new java.util.HashMap<>();
-        WorldPoint[] forward = new WorldPoint[] {
-                new WorldPoint(2465, 3494, 0),
-                new WorldPoint(2465, 3493, 0)
-        };
-        WorldPoint[] reverse = new WorldPoint[] {
-                new WorldPoint(2465, 3493, 0),
-                new WorldPoint(2465, 3494, 0)
-        };
-
-        WorldPoint playerPos = new WorldPoint(2465, 3494, 0);
-        assertTrue(Rs2Walker.markDoorEdgeAttemptThisPass(attempted, forward, playerPos));
-        assertFalse(Rs2Walker.markDoorEdgeAttemptThisPass(attempted, reverse, playerPos));
-    }
-
-    @Test
-    public void markDoorEdgeAttemptThisPass_allowsRetryAfterPlayerProgress() {
-        java.util.Map<String, WorldPoint> attempted = new java.util.HashMap<>();
-        WorldPoint[] segment = new WorldPoint[] {
-                new WorldPoint(2465, 3494, 0),
-                new WorldPoint(2465, 3493, 0)
-        };
-
-        assertTrue(Rs2Walker.markDoorEdgeAttemptThisPass(attempted, segment, new WorldPoint(2465, 3494, 0)));
-        assertTrue("retry should be allowed after moving away from same-edge attempt tile",
-                Rs2Walker.markDoorEdgeAttemptThisPass(attempted, segment, new WorldPoint(2462, 3491, 0)));
     }
 
     // ---------------------------------------------------------------------------
@@ -1841,38 +2254,131 @@ public class Rs2WalkerUnitTest {
 
     @Test
     public void questLock_nullAndEmpty_returnFalse() {
-        assertFalse(Rs2Walker.hasQuestLockKeywords(null));
-        assertFalse(Rs2Walker.hasQuestLockKeywords(""));
+        assertFalse(Rs2WalkerDoors.hasQuestLockKeywords(null));
+        assertFalse(Rs2WalkerDoors.hasQuestLockKeywords(""));
     }
 
     @Test
     public void questLock_benignDialogueReturnsFalse() {
-        assertFalse(Rs2Walker.hasQuestLockKeywords("Hello there, adventurer!"));
-        assertFalse(Rs2Walker.hasQuestLockKeywords("Would you like to trade?"));
-        assertFalse(Rs2Walker.hasQuestLockKeywords("Click to continue"));
+        assertFalse(Rs2WalkerDoors.hasQuestLockKeywords("Hello there, adventurer!"));
+        assertFalse(Rs2WalkerDoors.hasQuestLockKeywords("Would you like to trade?"));
+        assertFalse(Rs2WalkerDoors.hasQuestLockKeywords("Click to continue"));
     }
 
     @Test
     public void questLock_commonGatingPhrasesReturnTrue() {
-        assertTrue(Rs2Walker.hasQuestLockKeywords("You need to have completed Cook's Assistant."));
-        assertTrue(Rs2Walker.hasQuestLockKeywords("You must first finish the quest."));
-        assertTrue(Rs2Walker.hasQuestLockKeywords("You have not yet proven yourself."));
-        assertTrue(Rs2Walker.hasQuestLockKeywords("You cannot enter until you're a member."));
-        assertTrue(Rs2Walker.hasQuestLockKeywords("You can't enter without the key."));
-        assertTrue(Rs2Walker.hasQuestLockKeywords("This area requires you to have level 50 Agility."));
+        assertTrue(Rs2WalkerDoors.hasQuestLockKeywords("You need to have completed Cook's Assistant."));
+        assertTrue(Rs2WalkerDoors.hasQuestLockKeywords("You must first finish the quest."));
+        assertTrue(Rs2WalkerDoors.hasQuestLockKeywords("You have not yet proven yourself."));
+        assertTrue(Rs2WalkerDoors.hasQuestLockKeywords("You cannot enter until you're a member."));
+        assertTrue(Rs2WalkerDoors.hasQuestLockKeywords("You can't enter without the key."));
+        assertTrue(Rs2WalkerDoors.hasQuestLockKeywords("This area requires you to have level 50 Agility."));
     }
 
     @Test
     public void questLock_isCaseInsensitive() {
-        assertTrue(Rs2Walker.hasQuestLockKeywords("YOU MUST COMPLETE THE QUEST"));
-        assertTrue(Rs2Walker.hasQuestLockKeywords("you Need To finish first"));
+        assertTrue(Rs2WalkerDoors.hasQuestLockKeywords("YOU MUST COMPLETE THE QUEST"));
+        assertTrue(Rs2WalkerDoors.hasQuestLockKeywords("you Need To finish first"));
     }
 
     @Test
     public void questLock_detectsBareQuestMention() {
         // The standalone "quest" keyword is a last-resort safety net — gate dialogues
         // almost always include it even when phrasing is unusual.
-        assertTrue(Rs2Walker.hasQuestLockKeywords("Only those who have finished the holy quest may pass."));
+        assertTrue(Rs2WalkerDoors.hasQuestLockKeywords("Only those who have finished the holy quest may pass."));
+    }
+
+    // ---------------------------------------------------------------------------
+    // Goal-tile object guard (D3 requirement #1 — the Gift of Peace lesson)
+    // ---------------------------------------------------------------------------
+    //
+    // An object standing ON the walk target is the destination, not an obstacle en route. Seeded
+    // from the Stronghold corridor (2026-08-13): the goal chest was Open-clicked and its failed
+    // traversal waited out on three consecutive runs, ~9s each, before arrived-within-distance.
+
+    @Test
+    public void goalTileChestIsNotAnObstacleWhenTheWalkMayFinishBesideIt() {
+        WorldPoint goal = new WorldPoint(1907, 5223, 0);
+        WorldPoint beside = new WorldPoint(1906, 5224, 0);
+        assertTrue(Rs2WalkerDoors.goalTileObjectIsNotAnObstacle(false, goal, 4, goal, beside, goal));
+    }
+
+    @Test
+    public void aWallDoorOnTheGoalEdgeIsStillAnObstacle() {
+        // A door on the goal tile's EDGE may genuinely need opening to step onto the goal.
+        WorldPoint goal = new WorldPoint(1907, 5223, 0);
+        WorldPoint beside = new WorldPoint(1906, 5223, 0);
+        assertFalse(Rs2WalkerDoors.goalTileObjectIsNotAnObstacle(true, goal, 4, goal, beside, goal));
+    }
+
+    @Test
+    public void aDistanceZeroWalkStillAttemptsTheGoalTileObject() {
+        // The walk MUST end on the tile itself; if an openable object seals it, opening is honest.
+        WorldPoint goal = new WorldPoint(1907, 5223, 0);
+        WorldPoint beside = new WorldPoint(1906, 5224, 0);
+        assertFalse(Rs2WalkerDoors.goalTileObjectIsNotAnObstacle(false, goal, 0, goal, beside, goal));
+    }
+
+    @Test
+    public void anObjectShortOfTheGoalIsStillAnObstacle() {
+        // Only the goal tile's own object is exempt; a chest two tiles early still blocks the route
+        // even when its near side is adjacent to it.
+        WorldPoint goal = new WorldPoint(1907, 5223, 0);
+        WorldPoint doorTile = new WorldPoint(1905, 5225, 0);
+        WorldPoint besideDoor = new WorldPoint(1904, 5226, 0);
+        assertFalse(Rs2WalkerDoors.goalTileObjectIsNotAnObstacle(false, goal, 4, doorTile, besideDoor, doorTile));
+    }
+
+    @Test
+    public void aFarNearSideDoesNotQualifyForTheGoalSkip() {
+        // The skip is only honest when the walk can FINISH from the near side; a ranged detection
+        // several tiles out must still be handled as an obstacle if crossing is required later.
+        WorldPoint goal = new WorldPoint(1907, 5223, 0);
+        WorldPoint farAway = new WorldPoint(1900, 5230, 0);
+        assertFalse(Rs2WalkerDoors.goalTileObjectIsNotAnObstacle(false, goal, 4, goal, farAway, goal));
+    }
+
+    // ---------------------------------------------------------------------------
+    // Walled-net door adjacency (D3 requirement #2 — the double-gate wing lesson)
+    // ---------------------------------------------------------------------------
+
+    @Test
+    public void aGateWingParallelBesideTheEdgeCountsAsAdjacent() {
+        // Stronghold 2026-08-13 14:00: primary wing at (1875,5239); the slave wing's edge
+        // (1875,5240)->(1876,5240) was learned as walled while the primary was being opened.
+        assertTrue(Rs2WalkerDoors.doorTileAdjacentToEdgeEndpoints(
+                new WorldPoint(1875, 5239, 0), new WorldPoint(1875, 5240, 0), new WorldPoint(1876, 5240, 0)));
+    }
+
+    @Test
+    public void aGateSharingTheDiagonalEdgesCornerCountsAsAdjacent() {
+        // Same run: primary wing at (1903,5243); the diagonal step (1903,5242)->(1904,5243) learned.
+        assertTrue(Rs2WalkerDoors.doorTileAdjacentToEdgeEndpoints(
+                new WorldPoint(1903, 5243, 0), new WorldPoint(1903, 5242, 0), new WorldPoint(1904, 5243, 0)));
+    }
+
+    @Test
+    public void aDoorTwoTilesAwayDoesNotSuppressLearning() {
+        assertFalse(Rs2WalkerDoors.doorTileAdjacentToEdgeEndpoints(
+                new WorldPoint(1875, 5237, 0), new WorldPoint(1875, 5240, 0), new WorldPoint(1876, 5240, 0)));
+    }
+
+    @Test
+    public void aDoorOnAnotherPlaneDoesNotSuppressLearning() {
+        assertFalse(Rs2WalkerDoors.doorTileAdjacentToEdgeEndpoints(
+                new WorldPoint(1875, 5239, 1), new WorldPoint(1875, 5240, 0), new WorldPoint(1876, 5240, 0)));
+    }
+
+    @Test
+    public void faladorFirstGateWingOwnsTheBlockedFrontierBeforeTheLaterDoor() {
+        // Live regression 2026-08-16: the route first left reachability across this wing edge,
+        // but lookahead clicked the geometrically exact door at (2990,3337) five tiles away.
+        WorldPoint blockedFrom = new WorldPoint(2991, 3341, 1);
+        WorldPoint blockedTo = new WorldPoint(2991, 3340, 1);
+        assertTrue(Rs2WalkerDoors.doorTileAdjacentToEdgeEndpoints(
+                new WorldPoint(2990, 3340, 1), blockedFrom, blockedTo));
+        assertFalse(Rs2WalkerDoors.doorTileAdjacentToEdgeEndpoints(
+                new WorldPoint(2990, 3337, 1), blockedFrom, blockedTo));
     }
 
     // ---------------------------------------------------------------------------
@@ -1882,20 +2388,20 @@ public class Rs2WalkerUnitTest {
     @Test
     public void sessionBlacklist_addAndMembership() {
         WorldPoint door = new WorldPoint(3210, 3220, 0);
-        assertFalse(Rs2Walker.sessionBlacklistedDoors.contains(door));
-        Rs2Walker.sessionBlacklistedDoors.add(door);
-        assertTrue(Rs2Walker.sessionBlacklistedDoors.contains(door));
+        assertFalse(Rs2WalkerDoors.doorAttemptLedgerForTesting().isDoorBlacklisted(door));
+        Rs2WalkerDoors.doorAttemptLedgerForTesting().blacklistDoor(door);
+        assertTrue(Rs2WalkerDoors.doorAttemptLedgerForTesting().isDoorBlacklisted(door));
     }
 
     @Test
     public void sessionBlacklist_worldPointEqualityDrivesMembership() {
         // Two WorldPoints built from the same coords must hash/equal the same way —
         // otherwise the blacklist guard at handleDoors entry would miss re-attempts.
-        Rs2Walker.sessionBlacklistedDoors.add(new WorldPoint(3210, 3220, 0));
-        assertTrue(Rs2Walker.sessionBlacklistedDoors.contains(new WorldPoint(3210, 3220, 0)));
-        assertFalse(Rs2Walker.sessionBlacklistedDoors.contains(new WorldPoint(3210, 3221, 0)));
+        Rs2WalkerDoors.doorAttemptLedgerForTesting().blacklistDoor(new WorldPoint(3210, 3220, 0));
+        assertTrue(Rs2WalkerDoors.doorAttemptLedgerForTesting().isDoorBlacklisted(new WorldPoint(3210, 3220, 0)));
+        assertFalse(Rs2WalkerDoors.doorAttemptLedgerForTesting().isDoorBlacklisted(new WorldPoint(3210, 3221, 0)));
         assertFalse("different plane must not collide",
-                Rs2Walker.sessionBlacklistedDoors.contains(new WorldPoint(3210, 3220, 1)));
+                Rs2WalkerDoors.doorAttemptLedgerForTesting().isDoorBlacklisted(new WorldPoint(3210, 3220, 1)));
     }
 
     // ---------------------------------------------------------------------------
@@ -1918,23 +2424,20 @@ public class Rs2WalkerUnitTest {
     }
 
     @Test
-    public void telemetry_recordUnreachable_nullPathfinderDoesNotThrow() {
+    public void telemetry_recordUnreachable_nullMetricsDoesNotThrow() {
         Rs2Walker.Telemetry.recordUnreachable("partial-retries-exhausted",
                 null, null, null, 0, 2, null);
         assertEquals(1, Rs2Walker.Telemetry.unreachableCount.get());
     }
 
     @Test
-    public void telemetry_recordUnreachable_withPathfinderReadsStats() {
-        Pathfinder pathfinder = mock(Pathfinder.class);
-        Pathfinder.PathfinderStats stats = new Pathfinder.PathfinderStats();
-        when(pathfinder.getStats()).thenReturn(stats);
+    public void telemetry_recordUnreachable_withRouteMetricsDoesNotLeakPlannerState() {
+        Rs2RouteMetrics metrics = new Rs2RouteMetrics(2_000_000L, 12L, 30L, 4L);
 
         Rs2Walker.Telemetry.recordUnreachable("no-walkable-path",
                 new WorldPoint(3200, 3200, 0), new WorldPoint(3201, 3201, 0),
-                null, 0, 0, pathfinder);
+                null, 0, 0, metrics);
 
-        verify(pathfinder).getStats();
         assertEquals(1, Rs2Walker.Telemetry.unreachableCount.get());
     }
 
@@ -2009,5 +2512,295 @@ public class Rs2WalkerUnitTest {
     @Test(expected = NullPointerException.class)
     public void walkUntil_rejectsNullCondition() {
         Rs2Walker.walkUntil(new WorldPoint(3200, 3200, 0), 2, null);
+    }
+
+    // ---- arrival beside an unwalkable target (false-success near interactables) ---------------------
+
+    /**
+     * "Within distance of an object" was reported as ARRIVED on straight-line distance alone. With a
+     * wall between, the caller then interacted from the wrong side and failed while the walker claimed
+     * success — the silent-wrong-success case.
+     */
+    @Test
+    public void hasReachableNeighbour_trueWhenWeCanStandBesideTheTarget() {
+        WorldPoint chest = new WorldPoint(3200, 3200, 0);
+        java.util.Map<WorldPoint, Integer> reachable = new java.util.HashMap<>();
+        reachable.put(new WorldPoint(3200, 3199, 0), 1);   // directly south of it
+        assertTrue(Rs2Walker.hasReachableNeighbour(chest, reachable));
+    }
+
+    @Test
+    public void hasReachableNeighbour_acceptsDiagonalNeighbours() {
+        WorldPoint chest = new WorldPoint(3200, 3200, 0);
+        java.util.Map<WorldPoint, Integer> reachable = new java.util.HashMap<>();
+        reachable.put(new WorldPoint(3201, 3201, 0), 1);
+        assertTrue(Rs2Walker.hasReachableNeighbour(chest, reachable));
+    }
+
+    /** Near in a straight line, but every adjacent tile is on the far side of a wall. */
+    @Test
+    public void hasReachableNeighbour_falseWhenOnlyDistantTilesAreReachable() {
+        WorldPoint chest = new WorldPoint(3200, 3200, 0);
+        java.util.Map<WorldPoint, Integer> reachable = new java.util.HashMap<>();
+        reachable.put(new WorldPoint(3205, 3200, 0), 5);
+        reachable.put(new WorldPoint(3200, 3205, 0), 5);
+        assertFalse(Rs2Walker.hasReachableNeighbour(chest, reachable));
+    }
+
+    /** The target's own tile being reachable is not the question — we must stand BESIDE it. */
+    @Test
+    public void hasReachableNeighbour_targetTileItselfDoesNotCount() {
+        WorldPoint chest = new WorldPoint(3200, 3200, 0);
+        java.util.Map<WorldPoint, Integer> reachable = new java.util.HashMap<>();
+        reachable.put(chest, 0);
+        assertFalse(Rs2Walker.hasReachableNeighbour(chest, reachable));
+    }
+
+    /** A neighbour on another plane is not somewhere we can stand to use it. */
+    @Test
+    public void hasReachableNeighbour_ignoresOtherPlanes() {
+        WorldPoint chest = new WorldPoint(3200, 3200, 0);
+        java.util.Map<WorldPoint, Integer> reachable = new java.util.HashMap<>();
+        reachable.put(new WorldPoint(3200, 3199, 1), 1);
+        assertFalse(Rs2Walker.hasReachableNeighbour(chest, reachable));
+    }
+
+    @Test
+    public void hasReachableNeighbour_toleratesMissingInputs() {
+        assertFalse(Rs2Walker.hasReachableNeighbour(null, new java.util.HashMap<>()));
+        assertFalse(Rs2Walker.hasReachableNeighbour(new WorldPoint(3200, 3200, 0), null));
+        assertFalse(Rs2Walker.hasReachableNeighbour(new WorldPoint(3200, 3200, 0), new java.util.HashMap<>()));
+    }
+
+    // ---- walled route edge learning (the Sinclair Mansion deadlock) ---------------------------------
+
+    private static java.util.Map<WorldPoint, Integer> reachableSet(WorldPoint... tiles) {
+        java.util.Map<WorldPoint, Integer> m = new java.util.HashMap<>();
+        for (int i = 0; i < tiles.length; i++) {
+            m.put(tiles[i], i);
+        }
+        return m;
+    }
+
+    /**
+     * The route steps out of the BFS at b -> that edge is what is actually walled, whatever the shipped
+     * map claims. Learning it is what turns a permanent refuse/replan oscillation into one replan.
+     */
+    @Test
+    public void firstWalledRawEdge_findsTheStepThatLeavesTheBfs() {
+        WorldPoint p = new WorldPoint(2740, 3469, 0);
+        WorldPoint a = new WorldPoint(2740, 3468, 0);
+        WorldPoint b = new WorldPoint(2740, 3467, 0);
+        java.util.List<WorldPoint> raw = java.util.Arrays.asList(p, a, b, new WorldPoint(2740, 3466, 0));
+        WorldPoint[] edge = Rs2WalkerMovement.firstWalledRawEdge(raw, p, reachableSet(p, a), 12);
+        assertNotNull(edge);
+        assertEquals(a, edge[0]);
+        assertEquals(b, edge[1]);
+    }
+
+    /** Every step reachable — nothing is walled, so nothing may be learned. */
+    @Test
+    public void firstWalledRawEdge_allReachableLearnsNothing() {
+        WorldPoint p = new WorldPoint(2740, 3469, 0);
+        WorldPoint a = new WorldPoint(2740, 3468, 0);
+        java.util.List<WorldPoint> raw = java.util.Arrays.asList(p, a);
+        assertNull(Rs2WalkerMovement.firstWalledRawEdge(raw, p, reachableSet(p, a), 12));
+    }
+
+    /**
+     * Beyond the BFS budget "not reachable" means far away, not walled. Learning there would block a
+     * perfectly good edge permanently — the failure mode the two-strike store exists to avoid.
+     */
+    @Test
+    public void firstWalledRawEdge_ignoresStepsBeyondTheBfsBudget() {
+        WorldPoint p = new WorldPoint(2740, 3469, 0);
+        WorldPoint far = new WorldPoint(2740, 3449, 0);
+        java.util.List<WorldPoint> raw = java.util.Arrays.asList(p, far);
+        assertNull(Rs2WalkerMovement.firstWalledRawEdge(raw, p, reachableSet(p), 12));
+    }
+
+    /**
+     * A tile sitting AT the BFS budget never had its neighbours enumerated, so the next route tile is
+     * missing for want of budget, not because anything blocks it. Convicting that edge writes a lie
+     * into the learned-blocked-edge store and routing believes it for the rest of the session.
+     *
+     * <p>Pinned from a real farm run at the Port Sarim / Land's End docks: a click to (2760,3238) was
+     * refused as walled and the edge (2759,3230)->(2759,3231) learned — nine seconds later the walker
+     * was standing on (2760,3238), having simply walked there. Chebyshev-near, step-far.
+     */
+    @Test
+    public void firstWalledRawEdge_doesNotConvictTheBfsFrontierItself() {
+        WorldPoint player = new WorldPoint(2772, 3234, 0);
+        WorldPoint onFrontier = new WorldPoint(2759, 3230, 0);
+        WorldPoint beyond = new WorldPoint(2759, 3231, 0);
+        java.util.List<WorldPoint> raw = java.util.Arrays.asList(player, onFrontier, beyond);
+
+        java.util.Map<WorldPoint, Integer> reachable = new java.util.HashMap<>();
+        reachable.put(player, 0);
+        // Thirteen tiles away as the crow flies, but twenty STEPS around the dock buildings — exactly
+        // the budget, so the BFS stopped here and knows nothing about what lies past it.
+        reachable.put(onFrontier, 20);
+
+        assertNull("a tile at the budget proves nothing about its neighbour",
+                Rs2WalkerMovement.firstWalledRawEdge(raw, player, reachable, 20));
+    }
+
+    /** An interior tile DID have its neighbours enumerated, so a missing neighbour is genuinely walled. */
+    @Test
+    public void firstWalledRawEdge_stillConvictsAnEdgeLeavingTheBfsInterior() {
+        WorldPoint player = new WorldPoint(2772, 3234, 0);
+        WorldPoint interior = new WorldPoint(2770, 3234, 0);
+        WorldPoint walled = new WorldPoint(2769, 3234, 0);
+        java.util.List<WorldPoint> raw = java.util.Arrays.asList(player, interior, walled);
+
+        java.util.Map<WorldPoint, Integer> reachable = new java.util.HashMap<>();
+        reachable.put(player, 0);
+        reachable.put(interior, 2);
+
+        WorldPoint[] edge = Rs2WalkerMovement.firstWalledRawEdge(raw, player, reachable, 20);
+        assertNotNull("the BFS had budget left at this tile and still could not reach the next one", edge);
+        assertEquals(interior, edge[0]);
+        assertEquals(walled, edge[1]);
+    }
+
+    @Test
+    public void firstWalledRawEdge_toleratesMissingInputs() {
+        WorldPoint p = new WorldPoint(2740, 3469, 0);
+        assertNull(Rs2WalkerMovement.firstWalledRawEdge(null, p, reachableSet(p), 12));
+        assertNull(Rs2WalkerMovement.firstWalledRawEdge(java.util.Collections.emptyList(), p, reachableSet(p), 12));
+        assertNull(Rs2WalkerMovement.firstWalledRawEdge(java.util.Arrays.asList(p), p, null, 12));
+    }
+
+    // ---- post-door route target (chain the click past the opened door) ------------------------------
+
+    /**
+     * After a door opens, the follow-through click should make route progress, not step one tile.
+     * Every candidate must sit in the player-origin reachability map — the tile the previous attempt
+     * at this feature clicked was one the walled-route net had just refused, precisely because the
+     * selection ran ungated.
+     */
+
+    private static java.util.List<WorldPoint> northRoute(int startY, int count) {
+        java.util.List<WorldPoint> route = new java.util.ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            route.add(new WorldPoint(3100, startY + i, 0));
+        }
+        return route;
+    }
+
+    @Test
+    public void postDoorTarget_picksTheFurthestReachableRoutePoint() {
+        java.util.List<WorldPoint> route = northRoute(3200, 8); // door edge 3201 -> 3202
+        WorldPoint from = route.get(1);
+        WorldPoint to = route.get(2);
+        WorldPoint player = route.get(1);
+        java.util.Map<WorldPoint, Integer> reachable =
+                reachableSet(route.get(3), route.get(4), route.get(5));
+        assertEquals(route.get(5),
+                Rs2WalkerDoors.selectPostDoorRouteTarget(route, from, to, player, reachable, 13));
+    }
+
+    /** An unreachable far candidate must not be clicked; the furthest REACHABLE one wins instead. */
+    @Test
+    public void postDoorTarget_skipsTilesTheBfsCannotVouchFor() {
+        java.util.List<WorldPoint> route = northRoute(3200, 8);
+        WorldPoint from = route.get(1);
+        WorldPoint to = route.get(2);
+        WorldPoint player = route.get(1);
+        java.util.Map<WorldPoint, Integer> reachable = reachableSet(route.get(3), route.get(4));
+        assertEquals(route.get(4),
+                Rs2WalkerDoors.selectPostDoorRouteTarget(route, from, to, player, reachable, 13));
+    }
+
+    /** Nothing reachable past the door: null, and the caller keeps the single-tile nudge. */
+    @Test
+    public void postDoorTarget_nullWhenNothingPastTheDoorIsReachable() {
+        java.util.List<WorldPoint> route = northRoute(3200, 8);
+        java.util.Map<WorldPoint, Integer> reachable = reachableSet(route.get(0), route.get(1));
+        assertNull(Rs2WalkerDoors.selectPostDoorRouteTarget(route, route.get(1), route.get(2),
+                route.get(1), reachable, 13));
+    }
+
+    /** The edge must be ON the route: a route that merely passes nearby proves nothing beyond the door. */
+    @Test
+    public void postDoorTarget_nullWhenTheEdgeIsNotOnTheRoute() {
+        java.util.List<WorldPoint> route = northRoute(3200, 8);
+        WorldPoint offRouteFrom = new WorldPoint(3105, 3201, 0);
+        WorldPoint offRouteTo = new WorldPoint(3105, 3202, 0);
+        java.util.Map<WorldPoint, Integer> reachable = reachableSet(route.get(4));
+        assertNull(Rs2WalkerDoors.selectPostDoorRouteTarget(route, offRouteFrom, offRouteTo,
+                route.get(1), reachable, 13));
+    }
+
+    /** Candidates stop at the Euclidean cap and at a plane change — the same rules as route clicks. */
+    @Test
+    public void postDoorTarget_respectsTheCapAndThePlane() {
+        java.util.List<WorldPoint> route = northRoute(3200, 12);
+        WorldPoint player = route.get(1);
+        java.util.Map<WorldPoint, Integer> reachable =
+                reachableSet(route.get(3), route.get(9));
+        // route.get(9) is 8 tiles from the player — inside a cap of 13, outside a cap of 6.
+        assertEquals(route.get(9),
+                Rs2WalkerDoors.selectPostDoorRouteTarget(route, route.get(1), route.get(2), player, reachable, 13));
+        assertEquals(route.get(3),
+                Rs2WalkerDoors.selectPostDoorRouteTarget(route, route.get(1), route.get(2), player, reachable, 6));
+
+        java.util.List<WorldPoint> upstairs = new java.util.ArrayList<>(northRoute(3200, 4));
+        upstairs.add(new WorldPoint(3100, 3204, 1));
+        java.util.Map<WorldPoint, Integer> upstairsReachable = reachableSet(route.get(3));
+        assertEquals(route.get(3),
+                Rs2WalkerDoors.selectPostDoorRouteTarget(upstairs, upstairs.get(1), upstairs.get(2),
+                        upstairs.get(1), upstairsReachable, 13));
+    }
+
+    @Test
+    public void postDoorTarget_toleratesMissingInputs() {
+        java.util.List<WorldPoint> route = northRoute(3200, 4);
+        WorldPoint p = route.get(0);
+        java.util.Map<WorldPoint, Integer> reachable = reachableSet(route.get(3));
+        assertNull(Rs2WalkerDoors.selectPostDoorRouteTarget(null, p, route.get(1), p, reachable, 13));
+        assertNull(Rs2WalkerDoors.selectPostDoorRouteTarget(route, null, route.get(1), p, reachable, 13));
+        assertNull(Rs2WalkerDoors.selectPostDoorRouteTarget(route, p, null, p, reachable, 13));
+        assertNull(Rs2WalkerDoors.selectPostDoorRouteTarget(route, p, route.get(1), null, reachable, 13));
+        assertNull(Rs2WalkerDoors.selectPostDoorRouteTarget(route, p, route.get(1), p, null, 13));
+        assertNull(Rs2WalkerDoors.selectPostDoorRouteTarget(route, p, route.get(1), p,
+                new java.util.HashMap<>(), 13));
+    }
+
+    // ---- zoom-aware minimap reach --------------------------------------------------------------------
+    //
+    // The minimap shows 20*4/zoom tiles of radius. Reach follows what the USER's zoom makes visible
+    // in BOTH directions: zoomed out, big strides (capped at the reachability BFS horizon — beyond
+    // it a wall between could not be detected); zoomed in, SHORT strides. The first cut of this
+    // floored at the old flat 11, which quietly broke the zoomed-in half: an 11-tile stride on a
+    // minimap showing ~8 tiles of radius selects a point on or past the rim.
+
+    private static final int MIN_REACH = 5;
+    private static final int CAP = 18;
+    private static final int FALLBACK = 11;
+
+    @Test
+    public void zoomAwareReach_zoomedOutStridesFurtherUpToTheBfsHorizon() {
+        assertEquals(18, Rs2WalkerMovement.zoomAwareMinimapReach(4.0, MIN_REACH, CAP, FALLBACK)); // default: 20-2 -> cap
+        assertEquals(18, Rs2WalkerMovement.zoomAwareMinimapReach(2.0, MIN_REACH, CAP, FALLBACK)); // fully out: 38 -> cap
+    }
+
+    @Test
+    public void zoomAwareReach_zoomedInStridesShorter() {
+        assertEquals(14, Rs2WalkerMovement.zoomAwareMinimapReach(5.0, MIN_REACH, CAP, FALLBACK)); // pinned-era zoom: 16-2
+        assertEquals(11, Rs2WalkerMovement.zoomAwareMinimapReach(6.0, MIN_REACH, CAP, FALLBACK)); // 13-2
+        // Fully zoomed in the visible radius is ~8: the stride must SHRINK below the old flat 11.
+        assertEquals(8, Rs2WalkerMovement.zoomAwareMinimapReach(8.0, MIN_REACH, CAP, FALLBACK));
+    }
+
+    @Test
+    public void zoomAwareReach_extremeZoomStopsAtTheFunctionalFloor() {
+        assertEquals(MIN_REACH, Rs2WalkerMovement.zoomAwareMinimapReach(16.0, MIN_REACH, CAP, FALLBACK)); // 5-2=3 -> floor
+    }
+
+    @Test
+    public void zoomAwareReach_degenerateZoomFallsBackToTheFlatReach() {
+        assertEquals(FALLBACK, Rs2WalkerMovement.zoomAwareMinimapReach(0.0, MIN_REACH, CAP, FALLBACK));
+        assertEquals(FALLBACK, Rs2WalkerMovement.zoomAwareMinimapReach(-1.0, MIN_REACH, CAP, FALLBACK));
     }
 }

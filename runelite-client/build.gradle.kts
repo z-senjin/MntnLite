@@ -54,6 +54,26 @@ plugins {
 
 }
 
+sourceSets.named("main") {
+    java.srcDir("src/upstreamPlanner/src/main/java")
+}
+
+// The pinned upstream core loads the same reviewed collision archive from its original root path.
+// Keep one source artifact and copy it into both runtime resource namespaces during assembly.
+tasks.named<ProcessResources>("processResources") {
+    from("src/main/resources/net/runelite/client/plugins/microbot/shortestpath/collision-map.zip") {
+        into("")
+    }
+}
+
+tasks.withType<Checkstyle>().configureEach {
+    exclude("shortestpath/**")
+}
+
+tasks.withType<Pmd>().configureEach {
+    exclude("shortestpath/**")
+}
+
 // Module-system flags required to extend com.apple.eawt.FullScreenAdapter on macOS
 // (OSXFullScreenAdapter). Without these, the JVM throws IllegalAccessError at class load.
 val macEawtJvmArgs = listOf(
@@ -168,6 +188,51 @@ tasks.register<Test>("runTests") {
         events("passed", "skipped", "failed")
         showStandardStreams = true
     }
+}
+
+tasks.register<JavaExec>("exportLocalPlannerComparison") {
+    group = "verification"
+    description = "Export deterministic local planner results for the opt-in upstream comparison harness"
+
+    dependsOn(":client:compileJava", ":client:compileTestJava")
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("net.runelite.client.plugins.microbot.util.walker.LocalPlannerComparisonMain")
+
+    val corpus = providers.gradleProperty("plannerCorpus")
+    val output = providers.gradleProperty("plannerOutput")
+    doFirst {
+        require(corpus.isPresent && output.isPresent) {
+            "exportLocalPlannerComparison requires -PplannerCorpus=<path> and -PplannerOutput=<path>"
+        }
+        args(rootProject.file(corpus.get()).absolutePath, rootProject.file(output.get()).absolutePath)
+        systemProperty("microbot.planner.revision",
+            providers.gradleProperty("plannerRevision").getOrElse("unknown"))
+    }
+
+    outputs.upToDateWhen { false }
+}
+
+tasks.register<JavaExec>("exportEmbeddedUpstreamPlannerComparison") {
+    group = "verification"
+    description = "Export results from the production-packaged pinned upstream planner adapter"
+
+    dependsOn(":client:compileJava", ":client:compileTestJava")
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("net.runelite.client.plugins.microbot.util.walker.LocalPlannerComparisonMain")
+
+    val corpus = providers.gradleProperty("plannerCorpus")
+    val output = providers.gradleProperty("plannerOutput")
+    doFirst {
+        require(corpus.isPresent && output.isPresent) {
+            "exportEmbeddedUpstreamPlannerComparison requires -PplannerCorpus=<path> and -PplannerOutput=<path>"
+        }
+        args(rootProject.file(corpus.get()).absolutePath, rootProject.file(output.get()).absolutePath)
+        systemProperty("microbot.planner.revision",
+            providers.gradleProperty("plannerRevision").getOrElse("unknown"))
+        systemProperty("microbot.planner.embedded-upstream", "true")
+    }
+
+    outputs.upToDateWhen { false }
 }
 
 tasks.register<Test>("runUnitTests") {
@@ -442,7 +507,6 @@ publishing {
 val assemble = tasks.withType<net.runelite.gradle.assemble.AssembleTask> {
     scriptDirectory = file("src/main/scripts")
     outputDirectory = sourceSets.main.map { File(it.output.resourcesDir, "runelite") }
-    componentsFile = file("../runelite-api/src/main/interfaces/interfaces.toml")
     longSupport = true
 }
 

@@ -18,6 +18,39 @@ public final class Rs2WalkerAwaits {
     private static final long DOOR_IDLE_ACCEPT_MIN_MS = 1_200L;
     /** Above this combined wait, say which condition released the door await. */
     private static final long DOOR_AWAIT_SLOW_LOG_MS = 900L;
+    /**
+     * An unlocked door opens within one game tick of the click landing, so there is nothing to observe
+     * before then and polling earlier only spends client-thread time. Checked on an interval rather
+     * than every poll because the observation is a scene scan (~60ms measured), not a field read.
+     */
+    private static final long DOOR_OPEN_POLL_START_MS = 250L;
+    private static final long DOOR_OPEN_POLL_INTERVAL_MS = 250L;
+    /**
+     * A click issued from further than the legacy dispatch band is a RANGED click: the server has to
+     * walk us to the door before anything can open, so the wait is an approach, not a traversal.
+     */
+    static final int RANGED_CLICK_MIN_TILES = 3;
+    /** Walking pace is one tile per 0.6s; running arrives sooner and releases early via the edge read. */
+    private static final long APPROACH_MS_PER_TILE = 600L;
+    /** Hard ceiling on any door await. The stall release keeps long budgets from ever stranding us. */
+    private static final long DOOR_TRAVERSAL_MAX_BUDGET_MS = 8_000L;
+
+    /**
+     * How long the traversal phase may hold, given how far from the door the click was issued.
+     * <p>
+     * The flat 2200ms cap was sized for adjacent clicks — walk a step, door opens, step through. A
+     * ranged click spends its first seconds being WALKED to the door by the server, so the flat cap
+     * expired mid-approach: the wait released by timeout, the recovery machinery got its window (the
+     * competing-clicks race), and the door was then handled a second time from adjacent. Measured as
+     * two full interactions per ranged door.
+     */
+    static long traversalBudgetMs(int clickDistanceTiles) {
+        if (clickDistanceTiles < RANGED_CLICK_MIN_TILES) {
+            return DOOR_TRAVERSAL_PROGRESS_WAIT_MS;
+        }
+        return Math.min(DOOR_TRAVERSAL_PROGRESS_WAIT_MS + (clickDistanceTiles - 2) * APPROACH_MS_PER_TILE,
+                DOOR_TRAVERSAL_MAX_BUDGET_MS);
+    }
 
     private Rs2WalkerAwaits() {
     }
@@ -38,6 +71,55 @@ public final class Rs2WalkerAwaits {
     }
 
     public static void awaitDoorInteractionProgress(AwaitTicket ticket, WorldPoint fromWp, WorldPoint toWp) {
+        awaitDoorInteractionProgress(ticket, fromWp, toWp, null);
+    }
+
+    /**
+     * @param doorOpened observes the DOOR (its "Open" action is gone), as opposed to every other
+     *                   release condition here, which observes the PLAYER. May be {@code null}.
+     */
+    public static void awaitDoorInteractionProgress(AwaitTicket ticket, WorldPoint fromWp, WorldPoint toWp,
+                                                    java.util.function.BooleanSupplier doorOpened) {
+        awaitDoorInteractionProgress(ticket, fromWp, toWp, doorOpened, null);
+    }
+
+    /**
+     * @param doorObservation describes what the door observation last SAW, carried onto the slow log.
+     *                        Two live runs failed to explain why {@code door-opened} never fires, and
+     *                        "the poll ran and said no" is not an explanation without the reading
+     *                        behind it. Evaluated once, only when the log is about to print.
+     */
+    public static void awaitDoorInteractionProgress(AwaitTicket ticket, WorldPoint fromWp, WorldPoint toWp,
+                                                    java.util.function.BooleanSupplier doorOpened,
+                                                    java.util.function.Supplier<String> doorObservation) {
+        awaitDoorInteractionProgress(ticket, fromWp, toWp, doorOpened, doorObservation, null);
+    }
+
+    /**
+     * @param cancelled the walk this door belongs to was cancelled or re-targeted; holding an await
+     *                  for a route that no longer exists serves nobody. Matters now that ranged
+     *                  budgets can reach seconds where the flat cap bounded the stale hold at 2.2s.
+     */
+    public static void awaitDoorInteractionProgress(AwaitTicket ticket, WorldPoint fromWp, WorldPoint toWp,
+                                                    java.util.function.BooleanSupplier doorOpened,
+                                                    java.util.function.Supplier<String> doorObservation,
+                                                    java.util.function.BooleanSupplier cancelled) {
+        awaitDoorInteractionProgress(ticket, fromWp, toWp, doorOpened, doorObservation, cancelled, null);
+    }
+
+    /**
+     * @param doorCrossed observes the WALL FACE: the player already stands on the far side of the
+     *                    door's own face relative to the approach tile. The one reading that stays
+     *                    true when a moves-you gate deposits the player DIAGONALLY off the planned
+     *                    to-tile — where arrived-far-side and crossedDoorAxis both go blind (the
+     *                    attempt edge itself can be diagonal, and the deposit tile is not toWp).
+     *                    Cheap per poll; may be {@code null} when the door is not a wall object.
+     */
+    public static void awaitDoorInteractionProgress(AwaitTicket ticket, WorldPoint fromWp, WorldPoint toWp,
+                                                    java.util.function.BooleanSupplier doorOpened,
+                                                    java.util.function.Supplier<String> doorObservation,
+                                                    java.util.function.BooleanSupplier cancelled,
+                                                    java.util.function.BooleanSupplier doorCrossed) {
         if (ticket == null) {
             return;
         }
@@ -61,45 +143,127 @@ public final class Rs2WalkerAwaits {
         // "doors feel slow" into a specific target — the same play that took the transport problem
         // from four rounds of guessing to a one-shot fix.
         final String[] releasedBy = {"timeout"};
+        final long[] lastOpenPollAt = {0L};
+        // Carried into the slow log: a release that is NOT door-opened is ambiguous between "the
+        // observation never ran" and "it ran and the door was shut", and the first live run could not
+        // tell those apart. The count settles it without another round trip.
+        final int[] openPolls = {0};
+        final String[] lastEdge = {"-"};
+        final int[] totalPolls = {0};
+        final int[] movingPolls = {0};
+        final int[] animatingPolls = {0};
+
+        // A ranged click is an APPROACH, not a traversal: the server walks us to the door, the door
+        // opens on arrival (its 0-1 tick is measured from the interaction, not from the click), and
+        // only then is there anything to traverse. Live edge= data proved every "still shut" reading
+        // during the walk was CORRECT — the door genuinely is shut until we get there. The positional
+        // conditions are therefore wrong for this phase: "progress" fired at Chebyshev 2 mid-approach
+        // and "edge-resolved" fires on reaching the near side, both before the door opened, so every
+        // ranged door failed verification and was interacted twice. While approaching, a ranged wait
+        // holds until a DOOR outcome (edge open / opening action gone / conversation) or a stall.
+        final int clickDistance = ticket.beforePosition() == null || fromWp == null
+                || ticket.beforePosition().getPlane() != fromWp.getPlane()
+                ? 0
+                : ticket.beforePosition().distanceTo2D(fromWp);
+        final boolean ranged = clickDistance >= RANGED_CLICK_MIN_TILES;
+
         long traversalPhaseAt = System.currentTimeMillis();
         sleepUntil(() -> {
             if (Thread.currentThread().isInterrupted() || conversationOpened()) {
                 releasedBy[0] = "conversation-or-interrupt";
                 return true;
             }
+            if (cancelled != null && cancelled.getAsBoolean()) {
+                releasedBy[0] = "cancelled-or-replanned";
+                return true;
+            }
             WorldPoint now = Rs2Player.getWorldLocation();
             if (now == null) {
                 return false;
             }
-            boolean edgeResolved = isDoorEdgeResolved(fromWp, toWp);
+            boolean edgeResolved = !ranged && isDoorEdgeResolved(fromWp, toWp);
             if (edgeResolved) {
                 releasedBy[0] = "edge-resolved";
                 return true;
             }
-            if (Rs2WalkerProgress.isWithinChebyshev(now, toWp, 1)) {
+            if (doorCrossed != null && doorCrossed.getAsBoolean()) {
+                releasedBy[0] = "crossed-face";
+                return true;
+            }
+            // The one positional reading a ranged hold may trust: we are ON the far side, or past the
+            // door along its own axis. Near-side proximity stays disabled for ranged clicks — that was
+            // the premature release — but "past" is unambiguous, and it is how a hold ends when the
+            // server walks us to the far side through another opening without the door ever needing to
+            // open. Measured as a 6.9s ranged timeout with the player standing on toWp, door shut.
+            if (ranged && (now.equals(toWp) || Rs2DoorGeometry.crossedDoorAxis(fromWp, toWp, now))) {
+                releasedBy[0] = "passed-door";
+                return true;
+            }
+            // The door observations. The collision edge is authoritative — the client's flags are
+            // server-driven, so an opened door clears its block on that tick, whatever its menu says.
+            // Throttled because the fallback is a scene scan, not a field read.
+            long nowMs = System.currentTimeMillis();
+            if (shouldPollDoorOpen(nowMs - traversalPhaseAt, nowMs - lastOpenPollAt[0])) {
+                lastOpenPollAt[0] = nowMs;
+                openPolls[0]++;
+                boolean edgeOpen = Rs2Tile.isEdgePassable(fromWp, toWp);
+                // Captured HERE, not when the log prints: the previous diagnostic read the door after
+                // the wait had already released and reported the state at the wrong instant.
+                lastEdge[0] = Rs2Tile.lastEdgeDecision();
+                if (edgeOpen) {
+                    releasedBy[0] = "door-edge-open";
+                    return true;
+                }
+                // A "blocked" edge reading is definitive — the door is shut — so the scene-scan
+                // fallback only runs when the edge could not be decided (instance, off-scene, ...).
+                if (!"blocked".equals(lastEdge[0])
+                        && doorOpened != null && doorOpened.getAsBoolean()) {
+                    releasedBy[0] = "door-opened";
+                    return true;
+                }
+            }
+            if (!ranged && Rs2WalkerProgress.isWithinChebyshev(now, toWp, 1)) {
                 releasedBy[0] = "arrived-far-side";
                 return true;
             }
-            if (hasMeaningfulDoorProgress(ticket.beforePosition(), now, fromWp, toWp)) {
+            if (!ranged && hasMeaningfulDoorProgress(ticket.beforePosition(), now, fromWp, toWp)) {
                 releasedBy[0] = "progress";
                 return true;
             }
             long elapsedMs = System.currentTimeMillis() - ticket.startedAtMs();
-            boolean idleAccepted = shouldAcceptIdleDoorAwait(
-                    Rs2Player.isMoving(),
-                    Rs2Player.isAnimating(),
-                    elapsedMs,
-                    edgeResolved);
+            // Counted so a timeout can say why the stall release never fired — "idle-accept was
+            // silent" is ambiguous between the player walking the whole budget (correct silence)
+            // and the pose-based isMoving trap (a bug). The tally answers it from one log line.
+            boolean moving = Rs2Player.isMoving();
+            boolean animating = Rs2Player.isAnimating();
+            totalPolls[0]++;
+            if (moving) {
+                movingPolls[0]++;
+            }
+            if (animating) {
+                animatingPolls[0]++;
+            }
+            boolean idleAccepted = shouldAcceptIdleDoorAwait(moving, animating, elapsedMs, edgeResolved);
             if (idleAccepted) {
                 releasedBy[0] = "idle-accepted";
             }
             return idleAccepted;
-        }, DOOR_TRAVERSAL_PROGRESS_WAIT_MS);
+        }, (int) traversalBudgetMs(clickDistance));
         long traversalWaitMs = System.currentTimeMillis() - traversalPhaseAt;
 
         if (startWaitMs + traversalWaitMs >= DOOR_AWAIT_SLOW_LOG_MS) {
-            WebWalkLog.spInfo("door_await | releasedBy={} startWaitMs={} traversalWaitMs={} from={} to={}",
-                    releasedBy[0], startWaitMs, traversalWaitMs, fromWp, toWp);
+            String saw = "-";
+            if (doorObservation != null && !"door-opened".equals(releasedBy[0])) {
+                try {
+                    String detail = doorObservation.get();
+                    saw = detail == null ? "-" : detail;
+                } catch (RuntimeException ignored) {
+                    saw = "error";
+                }
+            }
+            WebWalkLog.spInfo("door_await | releasedBy={} startWaitMs={} traversalWaitMs={} clickDist={} ranged={} openPolls={} edge={} polls={} movingPolls={} animPolls={} saw={} from={} to={}",
+                    releasedBy[0], startWaitMs, traversalWaitMs, clickDistance, ranged, openPolls[0], lastEdge[0],
+                    totalPolls[0], movingPolls[0], animatingPolls[0], saw, fromWp, toWp);
         }
     }
 
@@ -119,6 +283,20 @@ public final class Rs2WalkerAwaits {
      * {@code edgeResolved} is retained in the signature because callers pass their own observation
      * and it keeps the decision table explicit about the case that used to be the only one accepted.
      */
+    /**
+     * Whether to spend a door-open observation on this poll.
+     * <p>
+     * Two rules, both about cost rather than correctness. An unlocked door opens within one game tick
+     * of the click landing, so an observation before {@link #DOOR_OPEN_POLL_START_MS} can only ever
+     * report "still shut" and is pure waste. And the observation is a scene scan (~60ms measured), not
+     * a field read, so at the poll rate of the surrounding wait it would otherwise run several times a
+     * second for the whole budget — the cost that made door handling expensive in the first place.
+     */
+    static boolean shouldPollDoorOpen(long sinceTraversalStartMs, long sinceLastPollMs) {
+        return sinceTraversalStartMs >= DOOR_OPEN_POLL_START_MS
+                && sinceLastPollMs >= DOOR_OPEN_POLL_INTERVAL_MS;
+    }
+
     @SuppressWarnings("unused")
     static boolean shouldAcceptIdleDoorAwait(boolean moving, boolean animating, long elapsedMs, boolean edgeResolved) {
         if (moving || animating) {

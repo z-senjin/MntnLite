@@ -26,7 +26,7 @@ public class Rs2WalkerStaminaTest {
 	public void thresholdAlwaysInConfiguredRange() {
 		for (String name : SAMPLE_NAMES) {
 			for (long seed : new long[]{FIXED_SEED_A, FIXED_SEED_B, 0L, 42L}) {
-				int v = Rs2Walker.computeStaminaThreshold(name, seed);
+				int v = Rs2WalkerMovement.computeStaminaThreshold(name, seed);
 				assertTrue(name + "@" + seed + " → " + v + " < min", v >= Rs2Walker.STAMINA_THRESHOLD_MIN);
 				assertTrue(name + "@" + seed + " → " + v + " > max", v <= Rs2Walker.STAMINA_THRESHOLD_MAX);
 			}
@@ -36,26 +36,26 @@ public class Rs2WalkerStaminaTest {
 	@Test
 	public void thresholdIsDeterministicPerNameAndSeed() {
 		for (String name : SAMPLE_NAMES) {
-			int first = Rs2Walker.computeStaminaThreshold(name, FIXED_SEED_A);
-			int second = Rs2Walker.computeStaminaThreshold(name, FIXED_SEED_A);
+			int first = Rs2WalkerMovement.computeStaminaThreshold(name, FIXED_SEED_A);
+			int second = Rs2WalkerMovement.computeStaminaThreshold(name, FIXED_SEED_A);
 			assertEquals(first, second);
 		}
 	}
 
 	@Test
 	public void thresholdIsCaseInsensitive() {
-		assertEquals(Rs2Walker.computeStaminaThreshold("Zezima", FIXED_SEED_A),
-				Rs2Walker.computeStaminaThreshold("ZEZIMA", FIXED_SEED_A));
-		assertEquals(Rs2Walker.computeStaminaThreshold("Lynx Titan", FIXED_SEED_A),
-				Rs2Walker.computeStaminaThreshold("lynx titan", FIXED_SEED_A));
+		assertEquals(Rs2WalkerMovement.computeStaminaThreshold("Zezima", FIXED_SEED_A),
+				Rs2WalkerMovement.computeStaminaThreshold("ZEZIMA", FIXED_SEED_A));
+		assertEquals(Rs2WalkerMovement.computeStaminaThreshold("Lynx Titan", FIXED_SEED_A),
+				Rs2WalkerMovement.computeStaminaThreshold("lynx titan", FIXED_SEED_A));
 	}
 
 	@Test
 	public void differentInstallSeedsProduceDifferentThresholds() {
 		int differing = 0;
 		for (String name : SAMPLE_NAMES) {
-			int a = Rs2Walker.computeStaminaThreshold(name, FIXED_SEED_A);
-			int b = Rs2Walker.computeStaminaThreshold(name, FIXED_SEED_B);
+			int a = Rs2WalkerMovement.computeStaminaThreshold(name, FIXED_SEED_A);
+			int b = Rs2WalkerMovement.computeStaminaThreshold(name, FIXED_SEED_B);
 			if (a != b) differing++;
 		}
 		assertTrue("install seed must meaningfully scatter thresholds across installs; only " + differing + " of "
@@ -71,7 +71,7 @@ public class Rs2WalkerStaminaTest {
 		int trials = 5_000;
 		for (int i = 0; i < trials; i++) {
 			String synthetic = Long.toHexString(nameGen.nextLong());
-			int v = Rs2Walker.computeStaminaThreshold(synthetic, FIXED_SEED_A);
+			int v = Rs2WalkerMovement.computeStaminaThreshold(synthetic, FIXED_SEED_A);
 			if (v >= Rs2Walker.STAMINA_HARDCORE_MIN && v <= Rs2Walker.STAMINA_HARDCORE_MAX) hardcore++;
 			else if (v >= Rs2Walker.STAMINA_CASUAL_MIN && v <= Rs2Walker.STAMINA_CASUAL_MAX) casual++;
 		}
@@ -84,8 +84,8 @@ public class Rs2WalkerStaminaTest {
 
 	@Test
 	public void thresholdFallbackHandlesNullAndEmpty() {
-		int nullThreshold = Rs2Walker.computeStaminaThreshold(null, FIXED_SEED_A);
-		int emptyThreshold = Rs2Walker.computeStaminaThreshold("", FIXED_SEED_A);
+		int nullThreshold = Rs2WalkerMovement.computeStaminaThreshold(null, FIXED_SEED_A);
+		int emptyThreshold = Rs2WalkerMovement.computeStaminaThreshold("", FIXED_SEED_A);
 		assertEquals(nullThreshold, emptyThreshold);
 		assertTrue(nullThreshold >= Rs2Walker.STAMINA_THRESHOLD_MIN);
 		assertTrue(nullThreshold <= Rs2Walker.STAMINA_THRESHOLD_MAX);
@@ -98,7 +98,7 @@ public class Rs2WalkerStaminaTest {
 		Random nameGen = new Random(42L);
 		for (int i = 0; i < 1_000; i++) {
 			String name = Long.toHexString(nameGen.nextLong());
-			int v = Rs2Walker.computeStaminaThreshold(name, FIXED_SEED_A);
+			int v = Rs2WalkerMovement.computeStaminaThreshold(name, FIXED_SEED_A);
 			if (v <= Rs2Walker.STAMINA_HARDCORE_MAX) {
 				hardcoreValues.add(v);
 			} else {

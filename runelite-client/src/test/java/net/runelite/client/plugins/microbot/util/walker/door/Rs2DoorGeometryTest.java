@@ -108,4 +108,68 @@ public class Rs2DoorGeometryTest {
                 wp(3200, 3200), 0));
         assertFalse(Rs2DoorGeometry.isDoorInteractionWithinRange(null, wp(3200, 3200), null, null, null, 2));
     }
+
+    // ---- playerBeyondWallFace --------------------------------------------------------------------
+    //
+    // THE STRONGHOLD GATE BOUNCE (2026-08-12). A west-facing moves-you Gate of War at (1887,5244);
+    // the route step (1886,5244)->(1887,5243) crossed its face DIAGONALLY, and the gate deposited
+    // the player at (1887,5244) — off the planned to-tile — so the segment-based crossing test
+    // answered false while the raw scan's backtrack window kept re-finding the gate. Each re-click
+    // carried the player back through it.
+
+    private static final int WEST = 1;
+    private static final int NORTH = 2;
+    private static final int EAST = 4;
+    private static final int SOUTH = 8;
+
+    /** The bounce itself: carried past the face, even a tile off the planned to-tile, is crossed. */
+    @Test
+    public void depositedBeyondTheFaceIsCrossedEvenOffThePlannedTile() {
+        assertTrue(Rs2DoorGeometry.playerBeyondWallFace(WEST, wp(1887, 5244),
+                wp(1886, 5244), wp(1887, 5244)));
+    }
+
+    /** Approaching from the near side — including standing ON the approach tile — is not crossed. */
+    @Test
+    public void approachingTheFaceIsNotCrossed() {
+        assertFalse(Rs2DoorGeometry.playerBeyondWallFace(WEST, wp(1887, 5244),
+                wp(1886, 5244), wp(1885, 5244)));
+        assertFalse(Rs2DoorGeometry.playerBeyondWallFace(WEST, wp(1887, 5244),
+                wp(1886, 5244), wp(1886, 5244)));
+    }
+
+    /** Standing on the wall's own tile counts as its side of the face: the second Stronghold gate. */
+    @Test
+    public void standingOnTheWallTileIsBeyondAWestFaceApproachedFromTheWest() {
+        assertTrue(Rs2DoorGeometry.playerBeyondWallFace(WEST, wp(1904, 5242),
+                wp(1903, 5242), wp(1904, 5242)));
+    }
+
+    /** The same boundary read from the other direction: crossing east-to-west is symmetric. */
+    @Test
+    public void crossingIsSymmetricAcrossTheFace() {
+        assertTrue(Rs2DoorGeometry.playerBeyondWallFace(WEST, wp(1887, 5244),
+                wp(1887, 5244), wp(1886, 5244)));
+        assertFalse(Rs2DoorGeometry.playerBeyondWallFace(WEST, wp(1887, 5244),
+                wp(1887, 5244), wp(1888, 5244)));
+    }
+
+    @Test
+    public void everyCardinalFaceDividesAlongItsOwnAxis() {
+        // East face of (10,10): boundary between x=10 and x=11.
+        assertTrue(Rs2DoorGeometry.playerBeyondWallFace(EAST, wp(10, 10), wp(10, 10), wp(11, 10)));
+        assertFalse(Rs2DoorGeometry.playerBeyondWallFace(EAST, wp(10, 10), wp(10, 10), wp(9, 10)));
+        // North face of (10,10): boundary between y=10 and y=11.
+        assertTrue(Rs2DoorGeometry.playerBeyondWallFace(NORTH, wp(10, 10), wp(10, 10), wp(10, 11)));
+        // South face of (10,10): boundary between y=9 and y=10.
+        assertTrue(Rs2DoorGeometry.playerBeyondWallFace(SOUTH, wp(10, 10), wp(10, 10), wp(10, 9)));
+        assertFalse(Rs2DoorGeometry.playerBeyondWallFace(SOUTH, wp(10, 10), wp(10, 10), wp(10, 10)));
+    }
+
+    /** A corner wall's face does not divide the plane along one axis: never claim crossed. */
+    @Test
+    public void cornerWallsNeverReadAsCrossed() {
+        assertFalse(Rs2DoorGeometry.playerBeyondWallFace(16, wp(10, 10), wp(9, 10), wp(11, 10)));
+        assertFalse(Rs2DoorGeometry.playerBeyondWallFace(128, wp(10, 10), wp(9, 10), wp(11, 10)));
+    }
 }

@@ -3,14 +3,29 @@ package net.runelite.client.plugins.microbot.util;
 import lombok.SneakyThrows;
 import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.util.antiban.SessionFatigue;
+import net.runelite.client.plugins.microbot.util.input.InputArbiter;
 import net.runelite.client.plugins.microbot.util.math.Rs2Random;
 
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 
 public class Global {
     static ScheduledExecutorService scheduledExecutorService = Executors.newScheduledThreadPool(10);
-    static ScheduledFuture<?> scheduledFuture;
+
+    /**
+     * Every wait here treats a human takeover as terminal.
+     *
+     * <p>Deliberately not terminal on {@code pauseAllScripts}. That flag doubles as a transient
+     * guard a script raises around its own action sequence and then keeps waiting inside; see
+     * {@code Rs2GroundItem.runWhilePaused}. Making these waits no-ops there would break it.
+     */
+    private static boolean humanOwnsInput() {
+        return InputArbiter.isHuman();
+    }
+
+    private static final int SLEEP_SLICE_MS = 50;
 
     private static final int POLL_MIN_MS = 40;
     private static final int POLL_MAX_MS = 320;
@@ -25,23 +40,53 @@ public class Global {
         return (int) sample;
     }
 
+    /**
+     * Polls a condition off-thread and runs the callback once it holds. Stops without running the
+     * callback if the human takes over.
+     *
+     * <p>The future is held per call, not in a static field: two concurrent callers raced on that
+     * and could cancel each other. Cancellation is non-interrupting because the task cancels
+     * itself, and {@code cancel(true)} would leave an interrupt flag on a pooled thread.
+     */
     public static ScheduledFuture<?> awaitExecutionUntil(Runnable callback, BooleanSupplier awaitedCondition, int time) {
-        scheduledFuture = scheduledExecutorService.scheduleWithFixedDelay(() -> {
-            if (awaitedCondition.getAsBoolean()) {
-                scheduledFuture.cancel(true);
-                scheduledFuture = null;
-                callback.run();
-            }
-        }, 0, time, TimeUnit.MILLISECONDS);
-        return scheduledFuture;
+        final AtomicReference<ScheduledFuture<?>> holder = new AtomicReference<>();
+        final AtomicBoolean finished = new AtomicBoolean();
+
+        Runnable poll = () -> {
+            if (finished.get()) return;
+            boolean human = humanOwnsInput();
+            if (!human && !awaitedCondition.getAsBoolean()) return;
+            if (!finished.compareAndSet(false, true)) return;
+            cancelQuietly(holder);
+            if (!human) callback.run();
+        };
+
+        ScheduledFuture<?> future = scheduledExecutorService.scheduleWithFixedDelay(poll, 0, time, TimeUnit.MILLISECONDS);
+        holder.set(future);
+        // The first poll runs with zero initial delay, so it can finish before the line above.
+        if (finished.get()) cancelQuietly(holder);
+        return future;
     }
 
+    private static void cancelQuietly(AtomicReference<ScheduledFuture<?>> holder) {
+        ScheduledFuture<?> future = holder.get();
+        if (future != null) future.cancel(false);
+    }
+
+    /** Sliced so a takeover cuts the remainder short. Every fixed-sleep wrapper funnels here. */
     public static void sleep(int start) {
         if (Microbot.getClient().isClientThread()) return;
-        try {
-            Thread.sleep(start);
-        } catch (InterruptedException ignored) {
-            Thread.currentThread().interrupt();
+        long remaining = start;
+        while (remaining > 0) {
+            if (humanOwnsInput()) return;
+            long slice = Math.min(remaining, SLEEP_SLICE_MS);
+            try {
+                Thread.sleep(slice);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            remaining -= slice;
         }
     }
 
@@ -96,7 +141,7 @@ public class Global {
         T methodResponse;
         final long endTime = System.currentTimeMillis()+timeoutMillis;
         do {
-            if (Thread.currentThread().isInterrupted()) {
+            if (Thread.currentThread().isInterrupted() || humanOwnsInput()) {
                 return null;
             }
             methodResponse = method.call();
@@ -127,6 +172,7 @@ public class Global {
         long startTime = System.currentTimeMillis();
         try {
             while (!Thread.currentThread().isInterrupted() && System.currentTimeMillis() - startTime < time) {
+                if (humanOwnsInput()) return false;
                 if (awaitedCondition.getAsBoolean()) return true;
                 sleep(nextPollIntervalMs());
             }
@@ -142,6 +188,7 @@ public class Global {
         long timeoutNanos = TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
         try {
             while (!Thread.currentThread().isInterrupted() && System.nanoTime() - startTime < timeoutNanos) {
+                if (humanOwnsInput()) return false;
                 if (awaitedCondition.getAsBoolean()) {
                     return true;
                 }
@@ -159,7 +206,7 @@ public class Global {
         long startTime = System.currentTimeMillis();
         try {
             do {
-                if (Thread.currentThread().isInterrupted()) {
+                if (Thread.currentThread().isInterrupted() || humanOwnsInput()) {
                     return false;
                 }
                 if (awaitedCondition.getAsBoolean()) {
@@ -178,7 +225,7 @@ public class Global {
         long startTime = System.currentTimeMillis();
         try {
             do {
-                if (Thread.currentThread().isInterrupted()) {
+                if (Thread.currentThread().isInterrupted() || humanOwnsInput()) {
                     return false;
                 }
                 if (awaitedCondition.getAsBoolean()) {
@@ -197,7 +244,7 @@ public class Global {
         long startTime = System.currentTimeMillis();
         try {
             do {
-                if (Thread.currentThread().isInterrupted()) {
+                if (Thread.currentThread().isInterrupted() || humanOwnsInput()) {
                     return false;
                 }
                 if (resetCondition.getAsBoolean()) {
@@ -227,7 +274,8 @@ public class Global {
         long startTime = System.currentTimeMillis();
         try {
             do {
-                if (Thread.currentThread().isInterrupted()) {
+                // Never calls sleep(): it spins on the client-thread round trip.
+                if (Thread.currentThread().isInterrupted() || humanOwnsInput()) {
                     return;
                 }
                 done = Microbot.getClientThread().runOnClientThreadOptional(awaitedCondition::getAsBoolean).orElse(false);
@@ -242,12 +290,18 @@ public class Global {
         return sleepTicks(ticksToWait);
     }
 
+    /**
+     * The one wait that cannot be immediate: it blocks on a {@code CountDownLatch} released by the
+     * GameTick event, so a takeover only surfaces at the next tick or the latch timeout. Checked
+     * either side of the await.
+     */
     public static boolean sleepUntilNextTick() {
         if (Microbot.getClient().isClientThread()) return false;
+        if (humanOwnsInput()) return false;
         GameTickBroadcaster broadcaster = Microbot.getGameTickBroadcaster();
         if (broadcaster == null) return false;
         try {
-            return broadcaster.awaitNextTick();
+            return broadcaster.awaitNextTick() && !humanOwnsInput();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return false;
@@ -256,10 +310,11 @@ public class Global {
 
     public static boolean sleepUntilNextTick(long timeoutMs) {
         if (Microbot.getClient().isClientThread()) return false;
+        if (humanOwnsInput()) return false;
         GameTickBroadcaster broadcaster = Microbot.getGameTickBroadcaster();
         if (broadcaster == null) return false;
         try {
-            return broadcaster.awaitNextTick(timeoutMs);
+            return broadcaster.awaitNextTick(timeoutMs) && !humanOwnsInput();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return false;

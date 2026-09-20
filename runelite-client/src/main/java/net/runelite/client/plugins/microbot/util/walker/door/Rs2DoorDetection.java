@@ -42,7 +42,7 @@ public final class Rs2DoorDetection {
             return false;
         }
         String action = Rs2DoorClassifier.pickWalkDoorAction(comp);
-        return Rs2DoorClassifier.isDoorLikeGameObjectName(comp.getName())
-                || (action != null && Rs2DoorClassifier.doorActionPriorityIndex(action) < Integer.MAX_VALUE);
+        return Rs2DoorClassifier.isRouteDoorObject(object instanceof net.runelite.api.WallObject,
+                comp.getName(), action);
     }
 }

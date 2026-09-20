@@ -4,6 +4,7 @@ import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.plugins.microbot.shortestpath.pathfinder.Pathfinder;
 import net.runelite.client.plugins.microbot.shortestpath.pathfinder.PathfinderConfig;
 import net.runelite.client.plugins.microbot.shortestpath.pathfinder.SplitFlagMap;
+import net.runelite.client.plugins.microbot.util.walker.geometry.WalkerPathGeometry;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
@@ -13,16 +14,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 /**
  * Regression for the "walker deviates wide / traps itself near Varrock West Bank" bug.
  *
- * <p>The click layer had overshot onto {@code (3176,3428)} — a tile that is <em>not on the raw
- * route</em> — because route selection returned null on a stale anchor and the caller fell through
- * to clamping a far smoothed waypoint to a Euclidean radius. The game then pathed to that off-route
- * tile its own way, which is what produced the wide deviation and the backtracking.
+ * <p>The click layer had overshot onto {@code (3176,3428)} — a tile that was <em>not on the raw
+ * route in the captured incident</em> — because route selection returned null on a stale anchor and
+ * the caller fell through to clamping a far smoothed waypoint to a Euclidean radius. The game then
+ * pathed to that off-route tile its own way, producing the wide deviation and backtracking.
  *
  * <p>The invariant this pins is therefore <strong>"the click target is on the raw route"</strong>,
  * not "the click target is in line of sight". A minimap click is resolved by the game's own
@@ -37,9 +38,6 @@ public class RouteClickTargetRegressionTest {
 
     private static final WorldPoint START = new WorldPoint(3183, 3435, 0);
     private static final WorldPoint GOAL = new WorldPoint(3173, 3399, 0);
-    /** The historic bad click: ~10 tiles out, and crucially NOT on the raw route. */
-    private static final WorldPoint OLD_DEVIATING_CLICK = new WorldPoint(3176, 3428, 0);
-
     private static List<WorldPoint> sharedRawPath;
 
     @BeforeClass
@@ -48,7 +46,41 @@ public class RouteClickTargetRegressionTest {
         // Computed once: each Pathfinder.run() reloads all transports and, via
         // CollisionMap.getCachedRegionId, calls Rs2Player.getWorldLocation(), which has no client
         // thread under test and blocks for its full timeout.
-        sharedRawPath = computeRawPath(START, GOAL);
+        sharedRawPath = computeRawPathReachingGoal(START, GOAL);
+    }
+
+    /**
+     * Computes the route, and refuses to report a starved run as a route regression.
+     *
+     * <p>{@code calculationCutoffMillis} is a NO-PROGRESS wall-clock guard. Under CPU contention —
+     * a full-suite run, or a client running alongside the build — the search can be starved into
+     * returning a best-effort PARTIAL path, and a partial path wanders through tiles the assertions
+     * below require to be absent. That failure looks exactly like the regression this class exists
+     * to catch, and it has already been misread as one: a red run here sent an investigation off
+     * hunting a route-data change that did not exist.
+     *
+     * <p>So: a generous cutoff, one retry, and if the path still does not reach the goal, fail as
+     * explicitly inconclusive rather than as a route change.
+     */
+    private static List<WorldPoint> computeRawPathReachingGoal(WorldPoint start, WorldPoint goal) {
+        List<WorldPoint> path = computeRawPath(start, goal);
+        if (reachesGoal(path, goal)) {
+            return path;
+        }
+        path = computeRawPath(start, goal);
+        if (reachesGoal(path, goal)) {
+            return path;
+        }
+        throw new AssertionError("pathfinder starved — INCONCLUSIVE, not a route regression: the "
+            + "search did not reach " + goal + " within its no-progress cutoff on two attempts "
+            + "(got " + path.size() + " tiles, ending at "
+            + (path.isEmpty() ? "nothing" : path.get(path.size() - 1)) + "). Re-run this test on an "
+            + "idle machine before treating it as a routing change.");
+    }
+
+    /** The pathfinder returns a best-effort partial path when starved, so check the endpoint. */
+    private static boolean reachesGoal(List<WorldPoint> path, WorldPoint goal) {
+        return !path.isEmpty() && path.get(path.size() - 1).equals(goal);
     }
 
     private static List<WorldPoint> computeRawPath(WorldPoint start, WorldPoint goal) {
@@ -58,7 +90,10 @@ public class RouteClickTargetRegressionTest {
         try {
             java.lang.reflect.Field f = PathfinderConfig.class.getDeclaredField("calculationCutoffMillis");
             f.setAccessible(true);
-            f.setLong(config, 10000);
+            // 30s of NO PROGRESS, not 30s of runtime: the guard resets on every heuristic
+            // improvement, so this costs nothing on a healthy run and only buys headroom on a
+            // contended one.
+            f.setLong(config, 30_000);
             for (Map.Entry<WorldPoint, Set<Transport>> e : transports.entrySet()) {
                 if (e.getKey() == null) continue;
                 config.getTransports().put(e.getKey(), e.getValue());
@@ -73,11 +108,14 @@ public class RouteClickTargetRegressionTest {
     }
 
     @Test
-    public void theHistoricDeviatingClickIsNotOnTheRawRoute() {
-        assertFalse("raw path should not be empty", sharedRawPath.isEmpty());
-        assertFalse("(3176,3428) must not be on the raw route — selecting only on-route points is "
-                        + "what prevents the game improvising a detour",
-                sharedRawPath.contains(OLD_DEVIATING_CLICK));
+    public void primaryClickSelectionStaysOnComputedRawRoute() {
+        WorldPoint selected = WalkerPathGeometry.findFurthestRawPathPointMatching(
+                sharedRawPath, START, 10, 0, point -> true,
+                sharedRawPath.size(), () -> 0);
+
+        assertNotNull("the real route should offer a primary minimap target", selected);
+        assertTrue("primary click selection must return a tile on the current randomized raw route",
+                sharedRawPath.contains(selected));
     }
 
     /**

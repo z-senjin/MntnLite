@@ -81,6 +81,7 @@ public class OptimalQuestGuide
 		QuestHelperQuest.NATURE_SPIRIT,
 		QuestHelperQuest.GHOSTS_AHOY,
 		QuestHelperQuest.MAKING_HISTORY,
+		QuestHelperQuest.THE_IDES_OF_MILK,
 		QuestHelperQuest.THE_LOST_TRIBE,
 		QuestHelperQuest.DEATH_TO_THE_DORGESHUUN,
 		QuestHelperQuest.ELEMENTAL_WORKSHOP_I,
@@ -253,6 +254,8 @@ public class OptimalQuestGuide
 		QuestHelperQuest.BENEATH_CURSED_SANDS,
 		QuestHelperQuest.SHADOWS_OF_CUSTODIA,
 		QuestHelperQuest.TROUBLED_TORTUGANS,
+		QuestHelperQuest.THE_RED_REEF,
+		QuestHelperQuest.FALLEN_FROM_GRACE,
 		QuestHelperQuest.MONKEY_MADNESS_II,
 		//QuestHelperQuest.INTO_THE_TOMBS, - Placeholder for future addition.
 		QuestHelperQuest.A_NIGHT_AT_THE_THEATRE,
@@ -264,6 +267,7 @@ public class OptimalQuestGuide
 		QuestHelperQuest.WHILE_GUTHIX_SLEEPS,
 		QuestHelperQuest.DESERT_TREASURE_II,
 		QuestHelperQuest.SONG_OF_THE_ELVES,
+		QuestHelperQuest.THE_BLOOD_MOON_RISES,
 		QuestHelperQuest.CLOCK_TOWER,
 		QuestHelperQuest.THE_CORSAIR_CURSE,
 		// Quests & mini quests that are not part of the OSRS Wiki's Optimal Quest Guide

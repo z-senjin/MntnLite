@@ -1,8 +1,10 @@
 package net.runelite.client.plugins.microbot.shortestpath;
 
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.gameval.ItemID;
 import net.runelite.client.plugins.microbot.shortestpath.pathfinder.Pathfinder;
 import net.runelite.client.plugins.microbot.shortestpath.pathfinder.PathfinderConfig;
+import net.runelite.client.plugins.microbot.shortestpath.pathfinder.PathEdge;
 import net.runelite.client.plugins.microbot.shortestpath.pathfinder.SplitFlagMap;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -18,6 +20,7 @@ import java.util.Set;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
@@ -96,11 +99,25 @@ public class WalkerRouteCorpusTest {
         return config;
     }
 
-    private static List<WorldPoint> route(PathfinderConfig config, WorldPoint from, WorldPoint to) {
+    private static Pathfinder runPathfinder(PathfinderConfig config, WorldPoint from, WorldPoint to) {
         Pathfinder pf = new Pathfinder(config, from, to);
         pf.run();
         assertTrue("pathfinder did not complete for " + from + " -> " + to, pf.isDone());
-        return pf.getPath();
+        return pf;
+    }
+
+    private static List<WorldPoint> route(PathfinderConfig config, WorldPoint from, WorldPoint to) {
+        return runPathfinder(config, from, to).getPath();
+    }
+
+    private static boolean selectsTransport(Pathfinder pathfinder, Predicate<Transport> predicate) {
+        List<PathEdge> edges = pathfinder.getPathEdges();
+        return edges != null && edges.stream().anyMatch(edge ->
+                edge.getTransport() != null && predicate.test(edge.getTransport()));
+    }
+
+    private static boolean selectsTransportObject(Pathfinder pathfinder, int objectId) {
+        return selectsTransport(pathfinder, transport -> transport.getObjectId() == objectId);
     }
 
     private static boolean arrives(List<WorldPoint> path, WorldPoint goal, int tolerance) {
@@ -116,15 +133,321 @@ public class WalkerRouteCorpusTest {
                 p.getPlane() == tile.getPlane() && p.distanceTo2D(tile) <= radius);
     }
 
+    private static boolean usesTransportType(List<WorldPoint> path, TransportType type) {
+        if (path == null || path.size() < 2) {
+            return false;
+        }
+        for (int index = 0; index < path.size() - 1; index++) {
+            WorldPoint origin = path.get(index);
+            WorldPoint destination = path.get(index + 1);
+            if (allTransports.getOrDefault(origin, Collections.emptySet()).stream().anyMatch(transport ->
+                    transport.getType() == type && destination.equals(transport.getDestination()))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean usesTransportObject(List<WorldPoint> path, int objectId) {
+        if (path == null || path.size() < 2) {
+            return false;
+        }
+        for (int index = 0; index < path.size() - 1; index++) {
+            WorldPoint origin = path.get(index);
+            WorldPoint destination = path.get(index + 1);
+            if (allTransports.getOrDefault(origin, Collections.emptySet()).stream().anyMatch(transport ->
+                    transport.getObjectId() == objectId && destination.equals(transport.getDestination()))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static final WorldPoint LUMBRIDGE = new WorldPoint(3222, 3218, 0);
 
     // ---- baseline ----------------------------------------------------------------------------------
+
+    @Test
+    public void standardApeAtollSpellRetainsSourceAwareRequirementsWithoutMovingItsLanding() {
+        WorldPoint reviewedLanding = new WorldPoint(2797, 2798, 1);
+        Transport teleport = allTransports.getOrDefault(null, Collections.emptySet()).stream()
+                .filter(transport -> transport.getType() == TransportType.TELEPORTATION_SPELL)
+                .filter(transport -> reviewedLanding.equals(transport.getDestination()))
+                .filter(transport -> "Ape Atoll Teleport".equals(transport.getDisplayInfo()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("standard Ape Atoll spell row is missing"));
+
+        assertEquals("the requirement import must not change the reviewed landing",
+                reviewedLanding, teleport.getDestination());
+        assertEquals("fire, water, law and banana are separate AND-clauses",
+                4, teleport.getItemRequirements().size());
+        TransportItemRequirement fire = teleport.getItemRequirements().stream()
+                .filter(requirement -> requirement.getAlternatives().containsKey(ItemID.FIRERUNE))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("fire-rune clause is missing"));
+        TransportItemRequirement water = teleport.getItemRequirements().stream()
+                .filter(requirement -> requirement.getAlternatives().containsKey(ItemID.WATERRUNE))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("water-rune clause is missing"));
+        TransportItemRequirement banana = teleport.getItemRequirements().stream()
+                .filter(requirement -> requirement.getAlternatives().containsKey(ItemID.BANANA))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("banana clause is missing"));
+
+        assertTrue("one Twinflame staff must satisfy both elemental clauses",
+                fire.getStaffAlternatives().contains(ItemID.TWINFLAME_STAFF)
+                        && water.getStaffAlternatives().contains(ItemID.TWINFLAME_STAFF));
+        assertTrue("ordinary inventory items must not become equipment providers",
+                banana.getStaffAlternatives().isEmpty() && banana.getOffhandAlternatives().isEmpty());
+    }
 
     @Test
     public void lumbridgeToGrandExchange_plainWalkArrives() {
         List<WorldPoint> path = route(configWith(WalkerRouteCorpusTest::unrestricted),
                 LUMBRIDGE, new WorldPoint(3164, 3485, 0));
         assertTrue("baseline overland route must arrive", arrives(path, new WorldPoint(3164, 3485, 0), 5));
+    }
+
+    @Test
+    public void quetzalNetworkUsesCurrentQuetzacalliLanding() {
+        WorldPoint aldarin = new WorldPoint(1389, 2901, 0);
+        WorldPoint quetzacalli = new WorldPoint(1510, 3222, 0);
+        List<WorldPoint> path = route(configWith(transport -> unrestricted(transport)
+                        || transport.getType() == TransportType.QUETZAL),
+                aldarin, quetzacalli);
+
+        assertTrue("quetzal route must arrive at the current Gorge landing",
+                arrives(path, quetzacalli, 1));
+        assertTrue("the long Varlamore crossing must use the QUETZAL network",
+                usesTransportType(path, TransportType.QUETZAL));
+    }
+
+    @Test
+    public void riverDougneCanoeConnectsCastleWarsToTreeGnomeStronghold() {
+        WorldPoint castleWarsStation = new WorldPoint(2439, 3135, 0);
+        WorldPoint strongholdLanding = new WorldPoint(2523, 3408, 0);
+        List<WorldPoint> path = route(configWith(transport -> unrestricted(transport)
+                        || transport.getType() == TransportType.CANOE),
+                castleWarsStation, strongholdLanding);
+
+        assertTrue("River Dougne route must arrive at Tree Gnome Stronghold",
+                arrives(path, strongholdLanding, 1));
+        assertTrue("the long western crossing must use the CANOE network",
+                usesTransportType(path, TransportType.CANOE));
+    }
+
+    @Test
+    public void lagunaAuroraeSpiritTreeHasTheCompleteReviewedOutboundPerimeter() {
+        Set<WorldPoint> reviewedOrigins = Set.of(
+                new WorldPoint(1201, 2788, 0),
+                new WorldPoint(1202, 2788, 0),
+                new WorldPoint(1201, 2787, 0),
+                new WorldPoint(1201, 2786, 0),
+                new WorldPoint(1204, 2786, 0),
+                new WorldPoint(1201, 2785, 0),
+                new WorldPoint(1202, 2785, 0),
+                new WorldPoint(1203, 2785, 0),
+                new WorldPoint(1204, 2785, 0));
+        WorldPoint grandExchange = new WorldPoint(3185, 3508, 0);
+
+        for (WorldPoint origin : reviewedOrigins) {
+            assertTrue("Laguna perimeter origin must offer the reviewed spirit-tree network: " + origin,
+                    allTransports.getOrDefault(origin, Collections.emptySet()).stream()
+                            .anyMatch(transport -> transport.getType() == TransportType.SPIRIT_TREE
+                                    && transport.getObjectId() == 26262
+                                    && grandExchange.equals(transport.getDestination())));
+        }
+
+        WorldPoint pohSpiritTree = new WorldPoint(2007, 5700, 0);
+        assertFalse("POH spirit-tree execution is programmatic and must not be duplicated in static data",
+                allTransports.getOrDefault(pohSpiritTree, Collections.emptySet()).stream()
+                        .anyMatch(transport -> transport.getType() == TransportType.SPIRIT_TREE));
+        assertFalse("the static destination list must not duplicate the programmatic POH spirit tree",
+                allTransports.getOrDefault(null, Collections.emptySet()).stream()
+                        .anyMatch(transport -> transport.getType() == TransportType.SPIRIT_TREE
+                                && pohSpiritTree.equals(transport.getDestination())));
+
+        WorldPoint northWestApproach = new WorldPoint(1201, 2788, 0);
+        List<WorldPoint> path = route(configWith(transport -> unrestricted(transport)
+                        || transport.getType() == TransportType.SPIRIT_TREE),
+                northWestApproach, grandExchange);
+        assertTrue("Laguna Aurorae must route outbound through its spirit tree",
+                arrives(path, grandExchange, 1));
+        assertTrue("the selected Laguna edge must retain the current object id",
+                usesTransportObject(path, 26262));
+    }
+
+    @Test
+    public void elementalWorkshopWallUsesConcreteObjectAndFailsClosedForUnverifiedKeyring() {
+        WorldPoint south = new WorldPoint(2709, 3495, 0);
+        WorldPoint north = new WorldPoint(2709, 3496, 0);
+        Set<WorldPoint> endpoints = Set.of(south, north);
+
+        for (WorldPoint origin : endpoints) {
+            WorldPoint destination = origin.equals(south) ? north : south;
+            Transport wall = allTransports.getOrDefault(origin, Collections.emptySet()).stream()
+                    .filter(transport -> destination.equals(transport.getDestination()))
+                    .filter(transport -> transport.getObjectId() == 26115)
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError(
+                            "Elemental Workshop wall edge is missing: " + origin + " -> " + destination));
+
+            assertEquals("the reviewed wall action must remain explicit", "Open", wall.getAction());
+            assertEquals("the wall has one OR-clause", 1, wall.getItemRequirements().size());
+            assertEquals("only the concrete battered key is currently verifiable",
+                    Collections.singleton(ItemID.ELEMENTAL_WORKSHOP_KEY),
+                    wall.getItemRequirements().get(0).getItemIds());
+            assertFalse("a steel key ring does not prove that it contains the battered key",
+                    wall.getItemRequirements().get(0).getItemIds().contains(ItemID.FAVOUR_KEY_RING));
+        }
+
+        Predicate<Transport> batteredKeyState = transport -> unrestricted(transport)
+                || transport.getItemRequirements().stream().allMatch(requirement ->
+                        requirement.isSatisfiedBy(itemId ->
+                                itemId == ItemID.ELEMENTAL_WORKSHOP_KEY ? 1 : 0));
+        Pathfinder withKeyPathfinder = runPathfinder(configWith(batteredKeyState), south, north);
+        List<WorldPoint> withKey = withKeyPathfinder.getPath();
+        assertTrue("the concrete battered key must unlock the direct wall crossing",
+                arrives(withKey, north, 0));
+        assertTrue("the route must select the current Elemental Workshop wall object",
+                selectsTransportObject(withKeyPathfinder, 26115));
+
+        Predicate<Transport> keyRingOnlyState = transport -> unrestricted(transport)
+                || transport.getItemRequirements().stream().allMatch(requirement ->
+                        requirement.isSatisfiedBy(itemId -> itemId == ItemID.FAVOUR_KEY_RING ? 1 : 0));
+        Pathfinder keyRingOnlyPathfinder = runPathfinder(configWith(keyRingOnlyState), south, north);
+        List<WorldPoint> keyRingOnly = keyRingOnlyPathfinder.getPath();
+        assertFalse("an unverified key-ring state must not select the wall transport",
+                selectsTransportObject(keyRingOnlyPathfinder, 26115));
+    }
+
+    @Test
+    public void lumbridgeFarmFenceUsesCurrentOneTileLanding() {
+        WorldPoint south = new WorldPoint(3240, 3334, 0);
+        WorldPoint north = new WorldPoint(3240, 3335, 0);
+        List<WorldPoint> path = route(configWith(transport -> unrestricted(transport)
+                        || transport.getObjectId() == 16518),
+                south, north);
+
+        assertTrue("the current fence landing must be reachable", arrives(path, north, 0));
+        assertTrue("crossing the closed fence must select the agility shortcut edge",
+                usesTransportType(path, TransportType.AGILITY_SHORTCUT));
+    }
+
+    @Test
+    public void northernVarlamoreRocksUseCurrentEightTileLanding() {
+        WorldPoint south = new WorldPoint(1324, 3777, 0);
+        WorldPoint north = new WorldPoint(1324, 3785, 0);
+        List<WorldPoint> path = route(configWith(transport -> unrestricted(transport)
+                        || transport.getObjectId() == 34397),
+                south, north);
+
+        assertTrue("the reviewed northern landing must be reachable", arrives(path, north, 0));
+        assertTrue("the rock face must select the agility shortcut edge",
+                usesTransportType(path, TransportType.AGILITY_SHORTCUT));
+    }
+
+    @Test
+    public void trollheimClimbingRocksUseBootsGatedAscent() {
+        WorldPoint west = new WorldPoint(2820, 3635, 0);
+        WorldPoint east = new WorldPoint(2822, 3635, 0);
+        List<WorldPoint> path = route(configWith(transport -> unrestricted(transport)
+                        || (transport.getType() == TransportType.AGILITY_SHORTCUT
+                        && transport.getObjectId() == 3748)),
+                west, east);
+
+        assertTrue("the climbing-rock landing must be reachable", arrives(path, east, 0));
+        assertTrue("the ascent must use the boots-gated agility edge",
+                usesTransportType(path, TransportType.AGILITY_SHORTCUT));
+    }
+
+    @Test
+    public void isafdarDenseForestChainUsesReviewedShortcutLandings() {
+        WorldPoint south = new WorldPoint(2188, 3162, 0);
+        WorldPoint north = new WorldPoint(2188, 3171, 0);
+        Set<Integer> chainObjectIds = Set.of(3939, 3998, 3999);
+        List<WorldPoint> path = route(configWith(transport -> unrestricted(transport)
+                        || (transport.getType() == TransportType.AGILITY_SHORTCUT
+                        && chainObjectIds.contains(transport.getObjectId()))),
+                south, north);
+
+        assertTrue("the three-obstacle forest chain must reach its reviewed northern landing",
+                arrives(path, north, 0));
+        assertTrue("the route must traverse the first dense-forest landing",
+                visits(path, new WorldPoint(2188, 3165, 0), 0));
+        assertTrue("the route must traverse the second dense-forest landing",
+                visits(path, new WorldPoint(2188, 3168, 0), 0));
+        assertTrue("the forest chain must use Agility-gated shortcut edges",
+                usesTransportType(path, TransportType.AGILITY_SHORTCUT));
+    }
+
+    @Test
+    public void brimhavenDungeonPipeUsesAgilityShortcut() {
+        WorldPoint south = new WorldPoint(2698, 9492, 0);
+        WorldPoint north = new WorldPoint(2698, 9500, 0);
+        List<WorldPoint> path = route(configWith(transport -> unrestricted(transport)
+                        || transport.getObjectId() == 21727), south, north);
+
+        assertTrue("Brimhaven pipe route must reach the reviewed landing", arrives(path, north, 0));
+        assertTrue("Brimhaven pipe route must use object 21727", usesTransportObject(path, 21727));
+        assertTrue("Brimhaven pipe must be represented as an agility shortcut",
+                usesTransportType(path, TransportType.AGILITY_SHORTCUT));
+    }
+
+    @Test
+    public void karamjaRocksUseAgilityShortcut() {
+        WorldPoint west = new WorldPoint(2791, 2978, 0);
+        WorldPoint east = new WorldPoint(2795, 2978, 0);
+        List<WorldPoint> path = route(configWith(transport -> unrestricted(transport)
+                        || transport.getObjectId() == 2231), west, east);
+
+        assertTrue("Karamja rocks route must reach the reviewed landing", arrives(path, east, 0));
+        assertTrue("Karamja rocks route must use object 2231", usesTransportObject(path, 2231));
+        assertTrue("Karamja rocks must be represented as an agility shortcut",
+                usesTransportType(path, TransportType.AGILITY_SHORTCUT));
+    }
+
+    @Test
+    public void lumbridgeCellarHoleUsesQuestProgressShortcut() {
+        WorldPoint west = new WorldPoint(3219, 9618, 0);
+        WorldPoint east = new WorldPoint(3221, 9618, 0);
+        List<WorldPoint> path = route(configWith(transport -> unrestricted(transport)
+                        || transport.getObjectId() == 6905), west, east);
+
+        assertTrue("Lumbridge cellar route must reach the reviewed hole landing", arrives(path, east, 0));
+        assertTrue("Lumbridge cellar route must use hole object 6905", usesTransportObject(path, 6905));
+        assertTrue("Lumbridge cellar hole must be represented as an agility shortcut",
+                usesTransportType(path, TransportType.AGILITY_SHORTCUT));
+    }
+
+    @Test
+    public void slayerTowerGroundFloorChainUsesAgilityShortcut() {
+        WorldPoint ground = new WorldPoint(3421, 3550, 0);
+        WorldPoint firstFloor = new WorldPoint(3421, 3550, 1);
+        List<WorldPoint> path = route(configWith(transport -> unrestricted(transport)
+                        || transport.getObjectId() == 16537), ground, firstFloor);
+
+        assertTrue("Slayer Tower chain must reach the first floor", arrives(path, firstFloor, 0));
+        assertTrue("Slayer Tower route must use chain object 16537", usesTransportObject(path, 16537));
+        assertTrue("Slayer Tower chain must be represented as an agility shortcut",
+                usesTransportType(path, TransportType.AGILITY_SHORTCUT));
+    }
+
+    @Test
+    public void darkmeyerWallChainUsesBothAgilityShortcuts() {
+        WorldPoint west = new WorldPoint(3667, 3375, 0);
+        WorldPoint middle = new WorldPoint(3670, 3375, 0);
+        WorldPoint east = new WorldPoint(3673, 3375, 0);
+        List<WorldPoint> path = route(configWith(transport -> unrestricted(transport)
+                        || transport.getObjectId() == 39541
+                        || transport.getObjectId() == 39542), west, east);
+
+        assertTrue("Darkmeyer wall chain must reach the eastern landing", arrives(path, east, 0));
+        assertTrue("Darkmeyer wall chain must cross the middle landing", visits(path, middle, 0));
+        assertTrue("Darkmeyer wall chain must use west wall object 39542", usesTransportObject(path, 39542));
+        assertTrue("Darkmeyer wall chain must use east wall object 39541", usesTransportObject(path, 39541));
+        assertTrue("Darkmeyer walls must be represented as agility shortcuts",
+                usesTransportType(path, TransportType.AGILITY_SHORTCUT));
     }
 
     // ---- Falador-area farm (the walk-1 "hairpin" report — resolved: no bug) ------------------------
@@ -154,6 +477,94 @@ public class WalkerRouteCorpusTest {
         assertTrue("route to Ruins of Unkah must arrive", arrives(path, unkahBank, 5));
         assertTrue("route to Ruins of Unkah must use the ferry landing",
                 visits(path, new WorldPoint(3148, 2843, 0), 3));
+        assertTrue("route to Ruins of Unkah must contain a BOAT transport edge",
+                usesTransportType(path, TransportType.BOAT));
+    }
+
+    @Test
+    public void portSarimToMusaPoint_usesShipAndGangplank() {
+        WorldPoint portSarim = new WorldPoint(3029, 3217, 0);
+        WorldPoint musaPoint = new WorldPoint(2956, 3146, 0);
+        List<WorldPoint> path = route(configWith(t -> unrestricted(t)
+                        || (t.getType() == TransportType.SHIP
+                        && t.getCurrencyAmount() == 30
+                        && (t.getQuests() == null || t.getQuests().isEmpty()))),
+                portSarim, musaPoint);
+
+        assertTrue("30-coin ship route must arrive at Musa Point", arrives(path, musaPoint, 1));
+        assertTrue("Port Sarim to Musa Point must contain a SHIP transport edge",
+                usesTransportType(path, TransportType.SHIP));
+        assertTrue("Microbot's ship route must retain the Musa Point deck/gangplank transition",
+                visits(path, new WorldPoint(2956, 3143, 1), 0));
+    }
+
+    @Test
+    public void pandemoniumShipsAreQuestAndFareGatedDirectTerminalEdges() {
+        WorldPoint portSarim = new WorldPoint(3029, 3217, 0);
+        WorldPoint musaPoint = new WorldPoint(2956, 3146, 0);
+        WorldPoint pandemonium = new WorldPoint(3064, 3003, 0);
+        Object[][] reviewed = {
+                {portSarim, pandemonium, 14979, "The Pandemonium", "Pandemonium"},
+                {pandemonium, portSarim, 8631, "Port Sarim", "Port Sarim"},
+                {musaPoint, pandemonium, 14985, "The Pandemonium", "Pandemonium"},
+                {pandemonium, musaPoint, 8631, "Musa Point", "Musa Point"}
+        };
+
+        for (Object[] expectation : reviewed) {
+            WorldPoint origin = (WorldPoint) expectation[0];
+            WorldPoint destination = (WorldPoint) expectation[1];
+            int npcId = (int) expectation[2];
+            String action = (String) expectation[3];
+            String display = (String) expectation[4];
+            Transport ship = allTransports.getOrDefault(origin, Collections.emptySet()).stream()
+                    .filter(transport -> destination.equals(transport.getDestination()))
+                    .filter(transport -> transport.getType() == TransportType.SHIP)
+                    .filter(transport -> transport.getObjectId() == npcId)
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError(
+                            "Pandemonium ship edge is missing: " + origin + " -> " + destination));
+
+            assertEquals("the current NPC menu action must remain exact", action, ship.getAction());
+            assertEquals("the network label must remain stable", display, ship.getDisplayInfo());
+            assertEquals("all four routes charge the reviewed fare", 30, ship.getCurrencyAmount());
+            assertFalse("the Pandemonium quest gate must not be dropped", ship.getQuests().isEmpty());
+            assertEquals(TransportExecutionRegistry.Executor.TERMINAL_TRAVEL,
+                    TransportExecutionRegistry.executorFor(ship).orElse(null));
+            assertEquals(TransportExecutionRegistry.TerminalTravelMode.DIRECT,
+                    TransportExecutionRegistry.terminalTravelModeFor(ship).orElse(null));
+        }
+
+        Predicate<Transport> pandemoniumShip = transport -> transport.getType() == TransportType.SHIP
+                && (transport.getObjectId() == 14979
+                || transport.getObjectId() == 14985
+                || transport.getObjectId() == 8631)
+                && (pandemonium.equals(transport.getOrigin())
+                || pandemonium.equals(transport.getDestination()));
+        Pathfinder unlocked = runPathfinder(configWith(transport -> unrestricted(transport)
+                        || pandemoniumShip.test(transport)),
+                portSarim, pandemonium);
+        assertTrue("the reviewed ship must reach the Pandemonium dock",
+                arrives(unlocked.getPath(), pandemonium, 0));
+        assertTrue("the selected path must own an explicit Pandemonium SHIP edge",
+                selectsTransport(unlocked, pandemoniumShip));
+
+        Pathfinder locked = runPathfinder(configWith(WalkerRouteCorpusTest::unrestricted),
+                portSarim, pandemonium);
+        assertFalse("without the quest and fare the planner must not select a Pandemonium ship",
+                selectsTransport(locked, pandemoniumShip));
+    }
+
+    @Test
+    public void treeGnomeVillageShortcut_usesElkoyNpcTravel() {
+        WorldPoint mazeEntrance = new WorldPoint(2503, 3193, 0);
+        WorldPoint villageSide = new WorldPoint(2515, 3159, 0);
+        List<WorldPoint> path = route(configWith(t -> unrestricted(t)
+                        || (t.getType() == TransportType.NPC && "Elkoy".equals(t.getName()))),
+                mazeEntrance, villageSide);
+
+        assertTrue("Elkoy shortcut must reach the village side", arrives(path, villageSide, 1));
+        assertTrue("Tree Gnome Village shortcut must contain an NPC transport edge",
+                usesTransportType(path, TransportType.NPC));
     }
 
     @Test
@@ -197,11 +608,42 @@ public class WalkerRouteCorpusTest {
     public void shantaySouthbound_withNothing_neverCrossesTheGate() {
         List<WorldPoint> path = route(configWith(WalkerRouteCorpusTest::unrestricted),
                 NORTH_OF_GATE, SOUTH_OF_GATE);
-        // Same predicate as the positive tests. The old form required BOTH tiles either side of the
-        // gate at radius 0, so a diagonal step across the gate satisfied neither and the assertion
-        // passed while the route did cross.
-        assertFalse("without a ticket or coins the route must not cross the gate",
-                visits(path, GATE, 2));
+        // Crossing means a path tile strictly SOUTH of the gate line at the pass. The previous
+        // proximity proxy (visits within 2 of the gate) also failed a route that walks UP TO the
+        // gate's north side and stops — which is exactly what the sealed-target fast path now
+        // produces, and exactly what a player without coins does. (The proxy before THAT required
+        // both flanking tiles at radius 0 and missed a diagonal crossing; measuring the crossing
+        // itself ends the proxy games.)
+        boolean crossed = path.stream().anyMatch(p -> p != null
+                && p.getPlane() == GATE.getPlane()
+                && p.getY() < GATE.getY()
+                && Math.abs(p.getX() - GATE.getX()) <= 4);
+        assertFalse("without a ticket or coins the route must not cross the gate", crossed);
+        assertFalse("without a ticket or coins the route must not arrive south",
+                arrives(path, SOUTH_OF_GATE, 3));
+    }
+
+    // ---- Varrock museum interior (the Kudos dead-end) ----------------------------------------------
+
+    /**
+     * The museum guard barrier (24536) is a MOVES-YOU gate, measured 2026-08-08 through the agent
+     * server: one click on "Open" relocates the player across it (3447 -> 3446 -> 3447, reproduced
+     * three times) and the gate never enters an open state, so the runtime door pipeline can never
+     * resolve it. Two independent defects kept the museum interior unroutable: restrictions.tsv
+     * banned the doorway tiles outright (planner could not stand there), and the barrier had no
+     * catalog rows (executor had nothing to click). Assert the route SELECTS the transport rather
+     * than merely passing near the gate tile — an earlier version of this test checked proximity and
+     * would have passed on a route that never crossed.
+     */
+    @Test
+    public void varrockMuseumGuardBarrierIsATransport() {
+        PathfinderConfig config = configWith(WalkerRouteCorpusTest::unrestricted);
+        Pathfinder pf = runPathfinder(config,
+                new WorldPoint(3261, 3449, 0), new WorldPoint(3261, 3443, 0));
+        assertTrue("route across the museum barrier must select gate 24536",
+                selectsTransportObject(pf, 24536));
+        assertTrue("route must arrive south of the barrier",
+                arrives(pf.getPath(), new WorldPoint(3261, 3443, 0), 1));
     }
 
     // ---- Port Sarim, Wydin's shop (the door-poisoning incident) ------------------------------------
@@ -321,5 +763,143 @@ public class WalkerRouteCorpusTest {
                 TUNNEL_EAST_SURFACE, TUNNEL_WEST_SURFACE);
         assertFalse("a player without Fishing Contest must not be routed through the tunnel",
                 visits(surface, TUNNEL_EAST_UNDER, 5));
+    }
+
+    // ---- Draynor sewers (surface/underground transition coverage) ---------------------------------
+
+    private static final WorldPoint DRAYNOR_SEWER_EAST_SURFACE = new WorldPoint(3118, 3243, 0);
+    private static final WorldPoint DRAYNOR_SEWER_EAST_UNDER = new WorldPoint(3118, 9644, 0);
+    private static final WorldPoint DRAYNOR_SEWER_WEST_UNDER = new WorldPoint(3084, 9673, 0);
+
+    private static boolean isDraynorWestTransition(Transport transport) {
+        WorldPoint origin = transport.getOrigin();
+        WorldPoint destination = transport.getDestination();
+        if (origin == null || destination == null) {
+            return false;
+        }
+        boolean originWest = origin.getX() >= 3083 && origin.getX() <= 3085
+                && (origin.getY() >= 3271 && origin.getY() <= 3273
+                || origin.getY() >= 9671 && origin.getY() <= 9673);
+        boolean destinationWest = destination.getX() >= 3083 && destination.getX() <= 3085
+                && (destination.getY() >= 3271 && destination.getY() <= 3273
+                || destination.getY() >= 9671 && destination.getY() <= 9673);
+        return originWest && destinationWest;
+    }
+
+    @Test
+    public void draynorSewer_eastEntranceConnectsSurfaceAndWestUnderground() {
+        // Disable the west ladders so both directions must use the east transition and traverse the
+        // underground corridor. This prevents a regression from being hidden by walking above ground
+        // to a different trapdoor before entering the sewer.
+        PathfinderConfig config = configWith(t -> unrestricted(t) && !isDraynorWestTransition(t));
+
+        List<WorldPoint> descending = route(config, DRAYNOR_SEWER_EAST_SURFACE, DRAYNOR_SEWER_WEST_UNDER);
+        assertTrue("east trapdoor must reach the west side of Draynor sewers",
+                arrives(descending, DRAYNOR_SEWER_WEST_UNDER, 1));
+        assertTrue("descent route must enter at the mapped east underground landing",
+                visits(descending, DRAYNOR_SEWER_EAST_UNDER, 2));
+
+        List<WorldPoint> ascending = route(config, DRAYNOR_SEWER_WEST_UNDER, DRAYNOR_SEWER_EAST_SURFACE);
+        assertTrue("west sewer must return to the surface through the east ladder",
+                arrives(ascending, DRAYNOR_SEWER_EAST_SURFACE, 1));
+        assertTrue("ascent route must approach the mapped east underground ladder",
+                visits(ascending, DRAYNOR_SEWER_EAST_UNDER, 2));
+    }
+
+    // ---- Barrows mounds, individual crypts and randomized tunnel boundary -------------------------
+
+    /**
+     * Surface dig/route-anchor tile, deterministic individual-crypt stair/landing, sarcophagus approach
+     * and exit-stair object id. These values are shared with Quest Helper's reviewed Barrows zones and
+     * object steps; the fifth value is the sarcophagus object id, which must never become a static
+     * tunnel edge because the empty crypt is randomized per run. A crypt exit can spawn on another tile
+     * within its surface mound, so the surface point is a planner anchor rather than an exact live landing.
+     */
+    private static final Object[][] BARROWS_CRYPTS = {
+            {new WorldPoint(3564, 3291, 0), new WorldPoint(3559, 9703, 3),
+                    new WorldPoint(3554, 9699, 3), 20667, 20770},
+            {new WorldPoint(3575, 3299, 0), new WorldPoint(3558, 9718, 3),
+                    new WorldPoint(3555, 9713, 3), 20668, 20720},
+            {new WorldPoint(3578, 3281, 0), new WorldPoint(3534, 9706, 3),
+                    new WorldPoint(3539, 9702, 3), 20669, 20722},
+            {new WorldPoint(3567, 3274, 0), new WorldPoint(3546, 9686, 3),
+                    new WorldPoint(3549, 9683, 3), 20670, 20771},
+            {new WorldPoint(3553, 3281, 0), new WorldPoint(3566, 9683, 3),
+                    new WorldPoint(3568, 9686, 3), 20671, 20721},
+            {new WorldPoint(3556, 3297, 0), new WorldPoint(3578, 9704, 3),
+                    new WorldPoint(3572, 9706, 3), 20672, 20772}
+    };
+
+    private static boolean isBarrowsDig(Transport transport) {
+        return TransportExecutionRegistry.executorFor(transport).orElse(null)
+                == TransportExecutionRegistry.Executor.BARROWS_DIG;
+    }
+
+    private static boolean usesExactTransport(List<WorldPoint> path, WorldPoint origin,
+                                              WorldPoint destination,
+                                              TransportExecutionRegistry.Executor executor) {
+        if (path == null || path.size() < 2) {
+            return false;
+        }
+        for (int index = 0; index < path.size() - 1; index++) {
+            if (!origin.equals(path.get(index)) || !destination.equals(path.get(index + 1))) {
+                continue;
+            }
+            if (allTransports.getOrDefault(origin, Collections.emptySet()).stream().anyMatch(transport ->
+                    destination.equals(transport.getDestination())
+                            && TransportExecutionRegistry.executorFor(transport).orElse(null) == executor)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @Test
+    public void barrowsMoundsAndIndividualCryptExitsAreStaticallyRoutable() {
+        PathfinderConfig withSpade = configWith(transport -> unrestricted(transport) || isBarrowsDig(transport));
+        PathfinderConfig withoutSpecialRequirements = configWith(WalkerRouteCorpusTest::unrestricted);
+
+        for (Object[] crypt : BARROWS_CRYPTS) {
+            WorldPoint surface = (WorldPoint) crypt[0];
+            WorldPoint stair = (WorldPoint) crypt[1];
+            WorldPoint sarcophagusApproach = (WorldPoint) crypt[2];
+            int stairObjectId = (int) crypt[3];
+
+            List<WorldPoint> entering = route(withSpade, surface, sarcophagusApproach);
+            assertTrue("mound dig must enter the matching individual crypt: " + surface,
+                    arrives(entering, sarcophagusApproach, 0));
+            assertTrue("mound route must retain the exact spade executor edge: " + surface,
+                    usesExactTransport(entering, surface, stair,
+                            TransportExecutionRegistry.Executor.BARROWS_DIG));
+
+            List<WorldPoint> leaving = route(withoutSpecialRequirements, sarcophagusApproach, surface);
+            assertTrue("individual crypt must route to its own surface-mound anchor: " + stair,
+                    arrives(leaving, surface, 2));
+            assertTrue("crypt exit must use its reviewed staircase object: " + stairObjectId,
+                    usesTransportObject(leaving, stairObjectId));
+        }
+    }
+
+    @Test
+    public void barrowsRandomSarcophagusTunnelIsNotInventedAsAStaticTransport() {
+        Set<Integer> sarcophagusIds = Arrays.stream(BARROWS_CRYPTS)
+                .map(crypt -> (Integer) crypt[4])
+                .collect(Collectors.toSet());
+        List<Transport> staticSarcophagusEdges = allTransports.values().stream()
+                .flatMap(Set::stream)
+                .filter(transport -> sarcophagusIds.contains(transport.getObjectId()))
+                .collect(Collectors.toList());
+
+        assertTrue("the empty sarcophagus is randomized and must be observed live, not statically routed: "
+                        + staticSarcophagusEdges,
+                staticSarcophagusEdges.isEmpty());
+
+        WorldPoint surface = (WorldPoint) BARROWS_CRYPTS[0][0];
+        WorldPoint tunnelChest = new WorldPoint(3551, 9695, 0);
+        List<WorldPoint> attempted = route(
+                configWith(transport -> unrestricted(transport) || isBarrowsDig(transport)),
+                surface, tunnelChest);
+        assertFalse("a mound dig alone must not claim deterministic access to the randomized tunnel",
+                arrives(attempted, tunnelChest, 2));
     }
 }

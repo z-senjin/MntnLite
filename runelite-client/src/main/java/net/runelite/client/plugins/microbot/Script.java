@@ -3,12 +3,14 @@ package net.runelite.client.plugins.microbot;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.coords.WorldPoint;
-import net.runelite.client.plugins.microbot.shortestpath.ShortestPathPlugin;
 import net.runelite.client.plugins.microbot.util.Global;
 import net.runelite.client.plugins.microbot.agentserver.handler.ScriptHeartbeatRegistry;
 import net.runelite.client.plugins.microbot.util.antiban.SessionFatigue;
+import net.runelite.client.plugins.microbot.util.input.InputArbiter;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
+import net.runelite.client.plugins.microbot.util.keyboard.Rs2Keyboard;
 import net.runelite.client.plugins.microbot.util.player.Rs2Player;
+import net.runelite.client.plugins.microbot.util.walker.Rs2PathApi;
 import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
 import org.jetbrains.annotations.NotNull;
 
@@ -56,10 +58,13 @@ public abstract class Script extends Global implements IScript {
         ScriptHeartbeatRegistry.remove(this.getClass().getName());
         if (mainScheduledFuture != null && !mainScheduledFuture.isDone()) {
             mainScheduledFuture.cancel(true);
-            ShortestPathPlugin.exit();
+            Rs2PathApi.exit();
             if (Microbot.getClientThread().scheduledFuture != null)
                 Microbot.getClientThread().scheduledFuture.cancel(true);
             initialPlayerLocation = null;
+            // Backstop for a script stopped between a hold and its release. Fires inconsistently:
+            // most scripts catch-and-continue without reaching here.
+            Rs2Keyboard.releaseHeldKeys();
             Microbot.pauseAllScripts.set(false);
             Rs2Walker.disableTeleports = false;
             Microbot.getSpecialAttackConfigs().reset();
@@ -88,7 +93,14 @@ public abstract class Script extends Global implements IScript {
             // A blocking event was found & is executing
             return false;
         }
-        if (Microbot.pauseAllScripts.get())
+        // The arbiter keeps its own flag, so a takeover idles every script through the gate that
+        // already exists, cancelling nothing.
+        boolean humanOwnsInput = InputArbiter.isHuman();
+        if (humanOwnsInput) {
+            // A held key is not gesture-scoped, so InputLoop cannot unwind it.
+            Rs2Keyboard.releaseHeldKeys();
+        }
+        if (Microbot.pauseAllScripts.get() || humanOwnsInput)
             return false;
         if (Thread.currentThread().isInterrupted())
             return false;

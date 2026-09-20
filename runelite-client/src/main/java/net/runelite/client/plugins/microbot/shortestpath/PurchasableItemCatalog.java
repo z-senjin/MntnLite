@@ -22,7 +22,7 @@ import java.util.Set;
  * consulted here — transports.tsv carries a duplicate-row OR (item row + currency-twin row) so the
  * pathfinder already plans through the transport for either holding.
  *
- * <p>Parsing is lenient like {@code LearnedBlockedEdges}: a malformed row is logged and skipped,
+ * <p>Parsing is lenient: a malformed row is logged and skipped,
  * never fatal.
  */
 @Slf4j

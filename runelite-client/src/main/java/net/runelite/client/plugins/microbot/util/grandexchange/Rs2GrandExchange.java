@@ -41,6 +41,7 @@ import java.net.http.HttpResponse;
 import java.util.List;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.IntSupplier;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -224,11 +225,7 @@ public class Rs2GrandExchange {
 
                 sleepUntil(() -> GrandExchangeWidget.getPricePerItemButton_X() != null);
 
-                // A zero price intentionally preserves the GE-selected default. This lets
-                // callers use the native +/-5% controls without opening the price chatbox.
-                if (request.getPrice() > 0) {
-                    setPrice(request.getPrice());
-                }
+                setPrice(request.getPrice());
                 if (request.getPercent() != 0) {
                     adjustPriceByPercent(request.getPercent());
                 }
@@ -591,18 +588,15 @@ public class Rs2GrandExchange {
      * @param quantity the number of items to set for the offer
      */
     private static boolean setQuantity(int quantity) {
-        int tries = 0;
-        while (quantity != getOfferQuantity()) {
+        boolean success = retryQuantity(quantity, Rs2GrandExchange::getOfferQuantity, () -> {
+            if (!sleepUntil(() -> GrandExchangeWidget.getQuantityButton_X() != null, 2000)) {
+                log.warn("Quantity button not found");
+                return;
+            }
             Widget quantityButtonX = GrandExchangeWidget.getQuantityButton_X();
             if (quantityButtonX == null) {
-                tries++;
-                if (tries > 3) {
-                    log.warn("Quantity button not available after {} attempts", tries);
-                    backToOverview();
-                    return false;
-                }
-                sleep(150, 250);
-                continue;
+                log.warn("Quantity button not found");
+                return;
             }
             Microbot.getMouse().click(quantityButtonX.getBounds());
             sleepUntil(() -> Rs2Widget.getWidget(InterfaceID.Chatbox.MES_TEXT2) != null); //GE Enter Price/Quantity
@@ -611,14 +605,19 @@ public class Rs2GrandExchange {
             sleep(500, 750);
             Rs2Keyboard.enter();
             sleep(1000);
-            tries++;
-            if (tries > 3) {
-                log.error("Failed to set quantity after 3 tries, breaking out to avoid infinite loop.");
-                Rs2GrandExchange.closeExchange();
-                break;
-            }
+        });
+        if (!success) {
+            log.error("Failed to set quantity after 3 tries, breaking out to avoid infinite loop.");
+            Rs2GrandExchange.closeExchange();
         }
-        return tries <= 3;
+        return success;
+    }
+
+    static boolean retryQuantity(int quantity, IntSupplier currentQuantity, Runnable attempt) {
+        for (int tries = 0; quantity != currentQuantity.getAsInt() && tries < 3; tries++) {
+            attempt.run();
+        }
+        return quantity == currentQuantity.getAsInt();
     }
 
     /**

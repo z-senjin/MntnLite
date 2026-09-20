@@ -67,6 +67,18 @@ public class BreakHandlerV2Overlay extends OverlayPanel {
                 .rightColor(Color.GRAY)
                 .build());
 
+            panelComponent.getChildren().add(LineComponent.builder()
+                .left("Runtime:")
+                .right(formatDuration(script.getScriptActiveSeconds()))
+                .rightColor(Color.WHITE)
+                .build());
+
+            panelComponent.getChildren().add(LineComponent.builder()
+                .left("Breaks:")
+                .right(String.valueOf(script.getBreaksActivatedCount()))
+                .rightColor(Color.WHITE)
+                .build());
+
             // Show play schedule info if enabled
             if (config.usePlaySchedule()) {
                 panelComponent.getChildren().add(LineComponent.builder()
@@ -88,14 +100,30 @@ public class BreakHandlerV2Overlay extends OverlayPanel {
                         .rightColor(Color.GREEN)
                         .build());
                 }
+                long secondsUntilLongBreak = script.getTimeUntilLongBreak();
+                if (config.enableLongBreaks() && secondsUntilLongBreak >= 0) {
+                    panelComponent.getChildren().add(LineComponent.builder()
+                        .left("Long break:")
+                        .right(formatDuration(secondsUntilLongBreak))
+                        .rightColor(Color.ORANGE)
+                        .build());
+                }
+                long secondsUntilMegaBreak = script.getTimeUntilMegaBreak();
+                if (config.enableMegaBreaks() && secondsUntilMegaBreak >= 0) {
+                    panelComponent.getChildren().add(LineComponent.builder()
+                        .left("Mega break:")
+                        .right(formatDuration(secondsUntilMegaBreak))
+                        .rightColor(Color.MAGENTA)
+                        .build());
+                }
             } else if (BreakHandlerV2State.isBreakActive()) {
                 long secondsRemaining = script.getBreakTimeRemaining();
                 if (secondsRemaining >= 0) {
                     String timeStr = formatDuration(secondsRemaining);
                     panelComponent.getChildren().add(LineComponent.builder()
-                        .left("Break ends:")
+                        .left(script.isCurrentBreakMega() ? "Mega break ends:" : script.isCurrentBreakLong() ? "Long break ends:" : "Break ends:")
                         .right(timeStr)
-                        .rightColor(Color.ORANGE)
+                        .rightColor(script.isCurrentBreakMega() ? Color.MAGENTA : Color.ORANGE)
                         .build());
                 }
             }
@@ -163,7 +191,9 @@ public class BreakHandlerV2Overlay extends OverlayPanel {
                 // Break configuration
                 panelComponent.getChildren().add(LineComponent.builder()
                     .left("Break type:")
-                    .right(config.logoutOnBreak() ? "Logout" : "Stay logged in")
+                    .right((config.logoutOnBreak() ? "Logout" : "Stay logged in")
+                        + (config.enableLongBreaks() ? " + long" : "")
+                        + (config.enableMegaBreaks() ? " + mega" : ""))
                     .rightColor(Color.LIGHT_GRAY)
                     .build());
 

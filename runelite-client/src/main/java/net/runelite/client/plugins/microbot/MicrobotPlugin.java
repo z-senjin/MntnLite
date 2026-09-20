@@ -21,10 +21,13 @@ import net.runelite.client.plugins.microbot.ui.MicrobotPluginConfigurationDescri
 import net.runelite.client.plugins.microbot.ui.MicrobotPluginListPanel;
 import net.runelite.client.plugins.microbot.ui.MicrobotTopLevelConfigPanel;
 import net.runelite.client.plugins.microbot.util.bank.Rs2Bank;
+import net.runelite.client.plugins.microbot.util.death.Rs2Death;
 import net.runelite.client.plugins.microbot.util.equipment.Rs2Equipment;
 import net.runelite.client.plugins.microbot.util.huntkit.Rs2HuntKit;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2Gembag;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
+import net.runelite.client.plugins.microbot.util.input.CanvasInputListener;
+import net.runelite.client.plugins.microbot.util.input.InputArbiter;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2RunePouch;
 import net.runelite.client.plugins.microbot.util.overlay.GembagOverlay;
 import net.runelite.client.plugins.microbot.util.player.Rs2Player;
@@ -163,6 +166,10 @@ public class MicrobotPlugin extends Plugin
 		);
 
 		Microbot.pauseAllScripts.set(false);
+		InputArbiter.setDisabled(microbotConfig.disableInputYielding());
+		InputArbiter.setMotionThresholdPx(microbotConfig.inputMotionThresholdPx());
+		InputArbiter.setIdleResumeMs(microbotConfig.inputIdleResumeMs());
+		CanvasInputListener.attach();
 		Microbot.enableAutoRunOn = microbotConfig.enableAutoRunOn();
 		Microbot.useStaminaPotsIfNeeded = microbotConfig.useStaminaPotsIfNeeded();
 		Microbot.getBlockingEventManager().start();
@@ -205,6 +212,7 @@ public class MicrobotPlugin extends Plugin
 
 	protected void shutDown()
 	{
+		CanvasInputListener.detach();
 		overlayManager.remove(microbotOverlay);
 		overlayManager.remove(gembagOverlay);
 		overlayManager.remove(pouchOverlay);
@@ -223,6 +231,8 @@ public class MicrobotPlugin extends Plugin
 	@Subscribe
 	public void onRuneScapeProfileChanged(RuneScapeProfileChanged event)
 	{
+		Rs2Bank.invalidateBankMirrorCache(null);
+		Rs2Bank.restoreBankMirrorCache();
 		String newProfile = event.getNewProfile();
 		String oldProfile = event.getPreviousProfile();
 		if ((newProfile != null && !newProfile.isEmpty()) &&
@@ -366,12 +376,19 @@ public class MicrobotPlugin extends Plugin
 		Rs2Player.handlePotionTimers(event);
 		Rs2Player.handleTeleblockTimer(event);
 		Rs2RunePouch.onVarbitChanged(event);
+		Rs2Death.onVarbitChanged(event);
 	}
 
 	@Subscribe
 	public void onAnimationChanged(AnimationChanged event)
 	{
 		Rs2Player.handleAnimationChanged(event);
+	}
+
+	@Subscribe
+	public void onActorDeath(ActorDeath event)
+	{
+		Rs2Death.handleActorDeath(event);
 	}
 
 	@Subscribe(priority = 999)
@@ -482,6 +499,15 @@ public class MicrobotPlugin extends Plugin
 				case MicrobotConfig.keyUseStaminaPotsIfNeeded:
 					Microbot.useStaminaPotsIfNeeded = microbotConfig.useStaminaPotsIfNeeded();
 					break;
+				case MicrobotConfig.keyDisableInputYielding:
+					InputArbiter.setDisabled(microbotConfig.disableInputYielding());
+					break;
+				case MicrobotConfig.keyInputMotionThresholdPx:
+					InputArbiter.setMotionThresholdPx(microbotConfig.inputMotionThresholdPx());
+					break;
+				case MicrobotConfig.keyInputIdleResumeMs:
+					InputArbiter.setIdleResumeMs(microbotConfig.inputIdleResumeMs());
+					break;
 				case MicrobotConfig.keyEnableGameChatLogging:
 				case MicrobotConfig.keyGameChatLogPattern:
 				case MicrobotConfig.keyGameChatLogLevel:
@@ -529,6 +555,10 @@ public class MicrobotPlugin extends Plugin
 	public void onWidgetLoaded(WidgetLoaded event)
 	{
 		Rs2RunePouch.onWidgetLoaded(event);
+		if (event.getGroupId() == 12)
+		{
+			Rs2Bank.onBankWidgetLoaded();
+		}
 		
 		// Mark that widget layout has changed for cache invalidation
 		widgetLayoutChanged = true;
@@ -599,6 +629,9 @@ public class MicrobotPlugin extends Plugin
 	@Subscribe
 	public void onGameTick(GameTick event)
 	{
+		// Cheap identity check: a stale registration leaves the arbiter deaf with no other symptom.
+		CanvasInputListener.attach();
+
 		// Start Leagues teleport calibration ASAP after login (non-blocking; prompts for consent once).
 		Rs2LeaguesTransport.tickLeaguesCalibration();
 	}
