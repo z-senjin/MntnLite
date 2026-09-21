@@ -13,11 +13,11 @@ public final class WoodcuttingUtils
 {
     private WoodcuttingUtils() {}
 
-    public static Rs2TileObjectModel findNearestTree(int... rockIds)
+    public static Rs2TileObjectModel findNearestTree(int... treeIds)
     {
         WorldPoint playerLocation = Rs2Player.getWorldLocation();
 
-        return Arrays.stream(rockIds)
+        return Arrays.stream(treeIds)
                 .mapToObj(id ->
                         Microbot.getRs2TileObjectCache()
                                 .query()

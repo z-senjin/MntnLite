@@ -18,9 +18,11 @@ import net.runelite.api.Skill;
 import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.Script;
 import net.runelite.client.plugins.microbot.mntn.aio.core.*;
+import net.runelite.client.plugins.microbot.mntn.aio.strategies.moneymaking.TinderboxLootingStrategy;
 import net.runelite.client.plugins.microbot.mntn.aio.strategies.skilling.mining.CopperTinMiningStrategy;
 import net.runelite.client.plugins.microbot.mntn.aio.strategies.skilling.mining.IronMiningStrategy;
 import net.runelite.client.plugins.microbot.mntn.aio.strategies.skilling.woodcutting.NormalTreeWoodcuttingStrategy;
+import net.runelite.client.plugins.microbot.mntn.aio.strategies.skilling.woodcutting.OakTreeWoodcuttingStrategy;
 import net.runelite.client.plugins.microbot.util.bank.Rs2Bank;
 import net.runelite.client.plugins.microbot.util.math.Rs2Random;
 import net.runelite.client.plugins.microbot.util.player.Rs2Player;
@@ -368,6 +370,8 @@ public class MntnAIOBuilderScript extends Script
         if(config.woodcuttingTarget() > 0) {
             goals.add(Goal.skill(Skill.WOODCUTTING, config.woodcuttingTarget(), Rs2Random.between(1, 10)));
         }
+
+        goals.add(Goal.cash(20000, Rs2Random.between(1, 10)));
         //TODO
         return goals;
     }
@@ -386,6 +390,8 @@ public class MntnAIOBuilderScript extends Script
                 // Place higher lvl strategies first so its always doing the best strategy that can be handled until we can make it more randomized
                 new IronMiningStrategy(),
                 new CopperTinMiningStrategy(),
+                new TinderboxLootingStrategy(),
+                new OakTreeWoodcuttingStrategy(),
                 new NormalTreeWoodcuttingStrategy()
 
                 /*
