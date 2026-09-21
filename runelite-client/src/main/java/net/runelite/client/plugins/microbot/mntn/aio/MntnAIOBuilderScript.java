@@ -20,9 +20,8 @@ import net.runelite.client.plugins.microbot.Script;
 import net.runelite.client.plugins.microbot.mntn.aio.core.*;
 import net.runelite.client.plugins.microbot.mntn.aio.strategies.skilling.mining.CopperTinMiningStrategy;
 import net.runelite.client.plugins.microbot.mntn.aio.strategies.skilling.mining.IronMiningStrategy;
-import net.runelite.client.plugins.microbot.mntn.aio.utils.bank.BankCache;
+import net.runelite.client.plugins.microbot.mntn.aio.strategies.skilling.woodcutting.NormalTreeWoodcuttingStrategy;
 import net.runelite.client.plugins.microbot.util.bank.Rs2Bank;
-import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
 import net.runelite.client.plugins.microbot.util.math.Rs2Random;
 import net.runelite.client.plugins.microbot.util.player.Rs2Player;
 
@@ -362,8 +361,12 @@ public class MntnAIOBuilderScript extends Script
             MntnAIOBuilderConfig config)
     {
         ArrayList<Goal> goals = new ArrayList<Goal>();
-        if(config.miningTarget() > 0){
-         goals.add(Goal.skill(Skill.MINING, config.miningTarget(), Rs2Random.between(1, 10)));
+        if(config.miningTarget() > 0) {
+            goals.add(Goal.skill(Skill.MINING, config.miningTarget(), Rs2Random.between(1, 10)));
+        }
+
+        if(config.woodcuttingTarget() > 0) {
+            goals.add(Goal.skill(Skill.WOODCUTTING, config.woodcuttingTarget(), Rs2Random.between(1, 10)));
         }
         //TODO
         return goals;
@@ -382,7 +385,8 @@ public class MntnAIOBuilderScript extends Script
                 // TODO
                 // Place higher lvl strategies first so its always doing the best strategy that can be handled until we can make it more randomized
                 new IronMiningStrategy(),
-                new CopperTinMiningStrategy()
+                new CopperTinMiningStrategy(),
+                new NormalTreeWoodcuttingStrategy()
 
                 /*
                  * Add additional strategies later:
@@ -406,6 +410,8 @@ public class MntnAIOBuilderScript extends Script
 
         for (Goal goal : goals)
         {
+            Microbot.log("Goal: " + goal.toString());
+            Microbot.log("Goal is complete? " + goal.isComplete(accountContext));
             if (goal != null &&
                     !goal.isComplete(accountContext))
             {
