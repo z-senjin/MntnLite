@@ -529,6 +529,14 @@ public class MntnAIOBuilderScript extends Script
     }
 
     /**
+     * Useful for an overlay. Read-only view of the account's live state.
+     */
+    public AccountContext getAccountContext()
+    {
+        return accountContext;
+    }
+
+    /**
      * Useful for an overlay. Milliseconds left before the active plan
      * replans, or 0 when no plan is active.
      */

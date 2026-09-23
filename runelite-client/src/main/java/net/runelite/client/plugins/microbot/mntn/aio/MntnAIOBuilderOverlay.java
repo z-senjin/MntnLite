@@ -1,6 +1,9 @@
 package net.runelite.client.plugins.microbot.mntn.aio;
 
+import net.runelite.api.Client;
+import net.runelite.api.ItemID;
 import net.runelite.api.Skill;
+import net.runelite.api.gameval.VarPlayerID;
 import net.runelite.client.game.SkillIconManager;
 import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.ui.overlay.OverlayPanel;
@@ -10,9 +13,11 @@ import net.runelite.client.ui.overlay.components.TitleComponent;
 
 import javax.inject.Inject;
 import java.awt.*;
+import java.awt.image.BufferedImage;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
-/** Live Builder status display. Activity controls live in the plugin config panel. */
 public class MntnAIOBuilderOverlay extends OverlayPanel {
 
     private static final Color TITLE_COLOR = new Color(247, 200, 87);
@@ -22,21 +27,40 @@ public class MntnAIOBuilderOverlay extends OverlayPanel {
     private static final Color GOOD_COLOR = new Color(105, 211, 150);
     private static final Color WARN_COLOR = new Color(244, 180, 75);
     private static final Color SKILL_COLOR = new Color(37, 100, 88);
-    private static final int WIDTH = 230;
-    private static final int HEIGHT = 120;
+
+    private static final int WIDTH = 480;
+    private static final int COLUMNS = 7;
+
+    private static final Skill[] DISPLAY_SKILLS = {
+        Skill.ATTACK,
+        Skill.DEFENCE,
+        Skill.STRENGTH,
+        Skill.HITPOINTS,
+        Skill.RANGED,
+        Skill.PRAYER,
+        Skill.MAGIC,
+        Skill.COOKING,
+        Skill.WOODCUTTING,
+        Skill.FISHING,
+        Skill.FIREMAKING,
+        Skill.CRAFTING,
+        Skill.SMITHING,
+        Skill.MINING
+    };
 
     private final MntnAIOBuilderPlugin plugin;
+    private final Client client;
     private final SkillIconManager skillIconManager;
     private final MntnAIOBuilderOverlayActionGrid skillGrid;
-    private long lastRenderErrorLogMs;
 
     @Inject
-    MntnAIOBuilderOverlay(MntnAIOBuilderPlugin plugin, SkillIconManager skillIconManager) {
+    MntnAIOBuilderOverlay(MntnAIOBuilderPlugin plugin, Client client, SkillIconManager skillIconManager) {
         super(plugin);
-        setPosition(OverlayPosition.BOTTOM_LEFT);
+        setPosition(OverlayPosition.ABOVE_CHATBOX_RIGHT);
         this.plugin = plugin;
+        this.client = client;
         this.skillIconManager = skillIconManager;
-        skillGrid = new MntnAIOBuilderOverlayActionGrid();
+        this.skillGrid = new MntnAIOBuilderOverlayActionGrid();
     }
 
     @Override
@@ -44,17 +68,13 @@ public class MntnAIOBuilderOverlay extends OverlayPanel {
         try {
             return renderPanel(graphics);
         } catch (Exception ex) {
-            long now = System.currentTimeMillis();
-            if (now - lastRenderErrorLogMs > 5000) {
-                lastRenderErrorLogMs = now;
-                Microbot.logStackTrace(getClass().getSimpleName(), ex);
-            }
+            Microbot.logStackTrace(getClass().getSimpleName(), ex);
             return renderPanel(graphics);
         }
     }
 
     private Dimension renderPanel(Graphics2D graphics) {
-        panelComponent.setPreferredSize(new Dimension(WIDTH, HEIGHT));
+        panelComponent.setPreferredSize(new Dimension(WIDTH, 0));
         panelComponent.setBackgroundColor(BACKGROUND_COLOR);
 
         panelComponent.getChildren().add(TitleComponent.builder()
@@ -62,9 +82,48 @@ public class MntnAIOBuilderOverlay extends OverlayPanel {
                 .color(TITLE_COLOR)
                 .build());
 
+        MntnAIOBuilderScript script = plugin.script;
+        net.runelite.client.plugins.microbot.mntn.aio.core.AccountContext context =
+                script != null ? script.getAccountContext() : null;
+
+        List<MntnAIOBuilderOverlayActionGrid.Action> tileActions = new ArrayList<>(DISPLAY_SKILLS.length);
+        for (Skill skill : DISPLAY_SKILLS) {
+            int level = context != null ? context.getLevel(skill) : 0;
+            BufferedImage icon = skillIconManager.getSkillImage(skill, true);
+            tileActions.add(new MntnAIOBuilderOverlayActionGrid.Action(
+                    icon,
+                    String.valueOf(level),
+                    SKILL_COLOR,
+                    true,
+                    null
+            ));
+        }
+        skillGrid.setActions(tileActions, COLUMNS);
+        panelComponent.getChildren().add(skillGrid);
+
         panelComponent.getChildren().add(LineComponent.builder().build());
 
-        MntnAIOBuilderScript script = plugin.script;
+        int questPoints = client != null ? client.getVarpValue(VarPlayerID.QP) : 0;
+        panelComponent.getChildren().add(LineComponent.builder()
+                .left("QP")
+                .leftColor(LABEL_COLOR)
+                .right(String.valueOf(questPoints))
+                .rightColor(VALUE_COLOR)
+                .build());
+
+        String coinsStr = "—";
+        if (context != null && context.getBankCache().isPopulated()) {
+            coinsStr = String.valueOf(context.getBankCache().getCount(ItemID.COINS_995));
+        }
+        panelComponent.getChildren().add(LineComponent.builder()
+                .left("Coins")
+                .leftColor(LABEL_COLOR)
+                .right(coinsStr)
+                .rightColor(VALUE_COLOR)
+                .build());
+
+        panelComponent.getChildren().add(LineComponent.builder().build());
+
         net.runelite.client.plugins.microbot.mntn.aio.core.Plan plan =
                 script != null ? script.getActivePlan() : null;
 
@@ -120,6 +179,4 @@ public class MntnAIOBuilderOverlay extends OverlayPanel {
 
         return seconds + "s";
     }
-
-
 }
