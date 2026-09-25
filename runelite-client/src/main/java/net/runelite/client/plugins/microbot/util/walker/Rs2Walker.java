@@ -3184,7 +3184,7 @@ public class Rs2Walker {
                             finalClick = clickRouteBackedShortWalk(rawPath, canvasClickWp, finalPlayerLoc,
                                     normalMinimapReach() - 1, rawAnchorIndex);
                         } else {
-                            finalClick = Rs2Walker.walkFastCanvas(canvasClickWp);
+                            finalClick = clickFinalTileOrMinimap(canvasClickWp, finalPlayerLoc);
                         }
                         if (finalClick) {
                             waitUntilIdleAfterSceneWalk(target, POST_SCENE_WALK_IDLE_WAIT_MS_MAX, target, finishTh);
@@ -3812,7 +3812,8 @@ public class Rs2Walker {
             if (target != null && playerLoc.distanceTo2D(target) <= INTERIM_CLOSE_TILES
                     && clickTarget.getPlane() == target.getPlane()
                     && clickTarget.distanceTo2D(target) <= 1
-                    && walkFastCanvas(clickTarget)) {
+                    && isFinalDestinationOnScreen(clickTarget, playerLoc)
+                    && walkFastCanvasOnScreenOnly(clickTarget, true)) {
                 clickedTarget = clickTarget;
                 clicked = true;
             } else {

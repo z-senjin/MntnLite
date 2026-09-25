@@ -318,33 +318,29 @@ final class Rs2WalkerMovement {
         if (target == null || playerLoc == null || target.equals(playerLoc)) {
             return null;
         }
-        if (!Objects.equals(routeClickSessionTarget, Rs2Walker.getCurrentTarget())) {
-            routeClickSessionTarget = Rs2Walker.getCurrentTarget();
-            routeClicksSinceMinimap = 0;
-            nextMinimapClickAt = ThreadLocalRandom.current().nextInt(2, 8);
+
+        WorldPoint finalDestination = resolveFinalDestination(rawPath);
+        if (isFinalDestinationOnScreen(finalDestination, playerLoc)) {
+            if (walkFastCanvasOnScreenOnly(finalDestination, true)) {
+                routeClicksSinceMinimap++;
+                WebWalkLog.spDebug("route_scene_click_final | to={} player={}",
+                        compactWorldPoint(finalDestination), compactWorldPoint(playerLoc));
+                return finalDestination;
+            }
         }
-        boolean tryMinimapFirst = routeClicksSinceMinimap >= nextMinimapClickAt;
-        if (tryMinimapFirst && walkMiniMap(target)) {
-            routeClicksSinceMinimap = 0;
-            nextMinimapClickAt = ThreadLocalRandom.current().nextInt(2, 8);
-            WebWalkLog.spDebug("route_minimap_click | to={} player={} cadence={}",
-                    compactWorldPoint(target), compactWorldPoint(playerLoc), nextMinimapClickAt);
-            return target;
+        if (target.equals(finalDestination) && isFinalDestinationOnScreen(target, playerLoc)) {
+            if (walkFastCanvasOnScreenOnly(target, true)) {
+                routeClicksSinceMinimap++;
+                WebWalkLog.spDebug("route_scene_click_target_final | to={} player={}",
+                        compactWorldPoint(target), compactWorldPoint(playerLoc));
+                return target;
+            }
         }
-        WorldPoint sceneFallback = walkRawPathSceneTargetToward(rawPath, target, playerLoc,
-                maxEuclidean, rawAnchorIndex);
-        if (sceneFallback != null) {
-            routeClicksSinceMinimap++;
-            return sceneFallback;
-        }
-        if (walkFastCanvasOnScreenOnly(target, true)) {
-            routeClicksSinceMinimap++;
-            WebWalkLog.spDebug("route_scene_click | to={} player={}",
-                    compactWorldPoint(target), compactWorldPoint(playerLoc));
-            return target;
-        }
+
         if (walkMiniMap(target)) {
             routeClicksSinceMinimap = 0;
+            WebWalkLog.spDebug("route_minimap_click | to={} player={}",
+                    compactWorldPoint(target), compactWorldPoint(playerLoc));
             return target;
         }
         WorldPoint rawFallback = walkRawPathMiniMapTargetToward(rawPath, target, playerLoc,
@@ -906,6 +902,37 @@ final class Rs2WalkerMovement {
         return sceneCanvasPoint(worldPoint) != null;
     }
 
+    static WorldPoint resolveFinalDestination(List<WorldPoint> rawPath) {
+        WorldPoint currentTarget = Rs2Walker.getCurrentTarget();
+        if (currentTarget != null && Rs2Tile.isWalkable(currentTarget) && Rs2Tile.isTileReachable(currentTarget)) {
+            return currentTarget;
+        }
+        if (rawPath != null && !rawPath.isEmpty()) {
+            return rawPath.get(rawPath.size() - 1);
+        }
+        return currentTarget;
+    }
+
+    static boolean isFinalDestinationOnScreen(WorldPoint finalDestination, WorldPoint playerLoc) {
+        if (finalDestination == null || playerLoc == null) {
+            return false;
+        }
+        if (finalDestination.getPlane() != playerLoc.getPlane()) {
+            return false;
+        }
+        if (finalDestination.equals(playerLoc)) {
+            return false;
+        }
+        return isSceneCanvasClickable(finalDestination);
+    }
+
+    static boolean clickFinalTileOrMinimap(WorldPoint finalTile, WorldPoint playerLoc) {
+        if (isFinalDestinationOnScreen(finalTile, playerLoc) && walkFastCanvasOnScreenOnly(finalTile, true)) {
+            return true;
+        }
+        return walkMiniMap(finalTile);
+    }
+
     private static Point sceneCanvasPoint(WorldPoint worldPoint) {
         if (!Microbot.getClientThread().isClientThread()) {
             return Microbot.getClientThread().runOnClientThreadOptional(() -> sceneCanvasPoint(worldPoint))
@@ -999,8 +1026,9 @@ final class Rs2WalkerMovement {
             clicked = clickRouteBackedShortWalk(rawPath, end, playerLoc,
                     directClickMaxDistance - 1, rawAnchorIndex);
         } else {
-            clicked = walkFastCanvasOnScreenOnly(end, true);
-            if (!clicked) {
+            if (isFinalDestinationOnScreen(end, playerLoc) && walkFastCanvasOnScreenOnly(end, true)) {
+                clicked = true;
+            } else {
                 clicked = walkMiniMap(end);
             }
             if (!clicked) {
@@ -1024,7 +1052,11 @@ final class Rs2WalkerMovement {
                 clicked = clickRouteBackedShortWalk(rawPath, end, retryPlayerLoc,
                         directClickMaxDistance - 1, retryRawAnchorIndex);
             } else {
-                clicked = walkFastCanvas(end);
+                if (isFinalDestinationOnScreen(end, retryPlayerLoc) && walkFastCanvasOnScreenOnly(end, true)) {
+                    clicked = true;
+                } else {
+                    clicked = walkMiniMap(end);
+                }
             }
             if (!clicked) {
                 return WalkerState.MOVING;
@@ -1061,7 +1093,7 @@ final class Rs2WalkerMovement {
                                                      int maxEuclidean,
                                                      int rawAnchorIndex) {
         boolean directTargetInRange = shouldAttemptDirectMinimapTarget(end, playerLoc, maxEuclidean);
-        if (directTargetInRange && walkFastCanvasOnScreenOnly(end, true)) {
+        if (directTargetInRange && isFinalDestinationOnScreen(end, playerLoc) && walkFastCanvasOnScreenOnly(end, true)) {
             return true;
         }
         if (directTargetInRange && walkMiniMap(end)) {
@@ -1081,14 +1113,14 @@ final class Rs2WalkerMovement {
                 log.debug("[Walker] Direct short-walk target {} was outside the minimap clip; continuing via route {}",
                         end, routeTarget);
             }
-            if (walkFastCanvasOnScreenOnly(routeTarget, true)) {
-                return true;
-            }
             if (walkMiniMap(routeTarget)) {
                 return true;
             }
         }
-        return walkFastCanvasOnScreenOnly(end, true);
+        if (isFinalDestinationOnScreen(end, playerLoc) && walkFastCanvasOnScreenOnly(end, true)) {
+            return true;
+        }
+        return walkMiniMap(end) || walkMiniMapToward(end, playerLoc, maxEuclidean);
     }
 
     static boolean shouldAttemptDirectMinimapTarget(WorldPoint target,
