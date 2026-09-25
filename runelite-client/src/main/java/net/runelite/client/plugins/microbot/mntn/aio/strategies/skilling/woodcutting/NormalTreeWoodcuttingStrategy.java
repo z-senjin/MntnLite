@@ -16,6 +16,7 @@ import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
 import java.util.Arrays;
 import java.util.List;
 
+import static net.runelite.client.plugins.microbot.mntn.aio.strategies.skilling.mining.items.Items.PICKAXES_ID;
 import static net.runelite.client.plugins.microbot.mntn.aio.strategies.skilling.woodcutting.items.Items.AXES_ID;
 import static net.runelite.client.plugins.microbot.mntn.aio.strategies.skilling.woodcutting.items.Items.AXES_NAME;
 import static net.runelite.client.plugins.microbot.mntn.aio.utils.WoodcuttingUtils.canUseAxe;
@@ -122,7 +123,7 @@ public final class NormalTreeWoodcuttingStrategy
                 break;
 
             case WOODCUT:
-                if (inventoryIsFull())
+                if (inventoryIsFull() || !Rs2Inventory.contains(AXES_ID))
                 {
                     state = State.TRAVEL_TO_BANK;
                 }

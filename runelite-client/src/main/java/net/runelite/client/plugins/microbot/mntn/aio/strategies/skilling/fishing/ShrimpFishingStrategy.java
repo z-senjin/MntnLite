@@ -1,22 +1,24 @@
 /*
  * Role:
- * Trains low-level Mining using copper and tin.
+ * Trains low-level Fishing using a small net for shrimp/anchovies.
  *
  * Purpose:
- * Acts as the fallback Mining strategy from levels 1 through 14.
- * Once Mining reaches level 15, it returns REPLAN so the Planner
- * can switch to IronMiningStrategy.
+ * Acts as the fallback Fishing strategy from levels 1 through 19.
+ * Once Fishing reaches level 20, it returns REPLAN so the Planner
+ * can switch to FlyFishingStrategy.
  */
-package net.runelite.client.plugins.microbot.mntn.aio.strategies.skilling.mining;
+package net.runelite.client.plugins.microbot.mntn.aio.strategies.skilling.fishing;
 
+import net.runelite.api.ItemID;
 import net.runelite.api.Skill;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.plugins.microbot.Microbot;
+import net.runelite.client.plugins.microbot.api.npc.models.Rs2NpcModel;
 import net.runelite.client.plugins.microbot.api.tileobject.models.Rs2TileObjectModel;
 import net.runelite.client.plugins.microbot.mntn.aio.*;
 import net.runelite.client.plugins.microbot.mntn.aio.core.*;
-import net.runelite.client.plugins.microbot.mntn.aio.strategies.skilling.mining.items.Items;
-import net.runelite.client.plugins.microbot.mntn.aio.utils.MiningUtils;
+import net.runelite.client.plugins.microbot.mntn.aio.strategies.skilling.fishing.items.Items;
+import net.runelite.client.plugins.microbot.mntn.aio.utils.FishingUtils;
 import net.runelite.client.plugins.microbot.util.bank.Rs2Bank;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
 import net.runelite.client.plugins.microbot.util.math.Rs2Random;
@@ -24,25 +26,22 @@ import net.runelite.client.plugins.microbot.util.player.Rs2Player;
 import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
 
 import java.util.Arrays;
-import java.util.Comparator;
 import java.util.List;
-import java.util.Objects;
-import java.util.stream.Stream;
 
-import static net.runelite.client.plugins.microbot.mntn.aio.strategies.skilling.mining.items.Items.*;
-import static net.runelite.client.plugins.microbot.mntn.aio.utils.MiningUtils.canUsePickaxe;
-import static net.runelite.client.plugins.microbot.mntn.aio.utils.MiningUtils.getBestPickaxe;
+import static net.runelite.api.ItemID.SMALL_FISHING_NET;
+import static net.runelite.client.plugins.microbot.mntn.aio.strategies.skilling.fishing.items.Items.FISHING_RODS_ID;
+import static net.runelite.client.plugins.microbot.mntn.aio.strategies.skilling.fishing.items.Items.FISHING_RODS_NAME;
 import static net.runelite.client.plugins.microbot.util.Global.sleep;
 import static net.runelite.client.plugins.microbot.util.Global.sleepUntil;
 
-public final class CopperTinMiningStrategy
+public final class ShrimpFishingStrategy
         implements AccountStrategy
 {
     private enum State
     {
         PREPARE,
-        TRAVEL_TO_MINE,
-        MINE,
+        TRAVEL_TO_FISH,
+        FISH,
         TRAVEL_TO_BANK,
         BANK
     }
@@ -51,36 +50,42 @@ public final class CopperTinMiningStrategy
      * Locations are ordered from most preferred to least preferred.
      * selectLocation() returns the first currently usable location.
      */
-    private final List<MiningLocation> locations =
+    private final List<FishingLocation> locations =
             Arrays.asList(
-                    new MiningLocation(
-                            "Al Kharid Mine",
-                            new WorldPoint(3296, 3315, 0),
-                            new WorldPoint(3298, 3314, 0),
-                            context -> Rs2Player.getCombatLevel() > 29
+                    new FishingLocation(
+                            "Draynor Village Net Fishing",
+                            new WorldPoint(3086, 3232, 0),
+                            new WorldPoint(3093, 3243, 0),
+                            context -> Rs2Player.getCombatLevel() > 20
                     ),
 
-                    new MiningLocation(
-                            "Lumbridge Swamp Mine",
-                            new WorldPoint(3227, 3146, 0),
-                            new WorldPoint(3208, 3218, 2),
+//                    new FishingLocation(
+//                            "Lumbridge River Net Fishing",
+//                            new WorldPoint(3243, 3151, 0),
+//                            new WorldPoint(3208, 3219, 2),
+//                            context -> true
+//                    ),
+
+                    new FishingLocation(
+                            "Al Kharid Net Fishing",
+                            new WorldPoint(3268, 3150, 0),
+                            new WorldPoint(3270, 3166, 0),
                             context -> true
                     )
             );
 
-
     private State state = State.PREPARE;
-    private MiningLocation currentLocation;
+    private FishingLocation currentLocation;
 
     @Override
     public String getName()
     {
         if (currentLocation == null)
         {
-            return "Copper and tin mining";
+            return "Shrimp fishing";
         }
 
-        return "Copper and tin - " +
+        return "Shrimp fishing - " +
                 currentLocation.getName();
     }
 
@@ -88,7 +93,7 @@ public final class CopperTinMiningStrategy
     public boolean supports(Goal goal)
     {
         return goal.getType() == GoalType.SKILL_LEVEL &&
-                goal.getSkill() == Skill.MINING;
+                goal.getSkill() == Skill.FISHING;
     }
 
     @Override
@@ -96,13 +101,14 @@ public final class CopperTinMiningStrategy
             AccountContext context,
             Goal goal)
     {
-        int miningLevel =
-                context.getLevel(Skill.MINING);
+        int fishingLevel =
+                context.getLevel(Skill.FISHING);
 
         return supports(goal) &&
-                miningLevel >= 1 &&
-                miningLevel < 15 &&
-                context.getBankCache().hasAnyItem(PICKAXES_ID) &&
+                fishingLevel >= 1 &&
+                fishingLevel < 20 &&
+                fishingLevel < goal.getTarget() &&
+                context.getBankCache().hasItem(SMALL_FISHING_NET) &&
                 selectLocation(context) != null;
     }
 
@@ -112,7 +118,7 @@ public final class CopperTinMiningStrategy
             Goal goal)
     {
         /*
-         * The requested Mining target has been reached.
+         * The requested Fishing target has been reached.
          */
         if (goal.isComplete(context))
         {
@@ -120,10 +126,10 @@ public final class CopperTinMiningStrategy
         }
 
         /*
-         * Copper/tin is no longer the preferred method.
+         * Net fishing is no longer the preferred method at level 20.
          * Ask the Planner to choose again.
          */
-        if (context.getLevel(Skill.MINING) >= 15)
+        if (context.getLevel(Skill.FISHING) >= 20)
         {
             return StepResult.REPLAN;
         }
@@ -144,26 +150,26 @@ public final class CopperTinMiningStrategy
         {
             case PREPARE:
                 /*
-                 * Equip or withdraw the pickaxe here.
+                 * Equip or withdraw the fishing rod here.
                  */
                 state = State.TRAVEL_TO_BANK;
                 break;
 
-            case TRAVEL_TO_MINE:
-                if (travelToMine())
+            case TRAVEL_TO_FISH:
+                if (travelToFish())
                 {
-                    state = State.MINE;
+                    state = State.FISH;
                 }
                 break;
 
-            case MINE:
-                if (inventoryIsFull() || !Rs2Inventory.contains(PICKAXES_ID))
+            case FISH:
+                if (inventoryIsFull() || (!Rs2Inventory.hasItem(SMALL_FISHING_NET)))
                 {
                     state = State.TRAVEL_TO_BANK;
                 }
                 else
                 {
-                    mineCopperOrTin();
+                    fishShrimp();
                 }
                 break;
 
@@ -175,7 +181,7 @@ public final class CopperTinMiningStrategy
                 break;
 
             case BANK:
-                if (bankOres())
+                if (bankFish())
                 {
                     /*
                      * Recheck preferred locations after banking.
@@ -190,7 +196,7 @@ public final class CopperTinMiningStrategy
                         return StepResult.REPLAN;
                     }
 
-                    state = State.TRAVEL_TO_MINE;
+                    state = State.TRAVEL_TO_FISH;
                 }
                 break;
         }
@@ -201,10 +207,10 @@ public final class CopperTinMiningStrategy
     /**
      * Returns the first currently accessible location.
      */
-    private MiningLocation selectLocation(
+    private FishingLocation selectLocation(
             AccountContext context)
     {
-        for (MiningLocation location : locations)
+        for (FishingLocation location : locations)
         {
             if (location.canUse(context))
             {
@@ -215,20 +221,20 @@ public final class CopperTinMiningStrategy
         return null;
     }
 
-    private boolean travelToMine()
+    private boolean travelToFish()
     {
         if (currentLocation == null)
         {
             return false;
         }
 
-        if (Rs2Player.getWorldLocation().distanceTo(currentLocation.getMineDestination()) <= 5)
+        if (Rs2Player.getWorldLocation().distanceTo(currentLocation.getFishDestination()) <= 5)
         {
             return true;
         }
 
         Rs2Walker.walkTo(
-                currentLocation.getMineDestination()
+                currentLocation.getFishDestination()
         );
 
         return false;
@@ -239,7 +245,7 @@ public final class CopperTinMiningStrategy
         return Rs2Inventory.isFull();
     }
 
-    private void mineCopperOrTin()
+    private void fishShrimp()
     {
         if (currentLocation == null)
         {
@@ -256,14 +262,13 @@ public final class CopperTinMiningStrategy
             return;
         }
 
-        Rs2TileObjectModel rock = MiningUtils.findNearestRock(10943, 11161);
+        Rs2NpcModel spot = FishingUtils.findNearestNetSpot();
 
-        if(rock == null) return;
+        if(spot == null) return;
 
-        if(!rock.isReachable()) return;
+        if(!spot.isReachable()) return;
 
-        rock.click("Mine");
-
+        spot.click("Small Net");
     }
 
     private boolean travelToBank()
@@ -285,7 +290,7 @@ public final class CopperTinMiningStrategy
         return false;
     }
 
-    private boolean bankOres()
+    private boolean bankFish()
     {
         if (!Rs2Bank.isOpen())
         {
@@ -297,31 +302,48 @@ public final class CopperTinMiningStrategy
             return false;
         }
 
-        // Deposit everything except our pickaxe
+        // Deposit everything except our fishing rod
         sleepUntil(
-                () -> Rs2Bank.depositAllExcept(PICKAXES_NAME),
+                () -> Rs2Bank.depositAllExcept(SMALL_FISHING_NET),
                 Rs2Random.between(400, 1200)
         );
 
         if(Rs2Inventory.isEmpty()){
-            int miningLevel = Rs2Player.getRealSkillLevel(Skill.MINING);
-            String bestPickaxe = getBestPickaxe(miningLevel);
-            if(Rs2Bank.hasItem(bestPickaxe)){
-
-            } else {
-
-            }
-            for(String pickaxe : PICKAXES_NAME){
-                if(Rs2Bank.hasItem(pickaxe) && canUsePickaxe(pickaxe, miningLevel)){
-                    sleepUntil(() -> Rs2Bank.withdrawOne(bestPickaxe), Rs2Random.between(800, 3000));
-                    break;
-                }
-            }
+            sleepUntil(() -> Rs2Bank.withdrawOne(SMALL_FISHING_NET), Rs2Random.between(800, 2000));
         }
 
         return !Rs2Inventory.isEmpty();
     }
 
+    private String getBestRod(int fishingLevel)
+    {
+        if (fishingLevel >= 40 && Rs2Bank.hasItem("Pearl fishing rod"))
+        {
+            return "Pearl fishing rod";
+        }
+        if (fishingLevel >= 30 && Rs2Bank.hasItem("Oily fishing rod"))
+        {
+            return "Oily fishing rod";
+        }
+        if (fishingLevel >= 20 && Rs2Bank.hasItem("Fly fishing rod"))
+        {
+            return "Fly fishing rod";
+        }
+        return "Fishing rod";
+    }
+
+    private boolean canUseRod(String rod, int fishingLevel)
+    {
+        if (rod.equals("Pearl fishing rod") || rod.equals("Oily fishing rod"))
+        {
+            return fishingLevel >= 30;
+        }
+        if (rod.equals("Fly fishing rod"))
+        {
+            return fishingLevel >= 20;
+        }
+        return true; // Basic fishing rod
+    }
 
     @Override
     public void reset()

@@ -18,16 +18,20 @@ import net.runelite.api.Skill;
 import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.Script;
 import net.runelite.client.plugins.microbot.mntn.aio.core.*;
+import net.runelite.client.plugins.microbot.mntn.aio.core.PlannerSessionContext;
 import net.runelite.client.plugins.microbot.mntn.aio.strategies.moneymaking.TinderboxLootingStrategy;
 import net.runelite.client.plugins.microbot.mntn.aio.strategies.skilling.mining.CopperTinMiningStrategy;
 import net.runelite.client.plugins.microbot.mntn.aio.strategies.skilling.mining.IronMiningStrategy;
 import net.runelite.client.plugins.microbot.mntn.aio.strategies.skilling.woodcutting.NormalTreeWoodcuttingStrategy;
 import net.runelite.client.plugins.microbot.mntn.aio.strategies.skilling.woodcutting.OakTreeWoodcuttingStrategy;
+import net.runelite.client.plugins.microbot.mntn.aio.strategies.skilling.fishing.FlyFishingStrategy;
+import net.runelite.client.plugins.microbot.mntn.aio.strategies.skilling.fishing.ShrimpFishingStrategy;
 import net.runelite.client.plugins.microbot.util.bank.Rs2Bank;
 import net.runelite.client.plugins.microbot.util.math.Rs2Random;
 import net.runelite.client.plugins.microbot.util.player.Rs2Player;
 
 import java.util.*;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
 public class MntnAIOBuilderScript extends Script
@@ -59,6 +63,8 @@ public class MntnAIOBuilderScript extends Script
      * strategy's internal state machine can make progress.
      */
     private Plan activePlan;
+
+    private PlannerSessionContext plannerSessionContext;
 
     private MntnAIOBuilderConfig config;
 
@@ -112,6 +118,14 @@ public class MntnAIOBuilderScript extends Script
          */
         this.goals = loadGoals(config);
         this.strategies = createStrategies(config);
+
+        // Create session context with randomized weights for this session
+        this.plannerSessionContext = new PlannerSessionContext.Builder()
+                .sessionSeed(System.currentTimeMillis() + ThreadLocalRandom.current().nextLong())
+                .maxHistorySize(8)
+                .varietyStrength(0.15)
+                .breakChancePerTick(0.01)
+                .build();
 
         debugLog(
                 "Starting with " + goals.size() +
@@ -240,7 +254,8 @@ public class MntnAIOBuilderScript extends Script
             activePlan = planner.choose(
                     goals,
                     strategies,
-                    accountContext
+                    accountContext,
+                    plannerSessionContext
             );
 
             /*
@@ -256,11 +271,20 @@ public class MntnAIOBuilderScript extends Script
                 }
                 else
                 {
+                    // Check if we should take a micro-break
+                    if (plannerSessionContext.shouldBreak())
+                    {
+                        setStatus("Taking a short break");
+                        return;
+                    }
                     setStatus("No available strategy");
                 }
 
                 return;
             }
+
+            // Record strategy usage for variety bonus
+            plannerSessionContext.recordStrategyUsed(activePlan.getStrategy().getName());
 
             activePlanDeadlineMs =
                     System.currentTimeMillis() +
@@ -371,8 +395,11 @@ public class MntnAIOBuilderScript extends Script
             goals.add(Goal.skill(Skill.WOODCUTTING, config.woodcuttingTarget(), Rs2Random.between(1, 10)));
         }
 
+        if(config.fishingTarget() > 0) {
+            goals.add(Goal.skill(Skill.FISHING, config.fishingTarget(), Rs2Random.between(1, 10)));
+        }
+
         goals.add(Goal.cash(20000, Rs2Random.between(1, 10)));
-        //TODO
         return goals;
     }
 
@@ -386,11 +413,18 @@ public class MntnAIOBuilderScript extends Script
             MntnAIOBuilderConfig config)
     {
         return Arrays.asList(
-                // TODO
-                // Place higher lvl strategies first so its always doing the best strategy that can be handled until we can make it more randomized
+                // Fishing strategies (higher level first)
+                new FlyFishingStrategy(),
+                new ShrimpFishingStrategy(),
+
+                // Mining strategies
                 new IronMiningStrategy(),
                 new CopperTinMiningStrategy(),
+
+                // Money making
                 new TinderboxLootingStrategy(),
+
+                // Woodcutting strategies
                 new OakTreeWoodcuttingStrategy(),
                 new NormalTreeWoodcuttingStrategy()
 

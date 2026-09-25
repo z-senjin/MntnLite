@@ -121,7 +121,7 @@ public final class OakTreeWoodcuttingStrategy
                 break;
 
             case WOODCUT:
-                if (inventoryIsFull())
+                if (inventoryIsFull() || !Rs2Inventory.contains(AXES_ID))
                 {
                     state = State.TRAVEL_TO_BANK;
                 }
