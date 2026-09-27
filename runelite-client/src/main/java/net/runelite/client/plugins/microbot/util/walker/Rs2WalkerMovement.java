@@ -923,6 +923,9 @@ final class Rs2WalkerMovement {
         if (finalDestination.equals(playerLoc)) {
             return false;
         }
+        if (playerLoc.distanceTo2D(finalDestination) >= 4) {
+            return false;
+        }
         return isSceneCanvasClickable(finalDestination);
     }
 
