@@ -12,8 +12,10 @@
  * 2. For each goal, find all strategies that support it and can start.
  * 3. Score each valid (goal, strategy) pair using session weights, variety bonus,
  *    level appropriateness, and priority.
- * 4. Weighted random selection from scored candidates.
- * 5. Return null when no configured strategy is currently available.
+ * 4. Apply human-like penalties: no consecutive duplicates, skill/category switching,
+ *    exponential recency decay.
+ * 5. Weighted random selection from scored candidates using stateful PRNG.
+ * 6. Return null when no configured strategy is currently available.
  */
 package net.runelite.client.plugins.microbot.mntn.aio.core;
 
@@ -28,6 +30,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import java.util.Random;
+import java.util.stream.Collectors;
 
 public final class Planner
 {
@@ -54,6 +57,9 @@ public final class Planner
             return chooseLegacy(goals, strategies, context);
         }
 
+        // Re-roll priority jitter on each replan to simulate changing priorities
+        sessionContext.rerollAllGoalPriorityJitter();
+
         // Build candidate list with scores
         List<ScoredCandidate> candidates = new ArrayList<>();
 
@@ -65,7 +71,7 @@ public final class Planner
             {
                 continue;
             }
-            // Apply jitter once per session
+            // Apply jitter once per replan (re-rolled above)
             if (!sessionContext.getGoalPriorityJitterMap().containsKey(goal.hashCode()))
             {
                 int jitter = Rs2Random.betweenInclusive(-2, 2);
@@ -105,8 +111,16 @@ public final class Planner
             return null;
         }
 
-        // Weighted random selection
-        return selectWeightedRandom(candidates, sessionContext.getSessionSeed());
+        // Apply human-like penalties and filtering
+        candidates = applyHumanLikePenalties(candidates, sessionContext);
+
+        if (candidates.isEmpty())
+        {
+            return null;
+        }
+
+        // Weighted random selection using stateful PRNG
+        return selectWeightedRandom(candidates, sessionContext);
     }
 
     private Plan chooseLegacy(
@@ -189,10 +203,79 @@ public final class Planner
         return score;
     }
 
-    private Plan selectWeightedRandom(List<ScoredCandidate> candidates, long sessionSeed)
+    /**
+     * Applies human-like penalties and the "no consecutive duplicates" rule.
+     * Returns filtered and re-scored candidates.
+     */
+    private List<ScoredCandidate> applyHumanLikePenalties(
+            List<ScoredCandidate> candidates,
+            PlannerSessionContext sessionContext)
     {
-        // Add small deterministic tiebreaker based on session seed
-        Random rng = new Random(sessionSeed + candidates.size());
+        // CORE RULE: Exclude the immediately preceding strategy unless it's the ONLY option
+        String lastStrategy = sessionContext.getLastStrategyName();
+        List<ScoredCandidate> nonDuplicate = candidates.stream()
+                .filter(c -> lastStrategy == null || !c.strategy.getName().equals(lastStrategy))
+                .collect(Collectors.toList());
+
+        List<ScoredCandidate> finalCandidates = nonDuplicate.isEmpty() ? candidates : nonDuplicate;
+
+        // Apply additional penalties for skill/category recency and recency decay
+        // Create new candidates with adjusted scores since score is final
+        List<ScoredCandidate> penalizedCandidates = new ArrayList<>();
+        for (ScoredCandidate c : finalCandidates)
+        {
+            double score = c.score;
+
+            // Skill-level switching penalty (prefer different skill)
+            Goal goal = c.goal;
+            if (goal.getType() == GoalType.SKILL_LEVEL)
+            {
+                double skillPenalty = sessionContext.getSkillRecencyPenalty(goal.getSkill());
+                score *= (1.0 - skillPenalty * 0.6); // 60% of penalty applied
+            }
+
+            // Category switching penalty (e.g., "mining" vs "woodcutting")
+            String category = inferCategory(c.strategy);
+            if (category != null)
+            {
+                double catPenalty = sessionContext.getCategoryRecencyPenalty(category);
+                score *= (1.0 - catPenalty * 0.5); // 50% of penalty applied
+            }
+
+            // Exponential recency decay penalty (multi-session fatigue)
+            double recencyPenalty = sessionContext.getRecencyPenalty(c.strategy.getName());
+            score *= (1.0 - recencyPenalty * 0.8); // 80% of penalty applied
+
+            // Create new candidate with adjusted score (score is final)
+            double adjustedScore = Math.max(score, 0.01); // Floor at 1% to avoid zero
+            penalizedCandidates.add(new ScoredCandidate(c.goal, c.strategy, adjustedScore));
+        }
+
+        return penalizedCandidates;
+    }
+
+    /**
+     * Infers a broad category from strategy name for skill/category switching.
+     */
+    private String inferCategory(AccountStrategy strategy)
+    {
+        String name = strategy.getName().toLowerCase();
+        if (name.contains("mining")) return "mining";
+        if (name.contains("woodcutting") || name.contains("tree")) return "woodcutting";
+        if (name.contains("fishing")) return "fishing";
+        if (name.contains("cooking")) return "cooking";
+        if (name.contains("firemaking")) return "firemaking";
+        if (name.contains("smithing")) return "smithing";
+        if (name.contains("crafting")) return "crafting";
+        if (name.contains("tinderbox") || name.contains("looting")) return "moneymaking";
+        if (name.contains("quest")) return "quest";
+        return null;
+    }
+
+    private Plan selectWeightedRandom(List<ScoredCandidate> candidates, PlannerSessionContext sessionContext)
+    {
+        // Use stateful PRNG from session context (advances on each call)
+        Random rng = sessionContext.getRng();
 
         double totalWeight = 0.0;
         for (ScoredCandidate c : candidates)

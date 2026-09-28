@@ -284,7 +284,11 @@ public class MntnAIOBuilderScript extends Script
             }
 
             // Record strategy usage for variety bonus
-            plannerSessionContext.recordStrategyUsed(activePlan.getStrategy().getName());
+            plannerSessionContext.recordStrategyUsed(
+                    activePlan.getStrategy().getName(),
+                    activePlan.getGoal().getType() == GoalType.SKILL_LEVEL ? activePlan.getGoal().getSkill() : null,
+                    inferCategory(activePlan.getStrategy().getName())
+            );
 
             activePlanDeadlineMs =
                     System.currentTimeMillis() +
@@ -533,6 +537,28 @@ public class MntnAIOBuilderScript extends Script
                             message
             );
         }
+    }
+
+    /**
+     * Infers a broad category from strategy name for skill/category switching.
+     */
+    private String inferCategory(String strategyName)
+    {
+        if (strategyName == null)
+        {
+            return null;
+        }
+        String name = strategyName.toLowerCase();
+        if (name.contains("mining")) return "mining";
+        if (name.contains("woodcutting") || name.contains("tree")) return "woodcutting";
+        if (name.contains("fishing")) return "fishing";
+        if (name.contains("cooking")) return "cooking";
+        if (name.contains("firemaking")) return "firemaking";
+        if (name.contains("smithing")) return "smithing";
+        if (name.contains("crafting")) return "crafting";
+        if (name.contains("tinderbox") || name.contains("looting")) return "moneymaking";
+        if (name.contains("quest")) return "quest";
+        return null;
     }
 
     /**
