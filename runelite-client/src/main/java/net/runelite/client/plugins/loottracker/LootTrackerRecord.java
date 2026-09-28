@@ -59,6 +59,28 @@ public class LootTrackerRecord
 		return title.equals(id) && this.type == type;
 	}
 
+	void subtract(LootTrackerRecord record)
+	{
+		assert title.equals(record.title);
+		assert type == record.type;
+		for (LootTrackerItem removed : record.items)
+		{
+			for (int index = 0; index < items.length; index++)
+			{
+				LootTrackerItem item = items[index];
+				if (item.getId() == removed.getId())
+				{
+					items[index] = new LootTrackerItem(item.getId(), item.getName(),
+						Math.max(0, item.getQuantity() - removed.getQuantity()),
+						item.getGePrice(), item.getHaPrice(), item.isIgnored());
+					break;
+				}
+			}
+		}
+		items = Arrays.stream(items).filter(item -> item.getQuantity() > 0).toArray(LootTrackerItem[]::new);
+		kills = Math.max(0, kills - record.kills);
+	}
+
 	void merge(LootTrackerRecord record)
 	{
 		assert title.equals(record.title);

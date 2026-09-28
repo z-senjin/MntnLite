@@ -65,6 +65,11 @@ public abstract class Plugin implements Module
 	{
 	}
 
+	protected Module getPublicModule()
+	{
+		return null;
+	}
+
 	public void resetConfiguration()
 	{
 	}

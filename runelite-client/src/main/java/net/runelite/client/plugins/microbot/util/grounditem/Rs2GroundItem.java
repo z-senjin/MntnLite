@@ -399,7 +399,7 @@ public class Rs2GroundItem {
     public static boolean lootItemBasedOnValue(LootingParameters params) {
         Predicate<GroundItem> byValue = gi -> {
             final int qty = Math.max(1, gi.getQuantity());
-            final int price = gi.getGePrice();
+            final long price = gi.getGePrice();
             return price > params.getMinValue() && (price / qty) < params.getMaxValue();
         };
 
@@ -492,7 +492,7 @@ public class Rs2GroundItem {
         for (RS2Item rs2Item : groundItems) {
             if (Rs2Inventory.isFull(rs2Item.getItem().getName())) continue;
             long totalPrice = (long) Microbot.getClientThread().runOnClientThreadOptional(() ->
-                    Microbot.getItemManager().getItemPrice(rs2Item.getItem().getId()) * rs2Item.getTileItem().getQuantity()).orElse(0);
+                    Microbot.getItemManager().getItemPrice(rs2Item.getItem().getId()) * rs2Item.getTileItem().getQuantity()).orElse(0L);
             if (totalPrice >= value) {
                 return interact(rs2Item);
             }

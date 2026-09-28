@@ -45,7 +45,7 @@ public final class Rs2LootEngine {
         public Builder addByValue() {
             Predicate<GroundItem> byValue = gi -> {
                 final int qty = Math.max(1, gi.getQuantity());
-                final int price = gi.getGePrice();
+                final long price = gi.getGePrice();
                 return price > params.getMinValue() && (price / qty) < params.getMaxValue();
             };
             final Set<String> ignoredLower = toLowerTrimmedSet(params.getIgnoredNames());

@@ -12,14 +12,14 @@ public class GrandExchangeOfferDetails {
     private final int itemId;
     private final int quantitySold;
     private final int totalQuantity;
-    private final int price;
-    private final int spent;
+    private final long price;
+    private final long spent;
     private final GrandExchangeOfferState state;
     private final boolean isSelling;
     @Getter
     private final GrandExchangeSlots slot;
 
-    public GrandExchangeOfferDetails(int itemId, int quantitySold, int totalQuantity, int price, int spent,
+    public GrandExchangeOfferDetails(int itemId, int quantitySold, int totalQuantity, long price, long spent,
                                      GrandExchangeOfferState state, boolean isSelling, GrandExchangeSlots slot) {
         this.itemId = itemId;
         this.quantitySold = quantitySold;
@@ -86,11 +86,11 @@ public class GrandExchangeOfferDetails {
         return totalQuantity;
     }
 
-    public int getPrice() {
+    public long getPrice() {
         return price;
     }
 
-    public int getSpent() {
+    public long getSpent() {
         return spent;
     }
 

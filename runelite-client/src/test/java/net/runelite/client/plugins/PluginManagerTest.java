@@ -139,9 +139,26 @@ public class PluginManagerTest
 	@Test
 	public void testLoadPlugins() throws Exception
 	{
-		var pluginManager = new PluginManager(false, null, null, null, null);
+		var pluginManager = new PluginManager(false, null, null, null, null, new PluginModuleFactory());
 		pluginManager.loadCorePlugins();
 		var plugins = pluginManager.getPlugins();
+		Plugin clueScrolls = plugins.stream()
+			.filter(plugin -> plugin instanceof net.runelite.client.plugins.cluescrolls.ClueScrollPlugin)
+			.findFirst().orElseThrow();
+		org.junit.Assert.assertSame(clueScrolls, RuneLite.getInjector()
+			.createChildInjector(clueScrolls.getPublicModule())
+			.getInstance(net.runelite.client.plugins.cluescrolls.ClueScrollPlugin.class));
+		Plugin bankTags = plugins.stream()
+			.filter(plugin -> plugin instanceof net.runelite.client.plugins.banktags.BankTagsPlugin)
+			.findFirst().orElseThrow();
+		Plugin inventorySetups = plugins.stream()
+			.filter(plugin -> plugin instanceof net.runelite.client.plugins.microbot.inventorysetups.MInventorySetupsPlugin)
+			.findFirst().orElseThrow();
+		org.junit.Assert.assertSame(bankTags, inventorySetups.getInjector()
+			.getInstance(net.runelite.client.plugins.banktags.BankTagsPlugin.class));
+		org.junit.Assert.assertSame(bankTags.getInjector()
+			.getInstance(net.runelite.client.plugins.banktags.TagManager.class), inventorySetups.getInjector()
+			.getInstance(net.runelite.client.plugins.banktags.TagManager.class));
 
 		// Check that the plugins register with the eventbus without errors
 		EventBus eventBus = new EventBus();
@@ -154,13 +171,34 @@ public class PluginManagerTest
 		assertEquals(expected, plugins.size());
 	}
 
+	@Test
+	public void testLoadOrderOnlyDependency() throws Exception
+	{
+		var pluginManager = new PluginManager(false, null, null, null, null, new PluginModuleFactory());
+		var loaded = pluginManager.loadPlugins(List.of(LoadOrderDependent.class, LoadOrderDependency.class), null);
+		assertEquals(2, loaded.size());
+		assertTrue(loaded.get(0) instanceof LoadOrderDependency);
+		assertTrue(loaded.get(1) instanceof LoadOrderDependent);
+	}
+
+	@PluginDescriptor(name = "Load order dependency")
+	public static class LoadOrderDependency extends Plugin
+	{
+	}
+
+	@PluginDescriptor(name = "Load order dependent")
+	@PluginDependency(LoadOrderDependency.class)
+	public static class LoadOrderDependent extends Plugin
+	{
+	}
+
 	//Added to ignore because it made PluginDescriptor name tags fail due to attempting to create a file with illegal characters
 	//ex - C:\Users\Brent\AppData\Local\Temp\junit1285191539980835487\junit7101190188546249539\<html>[<font color=#1E90FF>J<\font>] Auto Chinchompa.dot
 	//Will not be looking for a fix cause fuck tests - OG
 	@Ignore
 	public void dumpGraph() throws Exception
 	{
-		PluginManager pluginManager = new PluginManager(false, null, null, null, null);
+		PluginManager pluginManager = new PluginManager(false, null, null, null, null, new PluginModuleFactory());
 		pluginManager.loadCorePlugins();
 
 		Injector graphvizInjector = Guice.createInjector(new GraphvizModule());

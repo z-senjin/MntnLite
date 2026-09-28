@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Adam <Adam@sigterm.info>
+ * Copyright (c) 2026 Abex
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -22,23 +22,26 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-package net.runelite.client.plugins.grandexchange;
+package net.runelite.client.plugins;
 
-import com.google.gson.annotations.SerializedName;
-import java.time.Instant;
-import lombok.Data;
+import com.google.inject.AbstractModule;
+import javax.inject.Singleton;
+import lombok.RequiredArgsConstructor;
 
-@Data
-class Trade
+@Singleton
+class PluginModuleFactory
 {
-	@SerializedName("b")
-	boolean buy;
-	@SerializedName("i")
-	int itemId;
-	@SerializedName("q")
-	int quantity;
-	@SerializedName("p")
-	long price;
-	@SerializedName("t")
-	Instant time;
+	@RequiredArgsConstructor
+	class PluginModule extends AbstractModule
+	{
+		private final Plugin plugin;
+
+		@Override
+		protected void configure()
+		{
+			// Since the plugin itself is a module, it won't bind itself, so we'll bind it here
+			binder().bind((Class<Plugin>) plugin.getClass()).toInstance(plugin);
+			binder().install(plugin);
+		}
+	}
 }

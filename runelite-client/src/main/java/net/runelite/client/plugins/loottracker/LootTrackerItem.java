@@ -37,14 +37,14 @@ public class LootTrackerItem
 	private final int id;
 	private final String name;
 	private final int quantity;
-	private final int gePrice;
+	private final long gePrice;
 	private final int haPrice;
 	@Setter
 	private boolean ignored;
 
 	public long getTotalGePrice()
 	{
-		return (long) gePrice * quantity;
+		return gePrice * quantity;
 	}
 
 	public long getTotalHaPrice()

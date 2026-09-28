@@ -250,9 +250,9 @@ public class Rs2ItemModel {
         }
     }
 
-    public int getPrice() {
+    public long getPrice() {
         return Microbot.getClientThread().runOnClientThreadOptional(() ->
-                Microbot.getItemManager().getItemPrice(id) * quantity).orElse(0);
+                Microbot.getItemManager().getItemPrice(id) * quantity).orElse(0L);
     }
 
     public int getHaPrice() {
@@ -260,8 +260,8 @@ public class Rs2ItemModel {
     }
 
     public boolean isHaProfitable() {
-        int natureRunePrice = Microbot.getClientThread().runOnClientThreadOptional(() ->
-                Microbot.getItemManager().getItemPrice(ItemID.NATURERUNE)).orElse(0);
+        long natureRunePrice = Microbot.getClientThread().runOnClientThreadOptional(() ->
+                Microbot.getItemManager().getItemPrice(ItemID.NATURERUNE)).orElse(0L);
         return (getHaPrice() - natureRunePrice) > (getPrice() / quantity) && isTradeable;
 
     }
@@ -300,7 +300,7 @@ public class Rs2ItemModel {
         sb.append("\tisFood: ").append(isFood()).append("\n");
 
         // Price information
-        int price = getPrice();
+        long price = getPrice();
         sb.append("\tprice: ").append(price).append(" gp (total)\n");
         if (quantity > 0) {
             sb.append("\tunitPrice: ").append(price / quantity).append(" gp (each)\n");

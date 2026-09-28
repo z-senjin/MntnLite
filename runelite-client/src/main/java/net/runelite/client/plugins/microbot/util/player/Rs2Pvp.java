@@ -31,7 +31,6 @@ import net.runelite.api.geometry.Cuboid;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.util.player.Rs2Player;
-import net.runelite.client.util.QuantityFormatter;
 import org.apache.commons.lang3.ArrayUtils;
 
 import java.awt.*;
@@ -174,7 +173,7 @@ public class Rs2Pvp {
         return false;
     }
 
-    public static int calculateRisk(Client client, ItemManager itemManager) {
+    public static long calculateRisk(Client client, ItemManager itemManager) {
         if (client.getItemContainer(InventoryID.EQUIPMENT) == null) {
             return 0;
         }
@@ -183,14 +182,14 @@ public class Rs2Pvp {
         }
         Item[] items = ArrayUtils.addAll(Objects.requireNonNull(client.getItemContainer(InventoryID.EQUIPMENT)).getItems(),
                 Objects.requireNonNull(client.getItemContainer(InventoryID.INVENTORY)).getItems());
-        TreeMap<Integer, Item> priceMap = new TreeMap<>(Comparator.comparingInt(Integer::intValue));
-        int wealth = 0;
+        TreeMap<Long, Item> priceMap = new TreeMap<>(Comparator.comparingLong(Long::longValue));
+        long wealth = 0;
         for (Item i : items) {
-            int value = (itemManager.getItemPrice(i.getId()) * i.getQuantity());
+            long value = (itemManager.getItemPrice(i.getId()) * i.getQuantity());
 
             final ItemComposition itemComposition = itemManager.getItemComposition(i.getId());
             if (!itemComposition.isTradeable() && value == 0) {
-                value = itemComposition.getPrice() * i.getQuantity();
+                value = (long) itemComposition.getPrice() * i.getQuantity();
                 priceMap.put(value, i);
             } else {
                 value = itemManager.getItemPrice(i.getId()) * i.getQuantity();
@@ -200,7 +199,7 @@ public class Rs2Pvp {
             }
             wealth += value;
         }
-        return Integer.parseInt(QuantityFormatter.quantityToRSDecimalStack(priceMap.keySet().stream().mapToInt(Integer::intValue).sum()));
+        return priceMap.keySet().stream().mapToLong(Long::longValue).sum();
 
     }
 }
