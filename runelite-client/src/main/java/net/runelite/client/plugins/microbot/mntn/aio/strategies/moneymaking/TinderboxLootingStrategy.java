@@ -7,9 +7,12 @@ import net.runelite.client.plugins.microbot.api.tileobject.models.Rs2TileObjectM
 import net.runelite.client.plugins.microbot.mntn.aio.*;
 import net.runelite.client.plugins.microbot.mntn.aio.core.*;
 import net.runelite.client.plugins.microbot.util.bank.Rs2Bank;
+import net.runelite.client.plugins.microbot.util.dialogues.Rs2Dialogue;
 import net.runelite.client.plugins.microbot.util.grounditem.Rs2GroundItem;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
 import net.runelite.client.plugins.microbot.util.math.Rs2Random;
+import net.runelite.client.plugins.microbot.util.npc.Rs2Npc;
+import net.runelite.client.plugins.microbot.util.npc.Rs2NpcModel;
 import net.runelite.client.plugins.microbot.util.player.Rs2Player;
 import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
 
@@ -178,6 +181,20 @@ public final class TinderboxLootingStrategy
             sleepUntil(() -> Rs2Inventory.drop(ItemID.TINDERBOX), 800);
             sleep(100, 1200);
             tinderboxCount++;
+        } else {
+            if(Rs2Dialogue.isInDialogue()){
+                if(Rs2Dialogue.getDialogueText().contains("messing around with my possessions")){
+                    boolean wiseOldMan = Rs2Npc.interact(2108);
+                    sleepUntil(() -> wiseOldMan && !Rs2Player.isMoving(), 4000);
+                    sleepUntil(() -> Rs2Dialogue.isInDialogue() && !Rs2Player.isMoving(), 3000);
+                    for (int i = 0; i < Rs2Random.between(22,30); i++) {
+                        if(Rs2Dialogue.isInDialogue()){
+                            Rs2Dialogue.clickContinue();
+                            sleep(Rs2Random.between(300, 1200));
+                        }
+                    }
+                }
+            }
         }
 
     }
