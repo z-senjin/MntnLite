@@ -14,6 +14,7 @@
 - Script loop (`Script.run()` implementations) executes on scheduled executors → queries caches via Queryable API → performs interactions through utilities (`Rs2Inventory`, `Rs2Walker`, etc.) → waits with `sleepUntil` helpers.
 - Blocking events (`BlockingEventManager`) continuously validate (e.g., welcome screen, bank popups) → if triggered, they run on a dedicated executor and block script progression until resolved.
 - Telemetry flow: session/version/fact/plugin telemetry is skipped when telemetry is disabled; failures are logged at debug level.
+- Error telemetry: `diagnostics/ScriptErrorReporter` is a root logback appender that groups ERROR events by exception type and top stack frames, attributes them to the owning Hub plugin and version, sanitises messages with `DiagnosticReport.clean`, and posts a batch to `/plugintelemetry/errors` every 5 minutes. It is skipped by `--disable-telemetry`, `-Dmicrobot.disableTelemetry=true` or the config toggle. `-Dmicrobot.apiUrl` points `MicrobotApi` calls (session, plugin and error telemetry) at another base URL for local testing.
 
 ## Runtime Boundaries
 - **Threads**: Client thread (never block/sleep); script/executor threads (automation logic, sleeps allowed); blocking-event executor (resolves UI blockers). Use `ClientThread.runOnClientThreadOptional` for safe client access.
@@ -30,6 +31,7 @@
 - `BlockingEventManager` uses exponential backoff when no events validate to reduce overhead; events are re-queued if execution fails.
 - Default Gradle `test` tasks are disabled in `runelite-client/build.gradle.kts`; use explicit tasks such as `:client:runUnitTests`, `:client:runTests`, `:client:runDebugTests`, `:client:runIntegrationTest`, or `:client:runClientThreadScanner`.
 - World hopping short-circuits if the player is interacting or already hopping; confirmation widget auto-click handled in `Microbot.hopToWorld`.
+- `Microbot.hopToWorld` paces hops against `HopBudget`, an estimate of Jagex's per-IP hop/login allowance (default 390 tokens, 93 regained per hour, 20 kept in reserve for logins). Every `HOPPING` and `LOGGING_IN` transition spends a token, including manual hops. When the allowance is down to the reserve, script threads wait for the next token, stop waiting if the player is logged out, and press a harmless key so a long wait doesn't trigger the idle logout. The client thread and Swing thread get `false` instead and only check this client's last known state, without touching the file. The state lives in `~/.runelite/microbot-hop-budget.properties`, keyed by SOCKS proxy host, port and a hash of the proxy username, so it survives restarts and is shared by every client on the same exit IP. Writes go to a temporary file that replaces the old one, with `microbot-hop-budget.properties.lock` held while reading and writing. A "Too many login attempts" lockout (login index 33) sets it to zero.
 
 ## References
 - Queryable API guide: `../runelite-client/src/main/java/net/runelite/client/plugins/microbot/api/QUERYABLE_API.md`

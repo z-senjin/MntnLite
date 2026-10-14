@@ -76,12 +76,15 @@ import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.client.account.SessionManager;
 import net.runelite.client.config.ConfigManager;
+import net.runelite.client.config.RuneLiteConfig;
 import net.runelite.client.discord.DiscordService;
 import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.externalplugins.ExternalPluginManager;
 import net.runelite.client.plugins.PluginManager;
 import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.externalplugins.MicrobotPluginManager;
+import net.runelite.client.plugins.microbot.recovery.RecoveryPrompt;
+import net.runelite.client.plugins.microbot.recovery.StartupRecovery;
 import net.runelite.client.proxy.ProxyChecker;
 import net.runelite.client.proxy.ProxyConfiguration;
 import net.runelite.client.rs.ClientLoader;
@@ -308,6 +311,9 @@ public class RuneLite
 
 
 
+		final boolean safeMode = StartupRecovery.install(RUNELITE_DIR, RuneLiteProperties.getMicrobotVersion(),
+			options.has("safe-mode"), RecoveryPrompt.isEnabled(), new RecoveryPrompt()).isSafeMode();
+
 		SplashScreen.stage(0, "Preparing RuneScape", "");
 
 		boolean startupFailed = false;
@@ -354,7 +360,7 @@ public class RuneLite
 				clientLoader,
 				runtimeConfigLoader,
 				developerMode,
-				options.has("safe-mode"),
+				safeMode,
 				options.has("disable-telemetry"),
 				options.has("disable-walker-update"),
 				options.valueOf(sessionfile),
@@ -373,6 +379,7 @@ public class RuneLite
 		{
 			startupFailed = true;
 			log.error("Failure during startup", e);
+			StartupRecovery.startupFailed(e);
 			final String crashSummary = CrashReportFormatter.summarize(e);
 			final String crashDetails = CrashReportFormatter.buildReport(e);
 			SwingUtilities.invokeLater(() ->
@@ -476,6 +483,12 @@ public class RuneLite
 
 		// Load user configuration
 		configManager.load();
+
+		for (String plugin : StartupRecovery.takePendingDisables())
+		{
+			configManager.setConfiguration(RuneLiteConfig.GROUP_NAME, plugin, false);
+			log.info("Startup recovery disabled plugin {}", plugin);
+		}
 
 		// Initialize MicrobotPluginManager after configManager is loaded
 		microbotPluginManager.init();

@@ -70,6 +70,7 @@ java -jar microbot.jar \
 | `microbot.test.script` | Plugin descriptor name to auto-enable | required |
 | `microbot.test.timeout` | Max runtime in ms before forced exit | `120000` |
 | `microbot.test.output` | Directory for results/screenshots | `~/.runelite/test-results` |
+| `microbot.test.world` | Log in to this world with the active profile instead of enabling AutoLogin | unset |
 
 ### Components
 
@@ -419,7 +420,7 @@ Claude is multimodal. A screenshot of the game client showing a stuck character,
 
 ### ExampleScript as the reference test
 
-The existing `ExampleScript` already validates all core APIs (caches, inventory, equipment, widgets, walker, dialogue, teleport, looting). It's the natural first target for the agentic loop. Future scripts can follow the same `check()` pattern and write `TestResult` output.
+`ExampleScript` is no longer bundled with the client; it now comes from the Microbot-Hub example plugin (same package), which is an empty loop template. It is still a convenient first target for exercising the harness. Scripts that need real coverage should follow a `check()` pattern and write `TestResult` output.
 
 ---
 

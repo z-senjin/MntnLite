@@ -18,7 +18,7 @@ public class WelcomeScreenEvent implements BlockingEvent {
     
     @Override
     public boolean validate() {
-        return Rs2Widget.isWidgetVisible(InterfaceID.WelcomeScreen.PLAY);
+        return Microbot.isLoggedIn() && Rs2Widget.isWidgetVisible(InterfaceID.WelcomeScreen.PLAY);
     }
 
     @Override

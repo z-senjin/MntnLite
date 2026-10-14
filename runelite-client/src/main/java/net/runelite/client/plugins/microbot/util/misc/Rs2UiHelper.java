@@ -30,6 +30,9 @@ public class Rs2UiHelper {
     }
 
     public static boolean isRectangleWithinCanvas(Rectangle rectangle) {
+        if (rectangle == null) {
+            return false;
+        }
         int canvasHeight = Microbot.getClient().getCanvasHeight();
         int canvasWidth = Microbot.getClient().getCanvasWidth();
 

@@ -208,17 +208,7 @@ public class Rs2TileObjectModel implements TileObject, IEntity {
             return Rs2GameObject.isReachable((GameObject) tileObject);
         }
 
-        // Walls, ground decorations and decorative objects occupy a single tile and carry no
-        // sizeX/sizeY, so the area helper above does not apply. Their own tile is the one to test.
-        //
-        // Rs2Tile.isTileReachable and NOT IEntity.super.isReachable(): the latter is
-        // Rs2Reachable.isReachable(p), which traverses FROM p and then asks whether p is in the
-        // result. That never consults the player, so it answers "is this tile part of some walkable
-        // region" rather than "can I get to it", and a walkable tile inside a locked room passes.
-        // isTileReachable traverses from Rs2Player.getLocalLocation() to the tile, which is the
-        // question being asked, and is the same check the GameObject branch above ends up making
-        // through Rs2GameObject.isReachable.
-        return Rs2Tile.isTileReachable(getWorldLocation());
+        return Rs2Tile.isTileObjectReachable(tileObject);
     }
 
     public boolean click() {

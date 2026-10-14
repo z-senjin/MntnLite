@@ -136,7 +136,7 @@ Set JVM flag `-Dmicrobot.bank.validateInventorySetup=true` so `Rs2InventorySetup
 
 ## 8. Ground-item action reflection must fail closed to `Take`, not `CANCEL`
 
-`Rs2GroundItem` and `Rs2TileItemModel` recover ground-item actions from the injected client's `ItemComposition`. That backing layout is obfuscated and can shift on RuneLite bumps. If reflection cannot find a real action list, treat the ground item as exposing `Take` in the injected client's third ground-item slot instead of returning an empty action array.
+For non-pickup actions, `Rs2TileItemModel` recovers ground-item actions from the injected client's `ItemComposition`. Ordinary `Take` uses `GROUND_ITEM_THIRD_OPTION` directly and does not depend on reflection. That backing layout is obfuscated and can shift on RuneLite bumps. If reflection cannot find a real action list, treat the ground item as exposing `Take` in the injected client's third ground-item slot instead of returning an empty action array.
 
 **Why this matters:** After the RuneLite 1.12.30 bump, the reflection path returned `[]` for ordinary loot such as Cowhide. Loot helpers then failed to map `"Take"` to `GROUND_ITEM_THIRD_OPTION`, silently dispatched a no-op/cancel action, and ExampleScript's drop-and-loot smoke test failed even though the dropped item was visible and lootable.
 
@@ -175,7 +175,7 @@ Microbot.doInvoke(new NewMenuEntry()
         .worldViewId(worldViewId), bounds);
 ```
 
-Keep action discovery and dispatch separate: `Rs2Reflection.getGroundItemActions` retains the third-slot `Take` fallback described above, while `Microbot.doInvoke` owns the interaction.
+Keep action discovery and dispatch separate: `Rs2TileItemModel.click` owns the shared dispatcher, and legacy `Rs2GroundItem` resolves the current item through the tile-item cache before delegating. `Take` uses the third option directly; reflection is only needed for other actions. `Microbot.doInvoke` owns the interaction.
 
 **Where this applies:** `Rs2GroundItem.interact`, `Rs2TileItemModel.click`, and future ground-item interaction helpers.
 
@@ -190,3 +190,92 @@ Bank snapshots are saved per RuneScape profile and restored after a restart. The
 **Where this applies:** `Rs2Bank`, `Rs2BankData`, and the legacy `Rs2Walker` bank-cache bootstrap check.
 
 **Defensive check:** Restart with a saved snapshot and verify it is available with epoch zero, then open the bank and verify the epoch advances and the saved contents match the live container.
+
+## 11. Propagate ground-item dispatch failures
+
+Legacy wrappers must return the result of the shared tile-item dispatcher. A rejected action must return false. A true result from click, pickup, or a legacy interaction only means a click was dispatched; callers needing pickup confirmation must observe the inventory or relevant ground-stack change with a bounded condition wait. Never block the client thread to wait for pickup.
+
+**Why this matters:** A live drop-and-pickup probe showed that an unsupported action returned true through the legacy RS2Item wrapper even though the dispatcher rejected it.
+
+**Where this applies:** Rs2GroundItem interaction wrappers, Rs2TileItemModel, and ground-item API callers.
+
+## 12. Preserve an explicit ground-item Take when a widget is selected
+
+An explicit `Take` must remain `GROUND_ITEM_THIRD_OPTION`, even when an inventory item or spell is selected. Only generic/custom interactions may resolve to `WIDGET_TARGET_ON_GROUND_ITEM`.
+
+**Why this matters:** A live probe selected an inventory item before calling `pickup()`. The old dispatcher returned true but used the selected item on the ground stack instead of collecting it; inventory never recovered the dropped item.
+
+**Defensive check:** Drop one item, select another inventory item with `Use`, call `pickup()`, and verify the inventory count is restored.
+
+## 13. Verify stackable withdrawals by quantity, not inventory slot count
+
+`Rs2Inventory.count(id)` counts matching inventory slots. A stack of three air runes counts as one slot; use `Rs2Inventory.itemQuantity(id)` when comparing the amount before and after `Rs2Bank.withdrawX(id, amount)`.
+
+**Why this matters:** The walker waited for three new matching slots after withdrawing three air runes for Falador Teleport. The runes occupy one stack, so the wait timed out and the walker incorrectly abandoned the banking route even if the withdrawal succeeded.
+
+Two more traps sit on the same check. An id-based `withdrawX` can resolve a saved id to a different bank row (linked or same-name id, see section 4), so the inventory gains the row id, not the requested one. With the bank in noted mode a non-stackable item such as jewellery or a staff arrives noted and is unusable for the transport. The bank now has a single Note toggle (`InterfaceID.Bankmain.NOTE`, actions "Enable Notes"/"Disable Notes"); `setWithdrawAs` clicks it in both directions, since the old Item button is gone and `QUANTITY1_TEXT` only selects quantity 1. Live, the game reset the toggle to Item every time the bank was opened, so noted mode only matters within one bank session; the walker switches only for non-stackable withdrawals and restores the previous mode before closing. A fixed short wait also turns a slow tick into a reported failure.
+
+**Pattern to follow:** switch to item mode only for a non-stackable item while noted mode is on, restore it in `finally`, then confirm on inventory quantity of the requested id plus the bank row id, waiting until confirmed or the bank closes, and decide from the final state.
+
+```java
+Rs2ItemModel row = Rs2Bank.getBankItemForSavedId(itemId);
+boolean restoreNoted = WithdrawNoteModePolicy.shouldSwitchToItemMode(
+        row == null || !row.isStackable(), Rs2Bank.hasWithdrawAsNote());
+try {
+    if (restoreNoted && !Rs2Bank.setWithdrawAsItem()) {
+        return false;
+    }
+    TransportWithdrawalConfirmation confirmation = TransportWithdrawalConfirmation.start(
+            itemId, row == null ? -1 : row.getId(), amount, Rs2Inventory::itemQuantity);
+    if (Rs2Bank.withdrawX(itemId, amount)) {
+        sleepUntil(() -> confirmation.evaluate(Rs2Inventory::itemQuantity, Rs2Bank.isOpen())
+                != TransportWithdrawalConfirmation.State.PENDING, TransportWithdrawalConfirmation.TIMEOUT_MS);
+    }
+    return confirmation.evaluate(Rs2Inventory::itemQuantity, true) == TransportWithdrawalConfirmation.State.CONFIRMED;
+} finally {
+    if (restoreNoted) {
+        Rs2Bank.setWithdrawAsNote();
+    }
+}
+```
+
+**Where this applies:** `Rs2Walker.walkWithBankingState` and any bank or inventory workflow that verifies a quantity of stackable items.
+
+## 14. Address chatbox and Grand Exchange widgets through gameval, and read the offer price from its long varp
+
+Chatbox (group 162) child indices shift when Jagex adds a component; RuneLite regenerates `net.runelite.api.gameval.InterfaceID` each update, but raw `(162, n)` pairs stay stale. The Grand Exchange offer price is no longer a varbit: varbit 4398 was removed on 30 Sep 2026 and the in-progress price now lives in long varp 5753, read with `client.getVarpLongValue`.
+
+**Why this matters:** After the 30 Sep 2026 update, `MES_LAYER_SCROLLCONTENTS` moved from 162:52 to 162:53. The buy flow waited 5 s on 162:52 for the search prompt every time, `getVarbitValue(4398)` threw `IndexOutOfBoundsException` on every price check and printed the stack trace in chat, and buy/sell returned success before the offer was placed because they waited on the details panel (465:15) instead of the setup panel (465:26).
+
+**Pattern to follow:**
+
+```java
+// Wrong
+Rs2Widget.sleepUntilHasWidgetText("Start typing", 162, 52, false, 5000);
+Microbot.getVarbitValue(4398);
+
+// Right
+Rs2Widget.sleepUntilHasWidgetText("Start typing", InterfaceID.CHATBOX,
+        InterfaceID.Chatbox.MES_LAYER_SCROLLCONTENTS & 0xFFFF, false, 5000);
+Microbot.getClientThread().runOnClientThreadOptional(() -> Microbot.getClient().getVarpLongValue(5753));
+```
+
+**Where this applies:** `Rs2GrandExchange`, `GrandExchangeWidget`, `Rs2Dialogue`, `Rs2Bank` X-amount prompts, and any helper reading chatbox prompts or GE offer state.
+
+
+## 15. Suppress AutoLogin only for confirmed terminal supply stops
+
+An ordinary logout can be a break or world hop, so it must keep normal AutoLogin behavior. After confirming a required supply is unavailable in a live bank mirror, call `Rs2Player.logoutWithoutAutoLogin()` off the client thread and cancel the owning run's scheduler. Existing Inventory Setup callers retain their global-pause behavior. Scripts that prefer terminal logout must opt in per loader with `withMissingSupplyPolicy(Rs2InventorySetup.MissingSupplyPolicy.LOGOUT_AND_STOP)`; do not globally change every plugin's supply policy. Partial-stack acceptance and optional supply fallbacks remain separate.
+
+**Why this matters:** AutoLogin otherwise logs back in after supply exhaustion and the stopped bank loop retries indefinitely. Suppression clears on a new gameplay script run, a manual login after the logout, or an AutoLogin restart. Background AutoLogin and BreakHandler starts do not clear it.
+
+**Pattern to follow:** The helper arms suppression before closing the bank and reports whether logout was observed or only requested. Uncompleted requests expire after 15 seconds using a monotonic clock, including when no game-state event occurs; observed terminal logouts do not expire. Ordinary `logout()` is unchanged; scripts that use it for terminal failure must explicitly adopt the new API.
+
+**Defensive check:** Run `AutoLoginSuppressionTest`, `AutoLoginPluginSupplyStopTest`, `ScriptStartedTest`, `TerminalSupplyLogoutTest`, and `InventorySetupSupplyLogoutTest`. Verify live that a shortage stays logged out and restarting a gameplay script permits login.
+
+
+## Terminal supply stops need observed logout
+
+An owning script can set `withMissingSupplyHandler` on its Inventory Setup loader to keep its scheduled loop alive while `TerminalLogoutPrompt` closes the bank and requests logout. Do not show a blocking shortage notification or cancel that loop until `LOGGED_OUT` is observed. The default loader policy stays unchanged when no handler is supplied; ordinary breaks and world hops do not arm terminal Auto Login suppression.
+
+The observed terminal state is `LOGIN_SCREEN`; loading, hopping, connection loss and login transitions are not successful logout. A terminal prompt requests Auto Login suppression once across its retries so an explicit script/Auto Login restart is not repeatedly re-blocked by the old prompt.

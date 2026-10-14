@@ -209,7 +209,7 @@ public class ShortestPathScript extends Script {
 
     WalkerState executeWalk(WorldPoint target) {
         return config.walkWithBankedTransports()
-                ? Rs2Walker.walkWithBankedTransportsAndState(target, 10, false)
+                ? Rs2Walker.walkWithBankedTransportsAndState(target, config.reachedDistance(), false)
                 : Rs2Walker.walkWithState(target);
     }
 

@@ -73,7 +73,8 @@ public abstract class StateMachineScript<S extends Enum<S>> extends Script {
     private long loopCount;
     private long transitionCount;
     private List<Transition<S>> transitions;
-    private boolean initialized;
+    private volatile boolean initialized;
+    private final Object lifecycleLock = new Object();
 
     /** Bounded ring buffer of recent transitions for the trace log. */
     private static final int MAX_TRACE_SIZE = 50;
@@ -136,8 +137,8 @@ public abstract class StateMachineScript<S extends Enum<S>> extends Script {
      * @return false if the base guard paused execution, true otherwise
      */
     public final boolean step() {
-        if (!initialized) {
-            initialize();
+        if (!initialized && !initialize()) {
+            return false;
         }
 
         // Check the base Script guard (heartbeat, blocking events, pause, etc.)
@@ -213,13 +214,25 @@ public abstract class StateMachineScript<S extends Enum<S>> extends Script {
         return true;
     }
 
-    private void initialize() {
-        currentState = initialState();
-        stateEnteredAt = Instant.now();
-        transitions = Collections.unmodifiableList(defineTransitions());
-        initialized = true;
-        REGISTRY.put(getScriptName(), this);
+    private boolean initialize() {
+        synchronized (lifecycleLock) {
+            if (Thread.currentThread().isInterrupted()) {
+                return false;
+            }
+            currentState = initialState();
+            previousState = null;
+            lastTransitionReason = null;
+            lastTransitionAt = null;
+            loopCount = 0;
+            transitionCount = 0;
+            traceBuffer.clear();
+            stateEnteredAt = Instant.now();
+            transitions = Collections.unmodifiableList(defineTransitions());
+            initialized = true;
+            REGISTRY.put(getScriptName(), this);
+        }
         log.info("[{}] State machine initialized in state {}", getScriptName(), currentState);
+        return true;
     }
 
     /**
@@ -245,13 +258,18 @@ public abstract class StateMachineScript<S extends Enum<S>> extends Script {
             }
         }
 
-        snapshot.set(new StateSnapshot<>(
+        StateSnapshot<S> next = new StateSnapshot<>(
                 currentState, previousState, lastTransitionReason,
                 lastTransitionAt, stateEnteredAt,
                 loopCount, transitionCount,
                 pending,
                 new ArrayList<>(traceBuffer)
-        ));
+        );
+        synchronized (lifecycleLock) {
+            if (initialized) {
+                snapshot.set(next);
+            }
+        }
     }
 
     /**
@@ -287,8 +305,12 @@ public abstract class StateMachineScript<S extends Enum<S>> extends Script {
 
     @Override
     public void shutdown() {
-        REGISTRY.remove(getScriptName());
         super.shutdown();
+        synchronized (lifecycleLock) {
+            initialized = false;
+            REGISTRY.remove(getScriptName(), this);
+            snapshot.set(null);
+        }
     }
 
     private String getScriptName() {

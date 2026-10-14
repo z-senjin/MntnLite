@@ -26,6 +26,9 @@ RuneLite fork with a hidden always-on plugin hosting automation scripts. Composi
 - Offline client-thread lookup: `./microbot-cli ct <method>`.
 - Test mode: `-Dmicrobot.test.mode=true -Dmicrobot.test.script=<PluginName>` → results in `~/.runelite/test-results/`. Protocol: `docs/AGENTIC_TESTING_LOOP.md`.
 
+## Releases
+- Before merging `development` -> `main` (which runs `release.yml`), run `scripts/run-release-e2e.sh full` (or `quick` at minimum) against the release candidate and paste the generated `summary.md` into the release PR. See `docs/RELEASE_E2E.md`.
+
 ## In-game settings
 Use the settings search bar — tab indices shift on updates. Verify changes via `./microbot-cli varbit <id>`.
 

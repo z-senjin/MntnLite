@@ -133,19 +133,18 @@ public class Rs2WorldUtil {
         try {
           
             ConfigProfile activeProfile = LoginManager.getActiveProfile();
-            String profileName = activeProfile != null ? activeProfile.getName() : null;            
             long memberExpireDays = activeProfile != null ? activeProfile.getMemberExpireDays() : 0;
             long memberExpireDaysTimeStemp = activeProfile != null ? activeProfile.getMemberExpireDaysTimeStemp() : 0;
             if( memberExpireDays == 0 && memberExpireDaysTimeStemp == 0){
-                log.warn("No membership expiry data set in profile: {} (memberExpireDays: {}, memberExpireDaysTimeStemp: {})", 
-                profileName, memberExpireDays, memberExpireDaysTimeStemp);
+                log.warn("No membership expiry data set in profile (memberExpireDays: {}, memberExpireDaysTimeStemp: {})", 
+                memberExpireDays, memberExpireDaysTimeStemp);
                 return -1;
             }            
            
             // calculate days since cache was saved
             long currentTime = System.currentTimeMillis();
-            log.info("Checking membership expiry for profile: {} (memberExpireDays: {}, memberExpireDaysTimeStemp: {}, currentTime: {})", 
-                profileName, memberExpireDays, memberExpireDaysTimeStemp, currentTime);
+            log.info("Checking membership expiry for profile (memberExpireDays: {}, memberExpireDaysTimeStemp: {}, currentTime: {})", 
+                memberExpireDays, memberExpireDaysTimeStemp, currentTime);
             long daysSinceCached = (currentTime - memberExpireDaysTimeStemp) / (24 * 60 * 60 * 1000);
                         
             if( daysSinceCached > memberExpireDays){
@@ -389,8 +388,8 @@ public class Rs2WorldUtil {
                 
                 
                 log.info("Attempting world hop {} to world {}", attemptsPerWorld, world);
-               ;                
-                sleepUntil(() -> Microbot.hopToWorld(world), 6000);
+                sleepUntil(Microbot::isLoggedIn, 6000);
+                Microbot.hopToWorld(world);
                 sleepUntil(() -> !Microbot.isHopping(), 6000);
                 if (Microbot.isHopping()) {
                     Microbot.status = "Failed to hop to world " + world + " (attempt " + attemptsPerWorld + ")";

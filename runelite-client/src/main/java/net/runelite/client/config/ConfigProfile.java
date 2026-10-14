@@ -37,12 +37,15 @@ public class ConfigProfile
 	private final long id;
 	@Getter
 	@Setter
+	@ToString.Exclude
     public String name;
 	@Getter
 	@Setter
+	@ToString.Exclude
 	public String password;
 	@Getter
 	@Setter
+	@ToString.Exclude
     public String bankPin;
 	@Getter
 	@Setter
@@ -58,6 +61,7 @@ public class ConfigProfile
 	private Integer selectedWorld; // null = not set, -1 = Random Members, -2 = Random F2P, positive = specific world ID
 	@Getter
 	@Setter
+	@ToString.Exclude
 	private String discordWebhookUrl;
 	@Getter
 	@Setter

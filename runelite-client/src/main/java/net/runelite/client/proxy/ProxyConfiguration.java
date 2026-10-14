@@ -15,6 +15,12 @@ import java.util.Optional;
  */
 public class ProxyConfiguration {
 
+    private static volatile String username;
+
+    public static String getUsername() {
+        return username;
+    }
+
     /**
      * Sets up the proxy configuration based on the provided options.
      * @param options
@@ -44,6 +50,7 @@ public class ProxyConfiguration {
         String pass = credentials[1];
 
         configureProxy(host, port);
+        username = user;
 
         if (user != null) {
             setupAuthenticator(user, pass);

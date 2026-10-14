@@ -334,7 +334,7 @@ public class MicrobotProfilePanel extends MicrobotPluginPanel {
                 return;
             }
 
-            log.info("Renaming profile {} ({}) to {}", profile, profile.getId(), name);
+            log.info("Renaming profile {}", profile.getId());
 
             lock.renameProfile(profile, name);
             configManager.renameProfile(profile, name);
@@ -351,7 +351,7 @@ public class MicrobotProfilePanel extends MicrobotPluginPanel {
                 name = "New Profile (" + (number++) + ")";
             }
 
-            log.info("Creating new profile: {}", name);
+            log.info("Creating new profile");
             lock.createProfile(name);
 
             reload(lock.getProfiles());
@@ -359,7 +359,7 @@ public class MicrobotProfilePanel extends MicrobotPluginPanel {
     }
 
     private void deleteProfile(ConfigProfile profile) {
-        log.info("Deleting profile {}", profile.getName());
+        log.info("Deleting profile {}", profile.getId());
 
         configManager.toggleSync(profile, false);
 
@@ -464,7 +464,7 @@ public class MicrobotProfilePanel extends MicrobotPluginPanel {
     }
 
     private void exportProfile(ConfigProfile profile, File file) {
-        log.info("Exporting profile {} to {}", profile.getName(), file);
+        log.info("Exporting profile {}", profile.getId());
 
         executor.execute(() -> {
             configManager.sendConfig();
@@ -1099,7 +1099,7 @@ public class MicrobotProfilePanel extends MicrobotPluginPanel {
                 }
                 while (lock.findProfile(name) != null);
 
-                log.info("Cloning profile {} to {}", profile.getName(), name);
+                log.info("Cloning profile {}", profile.getId());
 
                 ConfigProfile clonedProfile = lock.createProfile(name);
                 reload(lock.getProfiles());
@@ -1122,7 +1122,7 @@ public class MicrobotProfilePanel extends MicrobotPluginPanel {
     }
 
     private void toggleSync(ActionEvent event, ConfigProfile profile, boolean sync) {
-        log.info("{} sync for: {}", sync ? "Enabling" : "Disabling", profile.getName());
+        log.info("{} sync for: {}", sync ? "Enabling" : "Disabling", profile.getId());
         configManager.toggleSync(profile, sync);
         ((JToggleButton) event.getSource()).setToolTipText(sync ? "Disable cloud sync" : "Enable cloud sync");
     }

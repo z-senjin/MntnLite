@@ -48,6 +48,7 @@ import net.runelite.client.events.ClientShutdown;
 import net.runelite.client.events.ExternalPluginsChanged;
 import net.runelite.client.plugins.*;
 import net.runelite.client.plugins.microbot.MicrobotApi;
+import net.runelite.client.plugins.microbot.recovery.StartupRecovery;
 import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.util.misc.Rs2UiHelper;
 import net.runelite.client.ui.SplashScreen;
@@ -100,6 +101,10 @@ public class MicrobotPluginManager {
     private final MicrobotApi microbotApi;
 
     private final Map<String, URLClassLoader> loaders = new ConcurrentHashMap<>();
+
+    private final Map<String, String> blockedPlugins = new ConcurrentHashMap<>();
+
+    private final Map<String, String> notifiedBlockedPlugins = new HashMap<>();
 
     @Inject
     @Named("safeMode")
@@ -162,9 +167,6 @@ public class MicrobotPluginManager {
             for (MicrobotPluginManifest m : manifests) {
                 next.put(m.getInternalName(), m);
                 if (allReleases != null) {
-                    microbotPluginClient.findFirstAssetCreatedAt(m, allReleases)
-                            .ifPresent(m::setAddedAt);
-
                     try {
                         List<String> versions = microbotPluginClient.parseVersionsFromReleases(m, allReleases);
                         m.setAvailableVersions(versions);
@@ -349,9 +351,12 @@ public class MicrobotPluginManager {
                     log.trace("Class not found during sideloading: {}", classInfo.getName(), e);
                 } catch(Throwable t) {
                     log.error("Incompatible plugin found: " + internalName);
+                    StartupRecovery.pluginFailed(internalName, getInstalledPluginVersion(internalName).orElse(null), "class loading", t);
                 }
             }
-            loadPlugins(plugins, null);
+            if (loadPlugins(plugins, null).isEmpty() && loaders.remove(internalName, classLoader)) {
+                classLoader.close();
+            }
         } catch (PluginInstantiationException | IOException e) {
             log.trace("Error loading side-loaded plugin!", e);
         }
@@ -452,14 +457,18 @@ public class MicrobotPluginManager {
                 continue;
             }
 
-            if (pluginDescriptor.isExternal() && !Rs2UiHelper.isClientVersionCompatible(pluginDescriptor.minClientVersion())) {
-                log.error("Plugin {} requires client version {} or higher, but current version is {}. Skipping plugin loading.",
-                        clazz.getSimpleName(), pluginDescriptor.minClientVersion(), RuneLiteProperties.getMicrobotVersion());
-                continue;
-            }
-
-            if (pluginDescriptor.disable()) {
+            if (pluginDescriptor.isExternal()) {
+                String blockReason = getLoadBlockReason(clazz.getSimpleName(), pluginDescriptor);
+                if (blockReason != null) {
+                    log.error("Plugin {} was not loaded: {}", clazz.getSimpleName(), blockReason);
+                    blockedPlugins.put(clazz.getSimpleName(), blockReason);
+                    StartupRecovery.pluginFailed(clazz.getSimpleName(), pluginDescriptor.version(), "compatibility check", blockReason);
+                    continue;
+                }
+                blockedPlugins.remove(clazz.getSimpleName());
+            } else if (pluginDescriptor.disable()) {
                 log.error("Plugin {} has been disabled upstream", clazz.getSimpleName());
+                StartupRecovery.pluginFailed(clazz.getSimpleName(), pluginDescriptor.version(), "compatibility check", "disabled upstream");
                 continue;
             }
 
@@ -494,6 +503,7 @@ public class MicrobotPluginManager {
                 loaded++;
             } catch (PluginInstantiationException ex) {
                 log.error("Error instantiating plugin!", ex);
+                StartupRecovery.pluginFailed(pluginClazz.getSimpleName(), pluginClazz.getAnnotation(PluginDescriptor.class).version(), "load", ex);
             }
 
             if (onPluginLoaded != null) {
@@ -564,10 +574,14 @@ public class MicrobotPluginManager {
             if (jar != null) {
                 jar.delete();
             }
-        } catch (Exception ex) {
+            throw new PluginInstantiationException(e);
+        } catch (ThreadDeath e) {
+            throw e;
+        } catch (Throwable ex) {
             log.error("Incompatible plugin found: " + clazz.getSimpleName());
             File jar = getPluginJarFile(plugin.getClass().getSimpleName());
             jar.delete();
+            throw new PluginInstantiationException(ex);
         }
 
         log.debug("Loaded plugin {}", clazz.getSimpleName());
@@ -673,6 +687,7 @@ public class MicrobotPluginManager {
     public void onClientShutdown(ClientShutdown shutdown) {
         log.info("Client shutdown detected, stopping all Microbot plugins");
         shutdown();
+        StartupRecovery.cleanExit();
     }
 
     /**
@@ -884,6 +899,7 @@ public class MicrobotPluginManager {
                             log.trace("Class not found during plugin loading: {}", classInfo.getName(), e);
                         } catch(Throwable t) {
                             log.error("Incompatible plugin found: " + pluginName);
+                            StartupRecovery.pluginFailed(pluginName, manifest.getVersion(), "class loading", t);
                         }
                     }
 
@@ -908,6 +924,7 @@ public class MicrobotPluginManager {
                     throw e;
                 } catch (Throwable e) {
                     log.warn("Unable to load or start plugin \"{}\"", pluginName, e);
+                    StartupRecovery.pluginFailed(pluginName, manifest.getVersion(), "load or start", e);
                 }
             }
 
@@ -1032,6 +1049,13 @@ public class MicrobotPluginManager {
             return;
         }
 
+        MicrobotPluginHealth health = getPluginHealth(manifest, versionOverride);
+        if (health.getState() == MicrobotPluginHealth.State.BROKEN) {
+            log.warn("Cannot install plugin '{}' ({}) version {}: this version is confirmed broken upstream.",
+                    manifest.getDisplayName(), internalName, health.getVersion());
+            return;
+        }
+
         var result = downloadPlugin(internalName, versionOverride);
         if (result) {
             //verifiy hash inside loadSidePlugin doesn't work
@@ -1060,18 +1084,15 @@ public class MicrobotPluginManager {
             return;
         }
 
-        if (manifest.isDisable()) {
-            log.warn("Cannot install plugin '{}' ({}): This plugin has been disabled upstream by the developers. " +
-                            "This usually means the plugin is no longer functional, has security issues, or has been deprecated.",
-                    manifest.getDisplayName(), internalName);
-            return;
-        }
-
+        blockedPlugins.remove(internalName);
         File jar = getPluginJarFile(internalName);
-        var pluginToRemove = pluginManager.getPlugins().stream().filter(x -> x.getClass().getSimpleName().equalsIgnoreCase(internalName)).findFirst();
+        URLClassLoader jarLoader = loaders.get(internalName);
+        var pluginToRemove = pluginManager.getPlugins().stream()
+                .filter(x -> x.getClass().getSimpleName().equalsIgnoreCase(internalName))
+                .filter(x -> jarLoader != null && x.getClass().getClassLoader() == jarLoader)
+                .findFirst();
         if (pluginToRemove.isPresent()) {
             URLClassLoader cl = loaders.remove(internalName);
-            if (cl == null) return;
 
             var plugin = pluginToRemove.get();
             try {
@@ -1266,7 +1287,8 @@ public class MicrobotPluginManager {
         if (Strings.isNullOrEmpty(internalName)
                 || Strings.isNullOrEmpty(installedVersion)
                 || Strings.isNullOrEmpty(latestVersion)
-                || latestVersion.equals(installedVersion)) {
+                || latestVersion.equals(installedVersion)
+                || getPluginHealth(manifest, latestVersion).isBlocking()) {
             return Optional.empty();
         }
 
@@ -1282,6 +1304,52 @@ public class MicrobotPluginManager {
                 installedVersion,
                 latestVersion
         ));
+    }
+
+    public MicrobotPluginHealth getPluginHealth(MicrobotPluginManifest manifest, @Nullable String version) {
+        return MicrobotPluginHealth.evaluate(manifest, version,
+                Rs2UiHelper.isClientVersionCompatible(manifest.getMinClientVersion()));
+    }
+
+    public Map<String, String> getBlockedPlugins() {
+        return Collections.unmodifiableMap(blockedPlugins);
+    }
+
+    public synchronized Map<String, String> takeBlockedPluginsToNotify() {
+        Map<String, String> pending = new TreeMap<>();
+        blockedPlugins.forEach((name, reason) -> {
+            if (!reason.equals(notifiedBlockedPlugins.get(name))) {
+                pending.put(name, reason);
+            }
+        });
+        notifiedBlockedPlugins.putAll(pending);
+        return pending;
+    }
+
+    @Nullable
+    String getLoadBlockReason(String internalName, PluginDescriptor descriptor) {
+        if (!Rs2UiHelper.isClientVersionCompatible(descriptor.minClientVersion())) {
+            return "requires client " + descriptor.minClientVersion() + " or newer (current "
+                    + RuneLiteProperties.getMicrobotVersion() + ")";
+        }
+        if (descriptor.disable()) {
+            return "disabled upstream";
+        }
+
+        MicrobotPluginManifest manifest = manifestMap.get(internalName);
+        if (manifest == null) {
+            return null;
+        }
+        MicrobotPluginHealth health = getPluginHealth(manifest, descriptor.version());
+        String reason = health.getReason();
+        if (manifest.isDisable()) {
+            return "disabled upstream" + (reason == null ? "" : ": " + reason);
+        }
+        if (!Strings.isNullOrEmpty(descriptor.version())
+                && (health.getState() == MicrobotPluginHealth.State.BROKEN || health.isAffected(descriptor.version()))) {
+            return "version " + descriptor.version() + " is confirmed broken upstream" + (reason == null ? "" : ": " + reason);
+        }
+        return null;
     }
 
     public void rememberOutdatedPluginUpdateNotification(OutdatedPluginUpdate outdatedPluginUpdate) {

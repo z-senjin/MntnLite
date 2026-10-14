@@ -7,6 +7,8 @@ import net.runelite.client.config.Config;
 import net.runelite.client.config.ConfigGroup;
 import net.runelite.client.config.ConfigItem;
 import net.runelite.client.config.ConfigSection;
+import net.runelite.client.config.Range;
+import net.runelite.client.plugins.microbot.util.security.HopBudget;
 
 @ConfigGroup(MicrobotConfig.configGroup)
 public interface MicrobotConfig extends Config
@@ -222,7 +224,7 @@ public interface MicrobotConfig extends Config
 	@ConfigItem(
 		keyName = keyDisableTelemetry,
 		name = "Disable telemetry",
-		description = "Stop outbound calls to microbot.cloud (update check, random-fact splash, session ping). " +
+		description = "Stop outbound calls to microbot.cloud (update check, random-fact splash, session ping, script error reports). " +
 				"Equivalent to launching with -Dmicrobot.disableTelemetry=true.",
 		position = 6,
 		section = generalSection
@@ -271,5 +273,68 @@ public interface MicrobotConfig extends Config
 	default int inputIdleResumeMs()
 	{
 		return 1800;
+	}
+
+	@ConfigSection(
+		name = "World hop limit",
+		description = "Pace world hops so the per-IP login limit (\"Too many login attempts\") is never reached",
+		position = 4
+	)
+	String hopLimitSection = "hopLimitSection";
+
+	String keyEnableHopLimit = "enableHopLimit";
+	@ConfigItem(
+		keyName = keyEnableHopLimit,
+		name = "Pace world hops",
+		description = "Wait before a scripted world hop when the estimated hop allowance runs low, instead of getting locked out. " +
+				"Shared by every client on the same IP or proxy.",
+		position = 0,
+		section = hopLimitSection
+	)
+	default boolean enableHopLimit()
+	{
+		return true;
+	}
+
+	String keyHopLimitCapacity = "hopLimitCapacity";
+	@Range(min = 1, max = 1000)
+	@ConfigItem(
+		keyName = keyHopLimitCapacity,
+		name = "Hop allowance",
+		description = "Estimated number of hops and logins Jagex allows before locking the IP out",
+		position = 1,
+		section = hopLimitSection
+	)
+	default int hopLimitCapacity()
+	{
+		return HopBudget.DEFAULT_CAPACITY;
+	}
+
+	String keyHopLimitRefillPerHour = "hopLimitRefillPerHour";
+	@Range(min = 1, max = 1000)
+	@ConfigItem(
+		keyName = keyHopLimitRefillPerHour,
+		name = "Hops regained per hour",
+		description = "Estimated number of hops the allowance regains every hour",
+		position = 2,
+		section = hopLimitSection
+	)
+	default int hopLimitRefillPerHour()
+	{
+		return HopBudget.DEFAULT_REFILL_PER_HOUR;
+	}
+
+	String keyHopLimitReserve = "hopLimitReserve";
+	@Range(min = 0, max = 200)
+	@ConfigItem(
+		keyName = keyHopLimitReserve,
+		name = "Reserve for logins",
+		description = "Hops never spent on world hopping, kept for logging back in after breaks or disconnects",
+		position = 3,
+		section = hopLimitSection
+	)
+	default int hopLimitReserve()
+	{
+		return HopBudget.DEFAULT_RESERVE;
 	}
 }

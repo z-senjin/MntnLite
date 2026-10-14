@@ -155,7 +155,7 @@ public class ProfileHandler extends AgentHandler {
 		try {
 			configManager.switchProfile(targetProfile);
 		} catch (Exception e) {
-			log.error("Failed to switch profile to '{}'", targetProfile.getName(), e);
+			log.error("Failed to switch profile to {}", targetProfile.getId(), e);
 			sendJson(exchange, 500, errorResponse("Profile switch failed: " + e.getMessage()));
 			return;
 		}

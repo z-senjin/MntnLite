@@ -12,3 +12,8 @@ body:
       description: How did you find the bug? Any additional details that might help?
     validations:
       required: true
+  - type: textarea
+    attributes:
+      label: Diagnostics
+      description: Open the Microbot side panel (Community Plugins), click **Copy diagnostics** under the version, and paste the result here.
+      render: text

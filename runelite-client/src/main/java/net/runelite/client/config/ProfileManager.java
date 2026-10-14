@@ -187,7 +187,7 @@ public class ProfileManager {
 			if (!oldFile.exists())
 			{
 				// no config file is valid if the profile hasn't been used yet.
-				log.info("Old profile file {} does not exist", oldFile.getName());
+				log.info("Old profile file for profile {} does not exist", profile.getId());
 				return;
 			}
 
@@ -198,7 +198,7 @@ public class ProfileManager {
 					newFile.toPath(),
 					StandardCopyOption.REPLACE_EXISTING
 				);
-				log.info("Renamed profile file {} to {}", oldFile.getName(), newFile.getName());
+				log.info("Renamed profile file for profile {}", profile.getId());
 			}
 			catch (IOException e)
 			{

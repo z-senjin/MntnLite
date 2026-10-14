@@ -174,4 +174,15 @@ public class Rs2DoorClassifierTest {
         assertFalse("an actionless, namelessly-non-door wall is still nothing",
                 Rs2DoorClassifier.isRouteDoorObject(true, "Wall", null));
     }
+
+    @Test
+    public void aTrapdoorIsNeverARouteDoor() {
+        assertFalse(Rs2DoorClassifier.isDoorLikeGameObjectName("Trapdoor"));
+        assertFalse(Rs2DoorClassifier.isDoorLikeGameObjectName("Trap door"));
+        assertFalse(Rs2DoorClassifier.isRouteDoorObject(false, "Trapdoor", "Open"));
+        assertFalse(Rs2DoorClassifier.isRouteDoorObject(true, "Trapdoor", "Open"));
+        assertFalse(Rs2DoorClassifier.isRouteDoorObject(false, "Trapdoor", "Climb-down"));
+        assertTrue(Rs2DoorClassifier.isRouteDoorObject(false, "Door", "Open"));
+        assertTrue(Rs2DoorClassifier.isRouteDoorObject(false, "Large door", "Open"));
+    }
 }

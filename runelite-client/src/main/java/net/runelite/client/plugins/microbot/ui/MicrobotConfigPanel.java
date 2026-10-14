@@ -38,6 +38,7 @@ import net.runelite.client.events.ProfileChanged;
 import net.runelite.client.externalplugins.ExternalPluginManager;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginManager;
+import net.runelite.client.plugins.microbot.AlwaysOnPlugins;
 import net.runelite.client.plugins.microbot.MicrobotConfigManager;
 import net.runelite.client.plugins.microbot.breakhandler.breakhandlerv2.BreakHandlerV2Config;
 import net.runelite.client.plugins.microbot.breakhandler.breakhandlerv2.PluginStopHelper;
@@ -252,6 +253,7 @@ class MicrobotConfigPanel extends MicrobotPluginPanel {
         if (pluginConfig.getPlugin() != null) {
             pluginToggle.setConflicts(pluginConfig.getConflicts());
             pluginToggle.setSelected(pluginManager.isPluginEnabled(pluginConfig.getPlugin()));
+            applyAlwaysOnLock();
             pluginToggle.addItemListener(i ->
             {
                 if (pluginToggle.isSelected()) {
@@ -854,6 +856,8 @@ class MicrobotConfigPanel extends MicrobotPluginPanel {
         if (component instanceof JCheckBox) {
             JCheckBox checkbox = (JCheckBox) component;
             configManager.setConfiguration(cd.getGroup().value(), cid.getItem().keyName(), "" + checkbox.isSelected());
+            checkbox.setSelected(Boolean.parseBoolean(
+                    configManager.getConfiguration(cd.getGroup().value(), cid.getItem().keyName())));
         } else if (component instanceof JSpinner) {
             JSpinner spinner = (JSpinner) component;
             configManager.setConfiguration(cd.getGroup().value(), cid.getItem().keyName(), "" + spinner.getValue());
@@ -891,7 +895,17 @@ class MicrobotConfigPanel extends MicrobotPluginPanel {
     public void onPluginChanged(PluginChanged event) {
         if (event.getPlugin() == this.pluginConfig.getPlugin()) {
             SwingUtilities.invokeLater(() ->
-                    pluginToggle.setSelected(event.isLoaded()));
+            {
+                pluginToggle.setSelected(event.isLoaded());
+                applyAlwaysOnLock();
+            });
+        }
+    }
+
+    private void applyAlwaysOnLock() {
+        if (pluginManager.isPluginAlwaysOn(pluginConfig.getPlugin())) {
+            pluginToggle.setEnabled(false);
+            pluginToggle.setToolTipText(AlwaysOnPlugins.TOOLTIP);
         }
     }
 

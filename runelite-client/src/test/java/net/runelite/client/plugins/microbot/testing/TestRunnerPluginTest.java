@@ -4,6 +4,7 @@ import net.runelite.api.GameState;
 import net.runelite.client.plugins.PluginDescriptor;
 import org.junit.Test;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
@@ -36,5 +37,13 @@ public class TestRunnerPluginTest {
         assertFalse(TestRunnerPlugin.isClientReady(GameState.LOGIN_SCREEN, true, false));
         assertFalse(TestRunnerPlugin.isClientReady(GameState.LOADING, true, false));
         assertFalse(TestRunnerPlugin.isClientReady(GameState.HOPPING, true, false));
+    }
+
+    @Test
+    public void testWorldPropertyParsesWorldNumbers() {
+        assertEquals(383, TestRunnerPlugin.parseWorld(" 383 "));
+        assertEquals(-1, TestRunnerPlugin.parseWorld(null));
+        assertEquals(-1, TestRunnerPlugin.parseWorld(""));
+        assertEquals(-1, TestRunnerPlugin.parseWorld("f2p"));
     }
 }

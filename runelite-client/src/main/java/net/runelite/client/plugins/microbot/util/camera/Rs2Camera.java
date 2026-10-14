@@ -148,7 +148,7 @@ public class Rs2Camera {
 
         if (currentPitchPercentage < percentage) {
             holdUntil(KeyEvent.VK_UP, () -> cameraPitchPercentage() >= percentage);
-        } else {
+        } else if (currentPitchPercentage > percentage) {
             holdUntil(KeyEvent.VK_DOWN, () -> cameraPitchPercentage() <= percentage);
         }
     }
@@ -165,10 +165,39 @@ public class Rs2Camera {
         } finally {
             Rs2Keyboard.keyRelease(keyCode);
         }
+        if (!awaitCameraSettled()) {
+            log.debug("Camera did not settle within {}ms after releasing key {}", SETTLE_TIMEOUT_MS, keyCode);
+        }
+    }
+
+    static final int SETTLE_TIMEOUT_MS = 600;
+
+    static boolean awaitCameraSettled() {
+        int[][] previous = new int[1][];
+        return Global.sleepUntil(() -> {
+            int[] sample = sampleCamera();
+            if (sample == null) {
+                return false;
+            }
+            int[] last = previous[0];
+            previous[0] = sample;
+            return last != null && sample[0] != last[0] && sample[1] == last[1] && sample[2] == last[2];
+        }, SETTLE_TIMEOUT_MS);
+    }
+
+    private static int[] sampleCamera() {
+        return Microbot.getClientThread().runOnClientThreadOptional(() -> {
+            Client client = Microbot.getClient();
+            return new int[]{client.getGameCycle(), client.getCameraYaw(), client.getCameraPitch()};
+        }).orElse(null);
     }
 
     public static int getPitch() {
-        return fromClientAngleUnits(Microbot.getClient().getCameraPitch());
+        return fromClientAngleUnits(Microbot.getClientThread().runOnClientThreadOptional(() -> Microbot.getClient().getCameraPitch()).orElseGet(Rs2Camera::readPitchDirectly));
+    }
+
+    private static int readPitchDirectly() {
+        return Microbot.getClient().getCameraPitch();
     }
 
     // set camera pitch
@@ -283,7 +312,11 @@ public class Rs2Camera {
     }
     // Get camera/compass facing
     public static int getYaw() {
-        return fromClientAngleUnits(Microbot.getClient().getCameraYaw());
+        return fromClientAngleUnits(Microbot.getClientThread().runOnClientThreadOptional(() -> Microbot.getClient().getCameraYaw()).orElseGet(Rs2Camera::readYawDirectly));
+    }
+
+    private static int readYawDirectly() {
+        return Microbot.getClient().getCameraYaw();
     }
 
     // Set camera/compass facing

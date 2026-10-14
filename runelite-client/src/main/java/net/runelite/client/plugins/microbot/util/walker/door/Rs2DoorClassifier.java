@@ -23,6 +23,8 @@ public final class Rs2DoorClassifier {
     /** {@code fence} must be whole-word — substring matches {@code defence} ("fence" inside) otherwise. */
     private static final Pattern FENCE_AS_WORD = Pattern.compile("\\bfence\\b", Pattern.CASE_INSENSITIVE);
 
+    private static final Pattern TRAPDOOR_NAME = Pattern.compile("\\btrap\\s?door", Pattern.CASE_INSENSITIVE);
+
     /** Lower index = higher priority when multiple actions match (prefix, ASCII lower). */
     private static final List<String> DOOR_ACTION_PRIORITY = List.of(
             "pay-toll", "pick-lock", "walk-through", "go-through", "open", "pass", "enter",
@@ -130,8 +132,12 @@ public final class Rs2DoorClassifier {
                 .orElse(null);
     }
 
+    public static boolean isTrapdoorName(String name) {
+        return name != null && TRAPDOOR_NAME.matcher(name).find();
+    }
+
     public static boolean isDoorLikeGameObjectName(String name) {
-        if (name == null) {
+        if (name == null || isTrapdoorName(name)) {
             return false;
         }
         String n = name.toLowerCase(Locale.ROOT);
@@ -182,6 +188,9 @@ public final class Rs2DoorClassifier {
      * than a flat name filter.
      */
     public static boolean isRouteDoorObject(boolean wallObject, String name, String walkAction) {
+        if (isTrapdoorName(name)) {
+            return false;
+        }
         if (wallObject) {
             return isDoorLikeGameObjectName(name)
                     || (walkAction != null && doorActionPriorityIndex(walkAction) < Integer.MAX_VALUE);

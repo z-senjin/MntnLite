@@ -24,6 +24,7 @@
  */
 package net.runelite.client.plugins.microbot.externalplugins;
 
+import com.google.gson.annotations.JsonAdapter;
 import com.google.gson.annotations.SerializedName;
 import lombok.Data;
 
@@ -115,6 +116,9 @@ public class MicrobotPluginManifest {
      * This is used for plugins that are no longer functional or have been deprecated.
      */
     private boolean disable;
+
+    @JsonAdapter(MicrobotPluginHealth.LenientAdapterFactory.class)
+    private MicrobotPluginHealth.Metadata health;
 
     /**
      * Tags for the plugin (optional)

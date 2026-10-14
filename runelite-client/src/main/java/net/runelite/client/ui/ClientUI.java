@@ -30,7 +30,6 @@ import com.formdev.flatlaf.util.SystemInfo;
 import com.google.common.base.Strings;
 import com.google.common.collect.Iterables;
 import com.google.inject.Inject;
-import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.LoggerContext;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
@@ -103,6 +102,8 @@ public class ClientUI
 	private static final String CONFIG_CLIENT_BOUNDS = "clientBounds";
 	private static final String CONFIG_CLIENT_MAXIMIZED = "clientMaximized";
 	private static final String CONFIG_CLIENT_SIDEBAR_CLOSED = "clientSidebarClosed";
+	private static final String CONFIG_CLIENT_SIDEBAR_TAB = "clientSidebarTab";
+	private static final String CONFIG_CLIENT_CONSOLE_OPEN = "clientConsoleOpen";
 	public static final BufferedImage ICON_128 = ImageUtil.loadImageResource(Microbot.class, "microbot_logo.png");
 	public static final BufferedImage ICON_16 = ImageUtil.loadImageResource(Microbot.class, "microbot_logo.png");
 	public static String proxyMessage = "";
@@ -164,6 +165,9 @@ public class ClientUI
 	private BufferedImage consoleIconOpen;
 	private BufferedImage consoleIconClosed;
 	private boolean consoleVisible;
+	private boolean sidebarTabRestored;
+	private boolean updatingNavigation;
+	private boolean closing;
 
 	@RequiredArgsConstructor
 	private static class HistoryEntry
@@ -202,7 +206,9 @@ public class ClientUI
 	{
 		if (!event.getGroup().equals(CONFIG_GROUP) ||
 			event.getKey().equals(CONFIG_CLIENT_MAXIMIZED) ||
-			event.getKey().equals(CONFIG_CLIENT_BOUNDS))
+			event.getKey().equals(CONFIG_CLIENT_BOUNDS) ||
+			event.getKey().equals(CONFIG_CLIENT_SIDEBAR_TAB) ||
+			event.getKey().equals(CONFIG_CLIENT_CONSOLE_OPEN))
 		{
 			return;
 		}
@@ -226,12 +232,28 @@ public class ClientUI
 		final int TAB_SIZE = 16;
 		Icon icon = new ImageIcon(ImageUtil.resizeImage(navBtn.getIcon(), TAB_SIZE, TAB_SIZE));
 
-		sidebar.insertTab(null, icon, navBtn.getPanel().getWrappedPanel(), navBtn.getTooltip(),
-			sidebarEntries.headSet(navBtn).size());
-		// insertTab changes the selected index when the first tab is inserted, avoid this
-		if (sidebar.getTabCount() == 1)
+		updatingNavigation = true;
+		try
 		{
-			sidebar.setSelectedIndex(-1);
+			sidebar.insertTab(null, icon, navBtn.getPanel().getWrappedPanel(), navBtn.getTooltip(),
+				sidebarEntries.headSet(navBtn).size());
+			// insertTab changes the selected index when the first tab is inserted, avoid this
+			if (sidebar.getTabCount() == 1)
+			{
+				sidebar.setSelectedIndex(-1);
+			}
+
+			if (!sidebarTabRestored
+				&& sidebar.getSelectedIndex() < 0
+				&& navBtn.getTooltip().equals(configManager.getConfiguration(CONFIG_GROUP, CONFIG_CLIENT_SIDEBAR_TAB)))
+			{
+				sidebarTabRestored = true;
+				sidebar.setSelectedIndex(sidebarEntries.headSet(navBtn).size());
+			}
+		}
+		finally
+		{
+			updatingNavigation = false;
 		}
 	}
 
@@ -245,18 +267,36 @@ public class ClientUI
 		{
 			boolean closingOpenTab = !selectedTabHistory.isEmpty() && selectedTabHistory.getLast().navBtn == navBtn;
 			selectedTabHistory.removeIf(it -> it.navBtn == navBtn);
-			sidebar.remove(navBtn.getPanel().getWrappedPanel());
-			if (closingOpenTab)
+			updatingNavigation = true;
+			try
 			{
-				HistoryEntry entry = selectedTabHistory.isEmpty()
-					? new HistoryEntry(true, null)
-					: selectedTabHistory.removeLast();
+				sidebar.remove(navBtn.getPanel().getWrappedPanel());
+				if (closingOpenTab)
+				{
+					HistoryEntry entry = selectedTabHistory.isEmpty()
+						? new HistoryEntry(true, null)
+						: selectedTabHistory.removeLast();
 
-				openPanel(entry.navBtn, entry.sidebarOpen);
+					openPanel(entry.navBtn, closing ? sidebar.isVisible() : entry.sidebarOpen);
+					if (!closing)
+					{
+						saveSidebarTab();
+					}
+				}
+			}
+			finally
+			{
+				updatingNavigation = false;
 			}
 		}
 
 		sidebarEntries.remove(navBtn);
+	}
+
+	@Subscribe(priority = 100)
+	private void onClientShutdown(ClientShutdown event)
+	{
+		closing = true;
 	}
 
 	@Subscribe
@@ -419,6 +459,11 @@ public class ClientUI
 				}
 
 				selectedTab = newSelectedTab;
+
+				if (!updatingNavigation)
+				{
+					saveSidebarTab();
+				}
 
 				if (sidebar.isVisible())
 				{
@@ -630,6 +675,12 @@ public class ClientUI
 			// Update config
 			updateFrameConfig(false);
 
+			// Reopen the console if it was open when the client was last closed
+			if (configManager.getConfiguration(CONFIG_GROUP, CONFIG_CLIENT_CONSOLE_OPEN, Boolean.class) == Boolean.TRUE)
+			{
+				setConsoleVisible(true);
+			}
+
 			// Close sidebar if the config closed state is set
 			if (configManager.getConfiguration(CONFIG_GROUP, CONFIG_CLIENT_SIDEBAR_CLOSED, Boolean.class) == Boolean.TRUE)
 			{
@@ -715,6 +766,7 @@ public class ClientUI
 			frame.revalidateMinimumSize();
 			// this must run after the native window border is installed on the window
 			frame.updateContainsInScreen();
+			sidebarTabRestored = true;
 		});
 
 		// Show out of date dialog if needed
@@ -1076,6 +1128,19 @@ public class ClientUI
 		return frame.getGraphicsConfiguration();
 	}
 
+	private void saveSidebarTab()
+	{
+		sidebarTabRestored = true;
+		if (selectedTab == null)
+		{
+			configManager.unsetConfiguration(CONFIG_GROUP, CONFIG_CLIENT_SIDEBAR_TAB);
+		}
+		else
+		{
+			configManager.setConfiguration(CONFIG_GROUP, CONFIG_CLIENT_SIDEBAR_TAB, selectedTab.getTooltip());
+		}
+	}
+
 	void openPanel(NavigationButton navBtn, boolean showSidebar)
 	{
 		if (navBtn != null && !sidebarEntries.contains(navBtn))
@@ -1187,6 +1252,14 @@ public class ClientUI
 		}
 
 		consoleVisible = visible;
+		if (visible)
+		{
+			configManager.setConfiguration(CONFIG_GROUP, CONFIG_CLIENT_CONSOLE_OPEN, true);
+		}
+		else
+		{
+			configManager.unsetConfiguration(CONFIG_GROUP, CONFIG_CLIENT_CONSOLE_OPEN);
+		}
 		clientPanel.setConsoleVisible(visible);
 		updateConsoleToggleButton();
 
@@ -1237,12 +1310,7 @@ public class ClientUI
 		System.setOut(consolePrintStream);
 
 		LoggerContext loggerContext = (LoggerContext) LoggerFactory.getILoggerFactory();
-		consoleLogAppender = new ConsoleLogAppender(consolePanel::append);
-		consoleLogAppender.setContext(loggerContext);
-		consoleLogAppender.start();
-
-		Logger rootLogger = loggerContext.getLogger(Logger.ROOT_LOGGER_NAME);
-		rootLogger.addAppender(consoleLogAppender);
+		consoleLogAppender = ConsoleLogAppender.install(loggerContext, originalOut, consolePanel::append);
 	}
 
 	private BufferedImage createConsoleIcon(boolean active)

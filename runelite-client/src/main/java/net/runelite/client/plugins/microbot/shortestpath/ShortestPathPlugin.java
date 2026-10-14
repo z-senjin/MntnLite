@@ -92,7 +92,7 @@ import java.util.regex.Pattern;
         description = "Draws the shortest path to a chosen destination on the map (right click a spot on the world map to use)",
         tags = {"pathfinder", "map", "waypoint", "navigation", "microbot"},
         enabledByDefault = false,
-        version = "1.0.2",
+        version = "1.0.3",
         alwaysOn = true
 )
 public class ShortestPathPlugin extends Plugin {
@@ -709,7 +709,7 @@ public class ShortestPathPlugin extends Plugin {
         lastCollisionConflictLogAtMs = now;
         LiveCollisionConflicts.Coverage coverage =
                 LiveCollisionConflicts.coverage(snapshot, staticCollisionData, priorOverlayView);
-        WebWalkLog.spInfo("collision_conflict | liveOpensStatic={} liveBlocksStatic={} sealedOpens={} base={},{}"
+        WebWalkLog.spDebug("collision_conflict | liveOpensStatic={} liveBlocksStatic={} sealedOpens={} base={},{}"
                         + " | overlayKnew={}% (known={} new={} changed={}) — live scene disagrees with the shipped map",
                 tally.liveOpensStatic, tally.liveBlocksStatic, tally.liveOpensSealed,
                 snapshot.getBaseX(), snapshot.getBaseY(),
@@ -726,8 +726,8 @@ public class ShortestPathPlugin extends Plugin {
         } else if (client != null) {
             // Flag is off, so no active store — delete the on-disk tree via a transient handle.
             final LiveCollisionPersistence tmpStore = new LiveCollisionPersistence(client.getRevision());
-            tmpStore.deleteAllNow();
-            tmpStore.shutdown();
+            tmpStore.deleteAllAsync();
+            tmpStore.shutdownAsync();
         }
         lastLiveCaptureBaseX = Integer.MIN_VALUE;
         lastLiveCaptureBaseY = Integer.MIN_VALUE;

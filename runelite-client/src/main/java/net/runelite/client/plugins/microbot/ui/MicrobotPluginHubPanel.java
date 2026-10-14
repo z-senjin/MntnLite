@@ -37,9 +37,9 @@ import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.plugins.PluginManager;
 import net.runelite.client.plugins.config.SearchablePlugin;
 import net.runelite.client.plugins.microbot.externalplugins.MicrobotPluginClient;
+import net.runelite.client.plugins.microbot.externalplugins.MicrobotPluginHealth;
 import net.runelite.client.plugins.microbot.externalplugins.MicrobotPluginManager;
 import net.runelite.client.plugins.microbot.externalplugins.MicrobotPluginManifest;
-import net.runelite.client.plugins.microbot.ui.search.MicrobotPluginSearch;
 import net.runelite.client.plugins.microbot.util.misc.Rs2UiHelper;
 import net.runelite.client.ui.*;
 import net.runelite.client.ui.components.IconTextField;
@@ -78,9 +78,9 @@ public class MicrobotPluginHubPanel extends MicrobotPluginPanel {
     private static final ImageIcon HELP_ICON;
     private static final ImageIcon CONFIGURE_ICON;
     private static final Pattern SPACES = Pattern.compile(" +");
-    private static final String NEWLY_ADDED_FILTER_QUERY = "New";
     private static final Color PASTEL_GREEN = new Color(0x7CB987);
     private static final Color PASTEL_ORANGE = new Color(0xD4A574);
+    private static final Color HEALTH_RED = new Color(0xBE2828);
 
     static {
         BufferedImage missingIcon = ImageUtil.loadImageResource(MicrobotPluginHubPanel.class, "pluginhub_missingicon.png");
@@ -240,6 +240,11 @@ public class MicrobotPluginHubPanel extends MicrobotPluginPanel {
                 keywords.add("newly added");
             }
 
+            String storedInstalledVersion = microbotPluginManager.getInstalledPluginVersion(manifest.getInternalName()).orElse(null);
+            MicrobotPluginHealth health = microbotPluginManager.getPluginHealth(manifest,
+                    installed && !Strings.isNullOrEmpty(storedInstalledVersion) ? storedInstalledVersion : currentVersion);
+            keywords.addAll(healthKeywords(health));
+
             setBackground(ColorScheme.DARKER_GRAY_COLOR);
             setOpaque(true);
 
@@ -300,7 +305,7 @@ public class MicrobotPluginHubPanel extends MicrobotPluginPanel {
             JLabel icon = new PluginIcon(manifest.getIconUrl());
             icon.setHorizontalAlignment(JLabel.CENTER);
 
-            JLabel badge = new JLabel();
+            JLabel badge = createHealthBadge(health);
 
             JButton help = new JButton(HELP_ICON);
             SwingUtil.removeButtonDecorations(help);
@@ -387,6 +392,45 @@ public class MicrobotPluginHubPanel extends MicrobotPluginPanel {
             badge.addMouseListener(doubleClickInstall);
         }
 
+        private List<String> healthKeywords(MicrobotPluginHealth health) {
+            switch (health.getState()) {
+                case DISABLED:
+                    return Arrays.asList("disabled", "broken");
+                case BROKEN:
+                    return Collections.singletonList("broken");
+                case INCOMPATIBLE:
+                    return Collections.singletonList("incompatible");
+                case UNVERIFIED:
+                    return Collections.singletonList("unverified");
+                case VERIFIED:
+                    return Collections.singletonList("verified");
+                default:
+                    return Collections.emptyList();
+            }
+        }
+
+        private JLabel createHealthBadge(MicrobotPluginHealth health) {
+            JLabel badge = new JLabel();
+            if (health.getState() == MicrobotPluginHealth.State.UNKNOWN) {
+                return badge;
+            }
+
+            badge.setText(health.isBlocking() ? "!" : health.isWarning() ? "?" : "\u2713");
+            badge.setFont(badge.getFont().deriveFont(Font.BOLD, 14f));
+            badge.setForeground(health.isBlocking() ? HEALTH_RED : health.isWarning() ? PASTEL_ORANGE : PASTEL_GREEN);
+            badge.setToolTipText(healthHtml(health));
+            badge.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+            badge.addMouseListener(new MouseAdapter() {
+                @Override
+                public void mouseClicked(MouseEvent e) {
+                    if (e.getClickCount() == 1 && SwingUtilities.isLeftMouseButton(e)) {
+                        showHealthDetails(manifest, health);
+                    }
+                }
+            });
+            return badge;
+        }
+
         @Override
         public String getSearchableName() {
             return manifest.getDisplayName();
@@ -401,11 +445,16 @@ public class MicrobotPluginHubPanel extends MicrobotPluginPanel {
 		{
 			boolean outdated = installed
 				&& !Strings.isNullOrEmpty(latestVersion)
-				&& !latestVersion.equals(selectedVersion);
+				&& !latestVersion.equals(selectedVersion)
+				&& !microbotPluginManager.getPluginHealth(manifest, latestVersion).isBlocking();
 
 			if (!installed)
 			{
 				setBorder(BorderFactory.createEmptyBorder(2, 2, 2, 2));
+			}
+			else if (microbotPluginManager.getPluginHealth(manifest, selectedVersion).isBlocking())
+			{
+				setBorder(BorderFactory.createLineBorder(HEALTH_RED, 2));
 			}
 			else if (outdated)
 			{
@@ -488,7 +537,8 @@ public class MicrobotPluginHubPanel extends MicrobotPluginPanel {
 				{
 					return ActionState.DOWNLOAD;
 				}
-				if (!Strings.isNullOrEmpty(latestVersion) && !latestVersion.equals(installedVersion))
+				if (!Strings.isNullOrEmpty(latestVersion) && !latestVersion.equals(installedVersion)
+					&& !microbotPluginManager.getPluginHealth(manifest, latestVersion).isBlocking())
 				{
 					return ActionState.REFRESH;
 				}
@@ -569,7 +619,7 @@ public class MicrobotPluginHubPanel extends MicrobotPluginPanel {
 
 			private void installSelectedVersion(String version)
 			{
-				if (!ensureClientVersionCompatible())
+				if (!ensureHealthAllows(version) || !ensureClientVersionCompatible())
 				{
 					return;
 				}
@@ -583,7 +633,7 @@ public class MicrobotPluginHubPanel extends MicrobotPluginPanel {
 
 			private void updateSelectedVersion(String version)
 			{
-				if (!ensureClientVersionCompatible())
+				if (!ensureHealthAllows(version) || !ensureClientVersionCompatible())
 				{
 					return;
 				}
@@ -602,6 +652,18 @@ public class MicrobotPluginHubPanel extends MicrobotPluginPanel {
 				installedVersion = null;
 				setInstalled(false, null);
 				refreshActionButton();
+			}
+
+			private boolean ensureHealthAllows(String version)
+			{
+				MicrobotPluginHealth health = microbotPluginManager.getPluginHealth(manifest, version);
+				if (health.getState() != MicrobotPluginHealth.State.DISABLED
+					&& health.getState() != MicrobotPluginHealth.State.BROKEN)
+				{
+					return true;
+				}
+				showHealthDetails(manifest, health);
+				return false;
 			}
 
 			private boolean ensureClientVersionCompatible()
@@ -711,7 +773,7 @@ public class MicrobotPluginHubPanel extends MicrobotPluginPanel {
         searchBar.setIcon(IconTextField.Icon.SEARCH);
         searchBar.setBackground(ColorScheme.DARKER_GRAY_COLOR);
         searchBar.setHoverBackgroundColor(ColorScheme.DARK_GRAY_HOVER_COLOR);
-        searchBar.getSuggestionListModel().addElement(NEWLY_ADDED_FILTER_QUERY);
+        searchBar.getSuggestionListModel().addElement(MicrobotPluginHubOrder.NEWLY_ADDED_FILTER_QUERY);
         searchBar.getDocument().addDocumentListener(new DocumentListener() {
             @Override
             public void insertUpdate(DocumentEvent e) {
@@ -794,6 +856,36 @@ public class MicrobotPluginHubPanel extends MicrobotPluginPanel {
         reloadPluginList();
     }
 
+    private static String healthHtml(MicrobotPluginHealth health) {
+        StringBuilder html = new StringBuilder("<html>");
+        for (String line : health.getDetails(RuneLiteProperties.getMicrobotVersion())) {
+            html.append(HtmlEscapers.htmlEscaper().escape(line)).append("<br>");
+        }
+        if (health.getState() == MicrobotPluginHealth.State.DISABLED) {
+            html.append("<br>This plugin cannot be installed. You can still remove it.");
+        } else if (health.getState() == MicrobotPluginHealth.State.BROKEN) {
+            html.append("<br>This version cannot be installed or started. Choose an unaffected version or remove it.");
+        }
+        return html.append("</html>").toString();
+    }
+
+    private void showHealthDetails(MicrobotPluginManifest manifest, MicrobotPluginHealth health) {
+        String trackingUrl = health.getTrackingUrl();
+        Object[] options = trackingUrl == null ? new Object[]{"OK"} : new Object[]{"Open tracking link", "OK"};
+        int choice = JOptionPane.showOptionDialog(
+                this,
+                healthHtml(health),
+                manifest.getDisplayName() + " - " + health.getLabel(),
+                JOptionPane.DEFAULT_OPTION,
+                health.isBlocking() ? JOptionPane.WARNING_MESSAGE : JOptionPane.INFORMATION_MESSAGE,
+                null,
+                options,
+                options[options.length - 1]);
+        if (trackingUrl != null && choice == 0) {
+            LinkBrowser.browse(trackingUrl);
+        }
+    }
+
     private void openMicrobotPluginFolder() {
         if (!MICROBOT_PLUGIN_DIR.exists() && !MICROBOT_PLUGIN_DIR.mkdirs()) {
             log.warn("Unable to create microbot plugin directory at {}", MICROBOT_PLUGIN_DIR.getAbsolutePath());
@@ -846,9 +938,18 @@ public class MicrobotPluginHubPanel extends MicrobotPluginPanel {
 
     private void reloadPluginList(Collection<MicrobotPluginManifest> manifest, Map<String, Integer> pluginCounts) {
 
+        Set<String> healthBlocked = microbotPluginManager.getBlockedPlugins().keySet().stream()
+                .map(name -> name.toLowerCase(Locale.ROOT))
+                .collect(Collectors.toSet());
+        Set<String> installedExternal = microbotPluginManager.getInstalledPlugins().stream()
+                .map(p -> p.getClass().getSimpleName().toLowerCase(Locale.ROOT))
+                .collect(Collectors.toSet());
+
         // Filter out disabled plugins before processing
         List<MicrobotPluginManifest> enabledManifest = manifest.stream()
-                .filter(m -> !m.isDisable())
+                .filter(m -> !m.isDisable() || (m.getInternalName() != null
+                        && (installedExternal.contains(m.getInternalName().toLowerCase(Locale.ROOT))
+                        || healthBlocked.contains(m.getInternalName().toLowerCase(Locale.ROOT)))))
                 .collect(Collectors.toList());
 
         Predicate<Plugin> isExternalPluginPredicate = plugin ->
@@ -882,6 +983,7 @@ public class MicrobotPluginHubPanel extends MicrobotPluginPanel {
         Set<String> installedNames = installed.stream()
                 .map(im -> im.getClass().getSimpleName().toLowerCase(Locale.ROOT))
                 .collect(Collectors.toSet());
+        installedNames.addAll(healthBlocked);
 
         // Build PluginItem list by looping over manifests
         plugins = manifestByName.entrySet().stream()
@@ -915,27 +1017,12 @@ public class MicrobotPluginHubPanel extends MicrobotPluginPanel {
             return;
         }
 
-        String query = searchBar.getText();
-        String trimmedQuery = query == null ? "" : query.trim();
-        boolean onlyNew = isNewlyAddedFilterQuery(trimmedQuery);
-        String effectiveQuery = onlyNew ? "" : query;
-        boolean isSearching = effectiveQuery != null && !effectiveQuery.trim().isEmpty();
-        List<PluginItem> filteredPlugins = plugins.stream()
-                .filter(plugin -> !onlyNew || plugin.manifest.isNewlyAdded())
-                .collect(Collectors.toList());
-
-        List<PluginItem> pluginItems;
-        if (isSearching) {
-            pluginItems = MicrobotPluginSearch.search(filteredPlugins, effectiveQuery);
-        } else {
-            pluginItems = filteredPlugins.stream()
-                    .sorted(Comparator.comparing(PluginItem::isInstalled)
-                            .thenComparingInt(PluginItem::getUserCount)
-                            .reversed()
-                            .thenComparing(p -> p.manifest.getInternalName())
-                    )
-                    .collect(Collectors.toList());
-        }
+        List<PluginItem> pluginItems = MicrobotPluginHubOrder.order(
+                plugins,
+                searchBar.getText(),
+                plugin -> plugin.manifest,
+                PluginItem::isInstalled,
+                PluginItem::getUserCount);
 
         SwingUtilities.invokeLater(() ->
         {
@@ -943,11 +1030,6 @@ public class MicrobotPluginHubPanel extends MicrobotPluginPanel {
             pluginItems.forEach(mainPanel::add);
             mainPanel.revalidate();
         });
-    }
-
-    private boolean isNewlyAddedFilterQuery(String query) {
-        return NEWLY_ADDED_FILTER_QUERY.equalsIgnoreCase(query)
-                || "Newly Added".equalsIgnoreCase(query);
     }
 
     @Override

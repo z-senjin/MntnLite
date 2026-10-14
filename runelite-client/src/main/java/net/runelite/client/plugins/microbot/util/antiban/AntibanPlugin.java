@@ -180,6 +180,7 @@ public class AntibanPlugin extends Plugin {
         panelRefreshTimer.scheduleAtFixedRate(new TimerTask() {
             @Override
             public void run() {
+                panel.refreshBusyState();
                 SwingUtilities.invokeLater(panel::loadSettings);
             }
         }, 0, 600);

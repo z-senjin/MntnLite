@@ -625,10 +625,15 @@ public abstract class Rs2Tile implements Tile {
         if (targetPoint.getPlane() != playerLoc.getPlane()) return false;
         if (CollisionMap.ignoreCollisionPacked.contains(WorldPointUtil.packWorldPoint(targetPoint))) return true;
 
-        final boolean[][] visited = new boolean[FLAG_DATA_SIZE][FLAG_DATA_SIZE];
         final int[][] flags = getFlagsInternal();
         if (flags == null) return false;
 
+        final boolean[][] visited = reachableFromPlayer(flags, playerLoc);
+
+        return isVisited(targetPoint, visited);
+    }
+
+    private static boolean[][] reachableFromPlayer(int[][] flags, WorldPoint playerLoc) {
         final int startX;
         final int startY;
         if (Microbot.getClient().getTopLevelWorldView().getScene().isInstance()) {
@@ -639,6 +644,13 @@ public abstract class Rs2Tile implements Tile {
             startX = playerLoc.getX() - Microbot.getClient().getBaseX();
             startY = playerLoc.getY() - Microbot.getClient().getBaseY();
         }
+        return reachableFrom(flags, startX, startY);
+    }
+
+    static boolean[][] reachableFrom(int[][] flags, int startX, int startY) {
+        final boolean[][] visited = new boolean[FLAG_DATA_SIZE][FLAG_DATA_SIZE];
+        if (!isWithinBounds(startX, startY)) return visited;
+
         final int startPoint = (startX << 16) | startY;
 
         ArrayDeque<Integer> queue = new ArrayDeque<>();
@@ -696,8 +708,78 @@ public abstract class Rs2Tile implements Tile {
             }
         }
 
-        return isVisited(targetPoint, visited);
+        return visited;
     }
+
+    public static boolean isTileObjectReachable(TileObject tileObject) {
+        return runClientReadBoolean(() -> isTileObjectReachableInternal(tileObject));
+    }
+
+    private static boolean isTileObjectReachableInternal(TileObject tileObject) {
+        if (tileObject == null) return false;
+
+        final WorldPoint playerLoc = Rs2Player.getWorldLocation();
+        if (playerLoc == null || tileObject.getPlane() != playerLoc.getPlane()) return false;
+
+        final LocalPoint objectLocal = tileObject.getLocalLocation();
+        if (objectLocal == null || !objectLocal.isInScene()) return false;
+
+        if (CollisionMap.ignoreCollisionPacked.contains(WorldPointUtil.packWorldPoint(tileObject.getWorldLocation()))) return true;
+
+        final int[][] flags = getFlagsInternal();
+        if (flags == null) return false;
+
+        int orientation = 0;
+        if (tileObject instanceof WallObject) {
+            WallObject wall = (WallObject) tileObject;
+            orientation = wall.getOrientationA() | wall.getOrientationB();
+        }
+
+        return canInteractFromReachableTile(flags, reachableFromPlayer(flags, playerLoc),
+                objectLocal.getSceneX(), objectLocal.getSceneY(), orientation);
+    }
+
+    static boolean canInteractFromReachableTile(int[][] flags, boolean[][] reachable, int x, int y, int wallOrientation) {
+        if (!isWithinBounds(x, y)) return false;
+        if (reachable[x][y]) return true;
+
+        for (int[] edge : WALL_EDGES) {
+            if ((wallOrientation & edge[0]) == 0) continue;
+            int nx = x + edge[1];
+            int ny = y + edge[2];
+            if (isWithinBounds(nx, ny) && reachable[nx][ny]) return true;
+        }
+
+        for (int[] side : CARDINAL_SIDES) {
+            if (isBehindWallFace(wallOrientation, side[0], side[1])) continue;
+            int nx = x + side[0];
+            int ny = y + side[1];
+            if (!isWithinBounds(nx, ny) || !reachable[nx][ny]) continue;
+            if ((flags[nx][ny] & side[2]) == 0 && (flags[x][y] & side[3]) == 0) return true;
+        }
+
+        return false;
+    }
+
+    private static boolean isBehindWallFace(int wallOrientation, int dx, int dy) {
+        for (int[] edge : WALL_EDGES) {
+            if ((wallOrientation & edge[0]) != 0 && edge[1] == -dx && edge[2] == -dy) return true;
+        }
+        return false;
+    }
+
+    private static final int[][] WALL_EDGES = {
+            {1, -1, 0}, {2, 0, 1}, {4, 1, 0}, {8, 0, -1},
+            {16, -1, 0}, {16, 0, 1}, {32, 1, 0}, {32, 0, 1},
+            {64, 1, 0}, {64, 0, -1}, {128, -1, 0}, {128, 0, -1}
+    };
+
+    private static final int[][] CARDINAL_SIDES = {
+            {-1, 0, CollisionDataFlag.BLOCK_MOVEMENT_EAST, CollisionDataFlag.BLOCK_MOVEMENT_WEST},
+            {1, 0, CollisionDataFlag.BLOCK_MOVEMENT_WEST, CollisionDataFlag.BLOCK_MOVEMENT_EAST},
+            {0, -1, CollisionDataFlag.BLOCK_MOVEMENT_NORTH, CollisionDataFlag.BLOCK_MOVEMENT_SOUTH},
+            {0, 1, CollisionDataFlag.BLOCK_MOVEMENT_SOUTH, CollisionDataFlag.BLOCK_MOVEMENT_NORTH}
+    };
 
     /**
      * Checks if any of the tiles immediately surrounding the given object are walkable & reachable.
@@ -949,7 +1031,7 @@ public abstract class Rs2Tile implements Tile {
         WorldView topLevelWorldView = Microbot.getClient().getTopLevelWorldView();
 
         // Check if player and object are on the same plane
-        if (playerLocation.getPlane() != tileObject.getWorldLocation().getPlane()) {
+        if (playerLocation.getWorldPoint() == null || playerLocation.getPlane() != tileObject.getWorldLocation().getPlane()) {
             return null;
         }
 

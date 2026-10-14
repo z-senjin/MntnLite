@@ -26,6 +26,7 @@ package net.runelite.client.plugins.microbot.ui;
 
 import lombok.Getter;
 import net.runelite.client.plugins.PluginDescriptor;
+import net.runelite.client.plugins.microbot.AlwaysOnPlugins;
 import net.runelite.client.plugins.config.SearchablePlugin;
 import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.util.ImageUtil;
@@ -164,9 +165,10 @@ class MicrobotPluginListItem extends JPanel implements SearchablePlugin
 				}
 			});
 
-			if (pluginDescriptor.alwaysOn()) {
+			if (AlwaysOnPlugins.isLocked(pluginDescriptor)) {
 				onOffToggle.setEnabled(false);
 				onOffToggle.setSelected(true);
+				onOffToggle.setToolTipText(AlwaysOnPlugins.TOOLTIP);
 				pluginListPanel.startPlugin(pluginConfig.getPlugin());
 			}
 			if (pluginDescriptor.disableOnStartUp()) {

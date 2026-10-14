@@ -11,12 +11,26 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
+import java.nio.channels.OverlappingFileLockException;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
+import java.util.HashMap;
+import java.util.Iterator;
 import java.util.Map;
-import java.util.concurrent.ExecutorService;
+import java.util.Objects;
+import java.util.UUID;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Disk backing for the accumulating live-collision store, so what the bot learns while walking survives a
@@ -25,8 +39,9 @@ import java.util.concurrent.TimeUnit;
  * One binary file per region under
  * {@code ~/.runelite/microbot/live-collision/<cacheRevision>-c<captureVersion>/<regionId>.lcr}.
  * The cache revision and {@link LiveCollisionCapture#CAPTURE_VERSION capture-semantics version} form the
- * invalidation key: after either changes, previous regions are never read (and can be pruned later) rather
- * than being trusted against changed geometry or capture rules.
+ * invalidation key: after either changes, previous regions are never read rather than being trusted
+ * against changed geometry or capture rules. Old revision stores are retained while other clients may
+ * still be using them; an explicit reset removes the entire store.
  * <p>
  * All I/O runs on a single daemon thread; loads and stores never touch the client or pathfinder threads.
  * {@link LiveCollisionOverlay#putRegion} and {@link LiveCollisionOverlay#drainDirty} are the only
@@ -36,11 +51,36 @@ import java.util.concurrent.TimeUnit;
 public final class LiveCollisionPersistence {
     private static final int MAGIC = 0x4C435231; // "LCR1"
     private static final int VERSION = 1;
+    // Part of the shared lock-file naming scheme; keep stable across client builds using this store.
+    private static final int LOCK_STRIPES = 64;
+    private static final long RETRY_DELAY_MS = 2_000;
+    private static final int MAX_AUTOMATIC_RETRIES = 3;
+    private static final Object[] JVM_LOCKS = new Object[LOCK_STRIPES];
+
+    static {
+        for (int i = 0; i < JVM_LOCKS.length; i++) {
+            JVM_LOCKS[i] = new Object();
+        }
+    }
 
     private final File dir;
     /** Root removed by {@link #deleteAllNow()} — the whole {@code live-collision} tree (all revisions). */
     private final File deleteRoot;
-    private final ExecutorService io = Executors.newSingleThreadExecutor(r -> {
+    /** Kept outside deleteRoot so a reset cannot unlink a lock that another client holds. */
+    private final File lockDir;
+    private final Path resetLock;
+    private final Path generationFile;
+    private final AtomicBoolean loadLockWarningLogged = new AtomicBoolean();
+    private final AtomicBoolean writeLockWarningLogged = new AtomicBoolean();
+    private final AtomicBoolean writeFailureLogged = new AtomicBoolean();
+    private final AtomicBoolean shutdownWarningLogged = new AtomicBoolean();
+    private final AtomicBoolean retryLimitWarningLogged = new AtomicBoolean();
+    /** Only the I/O worker touches these; failed writes remain here until a confirmed replacement. */
+    private final Map<Integer, LiveCollisionRegion> pending = new HashMap<>();
+    private ScheduledFuture<?> retryTask;
+    private int automaticRetries;
+    private String generation;
+    private final ScheduledExecutorService io = Executors.newSingleThreadScheduledExecutor(r -> {
         final Thread t = new Thread(r, "live-collision-io");
         t.setDaemon(true);
         return t;
@@ -48,17 +88,59 @@ public final class LiveCollisionPersistence {
 
     public LiveCollisionPersistence(int cacheRevision) {
         final File liveCollisionBase = new File(new File(RuneLite.RUNELITE_DIR, "microbot"), "live-collision");
-        // Store key = game cache revision + capture-semantics version. A change to either sends the
-        // store to a fresh directory; the old ones are inert and pruned by pruneStaleStores().
         this.dir = new File(liveCollisionBase,
                 cacheRevision + "-c" + LiveCollisionCapture.CAPTURE_VERSION);
         this.deleteRoot = liveCollisionBase;
+        this.lockDir = new File(liveCollisionBase.getParentFile(), "live-collision-locks");
+        this.resetLock = new File(liveCollisionBase.getParentFile(), "live-collision-reset.lock").toPath();
+        this.generationFile = new File(liveCollisionBase.getParentFile(), "live-collision-generation").toPath();
+        io.execute(this::initializeGeneration);
     }
 
     /** Backs the store with an explicit directory instead of the shared user dir (tests, tooling). */
     public LiveCollisionPersistence(File dir) {
         this.dir = dir;
         this.deleteRoot = dir;
+        this.lockDir = new File(dir.getAbsoluteFile().getParentFile(), dir.getName() + "-locks");
+        this.resetLock = new File(dir.getAbsoluteFile().getParentFile(), dir.getName() + "-reset.lock").toPath();
+        this.generationFile = new File(dir.getAbsoluteFile().getParentFile(), dir.getName() + "-generation").toPath();
+        io.execute(this::initializeGeneration);
+    }
+
+    private String readGeneration() throws IOException {
+        return Files.exists(generationFile) ? Files.readString(generationFile) : "";
+    }
+
+    private void initializeGeneration() {
+        try {
+            generation = readGeneration();
+        } catch (IOException ex) {
+            if (writeFailureLogged.compareAndSet(false, true)) {
+                log.warn("[LiveCollision] could not read shared store generation: {}", ex.toString());
+            }
+        }
+    }
+
+    private boolean withResetLock(boolean exclusive, StoreOperation operation) throws IOException {
+        Files.createDirectories(resetLock.getParent());
+        try (FileChannel channel = FileChannel.open(resetLock,
+                StandardOpenOption.CREATE, StandardOpenOption.READ, StandardOpenOption.WRITE)) {
+            final FileLock lock = channel.tryLock(0, Long.MAX_VALUE, !exclusive);
+            if (lock == null) {
+                return false;
+            }
+            try (FileLock ignored = lock) {
+                operation.run();
+                return true;
+            }
+        } catch (OverlappingFileLockException ex) {
+            return false;
+        }
+    }
+
+    @FunctionalInterface
+    private interface StoreOperation {
+        void run() throws IOException;
     }
 
     /**
@@ -66,28 +148,53 @@ public final class LiveCollisionPersistence {
      * Safe to call once at enable-time; a corrupt or partial file is skipped, not fatal.
      */
     public void loadIntoAsync(LiveCollisionOverlay overlay) {
-        io.execute(() -> {
-            pruneStaleStores();
-            final File[] files = dir.listFiles((d, name) -> name.endsWith(".lcr"));
-            if (files == null) {
+        io.execute(() -> loadInto(overlay, 0));
+    }
+
+    private void loadInto(LiveCollisionOverlay overlay, int attempt) {
+        try {
+            if (withResetLock(false, () -> loadRegions(overlay))) {
                 return;
             }
-            int loaded = 0;
-            for (File f : files) {
-                final Integer regionId = parseRegionId(f.getName());
-                if (regionId == null) {
-                    continue;
-                }
-                final LiveCollisionRegion region = readRegion(f);
-                if (region != null) {
-                    overlay.putRegion(regionId, region);
-                    loaded++;
+            if (attempt < MAX_AUTOMATIC_RETRIES && !io.isShutdown()) {
+                try {
+                    io.schedule(() -> loadInto(overlay, attempt + 1), RETRY_DELAY_MS, TimeUnit.MILLISECONDS);
+                    return;
+                } catch (RejectedExecutionException ex) {
+                    log.debug("[LiveCollision] shutdown cancelled a pending shared store load");
                 }
             }
-            if (loaded > 0) {
-                log.debug("[LiveCollision] loaded {} persisted regions from {}", loaded, dir);
+            if (loadLockWarningLogged.compareAndSet(false, true)) {
+                log.warn("[LiveCollision] shared store remained busy; persisted regions were not loaded");
             }
-        });
+        } catch (IOException ex) {
+            if (loadLockWarningLogged.compareAndSet(false, true)) {
+                log.warn("[LiveCollision] loading without shared reset lock: {}", ex.toString());
+            }
+            loadRegions(overlay);
+        }
+    }
+
+    private void loadRegions(LiveCollisionOverlay overlay) {
+        final File[] files = dir.listFiles((d, name) -> name.endsWith(".lcr"));
+        if (files == null) {
+            return;
+        }
+        int loaded = 0;
+        for (File regionFile : files) {
+            final Integer regionId = parseRegionId(regionFile.getName());
+            if (regionId == null) {
+                continue;
+            }
+            final LiveCollisionRegion region = readRegionWithLock(regionId, regionFile);
+            if (region != null) {
+                overlay.putRegion(regionId, region);
+                loaded++;
+            }
+        }
+        if (loaded > 0) {
+            log.debug("[LiveCollision] loaded {} persisted regions from {}", loaded, dir);
+        }
     }
 
     /** Asynchronously writes the given (region id -> region) entries, creating the directory as needed. */
@@ -98,46 +205,138 @@ public final class LiveCollisionPersistence {
         // Copy the map reference set; the regions themselves are immutable so no defensive copy is needed.
         final Map<Integer, LiveCollisionRegion> batch = Map.copyOf(dirtyRegions);
         io.execute(() -> {
-            if (!dir.exists() && !dir.mkdirs()) {
-                log.warn("[LiveCollision] could not create {}", dir);
-                return;
+            pending.putAll(batch);
+            automaticRetries = 0;
+            flushPending(true);
+        });
+    }
+
+    private void flushPending(boolean allowRetry) {
+        if (pending.isEmpty()) {
+            cancelRetry();
+            return;
+        }
+        try {
+            withResetLock(false, this::flushPendingLocked);
+        } catch (IOException ex) {
+            if (writeFailureLogged.compareAndSet(false, true)) {
+                log.warn("[LiveCollision] could not prepare shared store for writes: {}", ex.toString());
             }
-            for (Map.Entry<Integer, LiveCollisionRegion> e : batch.entrySet()) {
-                writeRegion(e.getKey(), e.getValue());
+        }
+        if (pending.isEmpty()) {
+            cancelRetry();
+        } else if (allowRetry && retryTask == null && !io.isShutdown()
+                && automaticRetries < MAX_AUTOMATIC_RETRIES) {
+            try {
+                automaticRetries++;
+                retryTask = io.schedule(() -> {
+                    retryTask = null;
+                    flushPending(true);
+                }, RETRY_DELAY_MS, TimeUnit.MILLISECONDS);
+            } catch (RejectedExecutionException ex) {
+                // Shutdown queued a final flush while this I/O task was finishing.
+            }
+        } else if (allowRetry && retryTask == null && automaticRetries >= MAX_AUTOMATIC_RETRIES
+                && retryLimitWarningLogged.compareAndSet(false, true)) {
+            log.warn("[LiveCollision] automatic write retries exhausted; retaining {} regions until next capture or shutdown",
+                    pending.size());
+        }
+    }
+
+    private void flushPendingLocked() throws IOException {
+        final String currentGeneration = readGeneration();
+        if (!Objects.equals(generation, currentGeneration)) {
+            log.debug("[LiveCollision] discarding {} queued regions after shared store reset", pending.size());
+            pending.clear();
+            generation = currentGeneration;
+            return;
+        }
+        Files.createDirectories(dir.toPath());
+        Files.createDirectories(lockDir.toPath());
+        final Iterator<Map.Entry<Integer, LiveCollisionRegion>> entries = pending.entrySet().iterator();
+        while (entries.hasNext()) {
+            final Map.Entry<Integer, LiveCollisionRegion> entry = entries.next();
+            if (writeRegion(entry.getKey(), entry.getValue())) {
+                entries.remove();
+            }
+        }
+    }
+
+    private void cancelRetry() {
+        if (retryTask != null) {
+            retryTask.cancel(false);
+            retryTask = null;
+        }
+    }
+
+    /** A queue barrier for persistence tests; never called from the client thread. */
+    Future<?> ioBarrierForTest() {
+        return io.submit(() -> { });
+    }
+
+    /**
+     * Asynchronously deletes this store's entire on-disk tree (all cache revisions). Discards failed
+     * writes queued before the reset; a fresh capture queued afterwards can persist normally.
+     */
+    public void deleteAllAsync() {
+        io.execute(() -> {
+            try {
+                resetStore();
+            } catch (IllegalStateException ex) {
+                log.warn("[LiveCollision] shared store reset failed: {}", ex.toString());
             }
         });
     }
 
-    /**
-     * Asynchronously deletes this store's entire on-disk tree (all cache revisions). Queued behind any
-     * pending writes on the I/O thread, so a concurrent capture that re-persists afterwards is not lost.
-     */
-    public void deleteAllAsync() {
-        io.execute(this::deleteAllNow);
-    }
-
-    /** Synchronously deletes this store's entire on-disk tree. */
+    /** Synchronously resets pending writes and the on-disk tree; never call from the I/O worker. */
     public void deleteAllNow() {
-        deleteRecursively(deleteRoot);
+        try {
+            io.submit(this::resetStore).get();
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while resetting learned collision", ex);
+        } catch (ExecutionException ex) {
+            throw new IllegalStateException("Failed to reset learned collision", ex.getCause());
+        }
     }
 
-    /**
-     * Removes every sibling store directory except the current key ({@code <rev>-c<captureVersion>}),
-     * so data from an old game-cache revision or an old capture-semantics version is dropped rather
-     * than lingering. No-op for the explicit-dir (test) constructor, where {@code dir == deleteRoot}.
-     */
-    private void pruneStaleStores() {
-        if (dir.equals(deleteRoot)) {
-            return;
-        }
-        final File[] siblings = deleteRoot.listFiles();
-        if (siblings == null) {
-            return;
-        }
-        for (File sibling : siblings) {
-            if (sibling.isDirectory() && !sibling.getName().equals(dir.getName())) {
-                deleteRecursively(sibling);
+    private void resetStore() {
+        pending.clear();
+        cancelRetry();
+        automaticRetries = 0;
+        try {
+            for (int attempt = 0; attempt < 50; attempt++) {
+                if (withResetLock(true, this::resetStoreLocked)) {
+                    return;
+                }
+                if (attempt < 49) {
+                    TimeUnit.MILLISECONDS.sleep(100);
+                }
             }
+            throw new IllegalStateException("Timed out waiting to reset shared collision store");
+        } catch (IOException ex) {
+            throw new IllegalStateException("Failed to reset shared collision store", ex);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while resetting shared collision store", ex);
+        }
+    }
+
+    private void resetStoreLocked() throws IOException {
+        final String nextGeneration = UUID.randomUUID().toString();
+        final Path temporaryGeneration = Files.createTempFile(generationFile.getParent(),
+                generationFile.getFileName().toString(), ".tmp");
+        try {
+            Files.writeString(temporaryGeneration, nextGeneration);
+            Files.move(temporaryGeneration, generationFile,
+                    StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            generation = nextGeneration;
+            deleteRecursively(deleteRoot);
+            if (deleteRoot.exists()) {
+                throw new IOException("Could not remove the shared collision store");
+            }
+        } finally {
+            Files.deleteIfExists(temporaryGeneration);
         }
     }
 
@@ -156,44 +355,146 @@ public final class LiveCollisionPersistence {
         }
     }
 
+    private void flushBeforeShutdown() {
+        cancelRetry();
+        // A peer may hold a stripe briefly just as this client exits. Give that ordinary contention
+        // a bounded chance to clear before reporting the region as unsaved.
+        for (int attempt = 0; attempt < 3 && !pending.isEmpty(); attempt++) {
+            flushPending(false);
+            if (!pending.isEmpty() && attempt < 2) {
+                try {
+                    TimeUnit.MILLISECONDS.sleep(100);
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+        }
+    }
+
+    /** Queues the final flush and stops accepting work without waiting on the calling thread. */
+    public synchronized void shutdownAsync() {
+        if (!io.isShutdown()) {
+            io.execute(this::flushBeforeShutdown);
+            io.shutdown();
+        }
+    }
+
     /** Flushes pending writes and stops the I/O thread. */
-    public void shutdown() {
-        io.shutdown();
+    public synchronized void shutdown() {
+        shutdownAsync();
         try {
-            io.awaitTermination(5, TimeUnit.SECONDS);
+            final boolean finished = io.awaitTermination(5, TimeUnit.SECONDS);
+            if (!finished && shutdownWarningLogged.compareAndSet(false, true)) {
+                log.warn("[LiveCollision] I/O flush did not finish within 5 seconds");
+            } else if (finished && !pending.isEmpty()
+                    && shutdownWarningLogged.compareAndSet(false, true)) {
+                log.warn("[LiveCollision] {} regions remain unsaved after I/O failure", pending.size());
+            }
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
         }
     }
 
-    private void writeRegion(int regionId, LiveCollisionRegion region) {
-        final File target = new File(dir, regionId + ".lcr");
-        final File tmp = new File(dir, regionId + ".lcr.tmp");
-        try (DataOutputStream out = new DataOutputStream(new BufferedOutputStream(new FileOutputStream(tmp)))) {
-            out.writeInt(MAGIC);
-            out.writeInt(VERSION);
-            out.writeInt(LiveCollisionCapture.CAPTURE_VERSION);
-            out.writeInt(region.getPlaneCount());
-            writeWords(out, region.northKnownWords());
-            writeWords(out, region.northValueWords());
-            writeWords(out, region.eastKnownWords());
-            writeWords(out, region.eastValueWords());
-        } catch (IOException ex) {
-            log.warn("[LiveCollision] failed writing region {}: {}", regionId, ex.toString());
-            //noinspection ResultOfMethodCallIgnored
-            tmp.delete();
-            return;
-        }
-        try {
-            Files.move(tmp.toPath(), target.toPath(),
-                    StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-        } catch (IOException atomicFailed) {
+    private boolean writeRegion(int regionId, LiveCollisionRegion region) {
+        // File locks coordinate separate clients; the JVM guard also prevents OverlappingFileLockException
+        // when two persistence instances in this process write a region at the same time.
+        final int stripe = Math.floorMod(regionId, LOCK_STRIPES);
+        synchronized (JVM_LOCKS[stripe]) {
+            final Path lockPath = new File(lockDir, dir.getName() + "-" + stripe + ".lock").toPath();
             try {
-                Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                try (FileChannel channel = FileChannel.open(lockPath,
+                        StandardOpenOption.CREATE, StandardOpenOption.WRITE)) {
+                    final FileLock lock = channel.tryLock();
+                    if (lock == null) {
+                        return false;
+                    }
+                    try (FileLock ignored = lock) {
+                        return writeRegionLocked(regionId, region);
+                    }
+                }
             } catch (IOException ex) {
-                log.warn("[LiveCollision] failed moving region {} into place: {}", regionId, ex.toString());
-                //noinspection ResultOfMethodCallIgnored
-                tmp.delete();
+                if (writeLockWarningLogged.compareAndSet(false, true)) {
+                    log.warn("[LiveCollision] failed locking shared store for writes: {}", ex.toString());
+                }
+                return false;
+            } catch (OverlappingFileLockException ex) {
+                return false;
+            }
+        }
+    }
+
+    private LiveCollisionRegion readRegionWithLock(int regionId, File target) {
+        // Coordinate startup reads with replacement on Windows, where moving over an open target can fail.
+        final int stripe = Math.floorMod(regionId, LOCK_STRIPES);
+        synchronized (JVM_LOCKS[stripe]) {
+            final Path lockPath = new File(lockDir, dir.getName() + "-" + stripe + ".lock").toPath();
+            try {
+                Files.createDirectories(lockDir.toPath());
+                try (FileChannel channel = FileChannel.open(lockPath,
+                        StandardOpenOption.CREATE, StandardOpenOption.WRITE)) {
+                    final FileLock lock = channel.tryLock();
+                    if (lock == null) {
+                        return readRegion(target);
+                    }
+                    try (FileLock ignored = lock) {
+                        return readRegion(target);
+                    }
+                }
+            } catch (IOException ex) {
+                if (loadLockWarningLogged.compareAndSet(false, true)) {
+                    log.warn("[LiveCollision] loading without shared store lock: {}", ex.toString());
+                }
+                // An already readable store must remain usable when a lock directory cannot be created.
+                // Writers using this protocol also need that directory, so this preserves the old
+                // best-effort read behaviour without silently dropping the region on startup.
+                return readRegion(target);
+            } catch (OverlappingFileLockException ex) {
+                return readRegion(target);
+            }
+        }
+    }
+
+    private boolean writeRegionLocked(int regionId, LiveCollisionRegion region) {
+        final File target = new File(dir, regionId + ".lcr");
+        // The incoming snapshot is only this client's knowledge. Retain edges another client learned
+        // since our last load, while preferring this snapshot for edges both clients know.
+        final LiveCollisionRegion merged = LiveCollisionRegions.merge(readRegion(target), region);
+        Path tmp = null;
+        try {
+            // Several clients can share this store; a fixed per-region temp path lets their writers
+            // collide before either reaches the atomic replacement (especially on Windows).
+            tmp = Files.createTempFile(dir.toPath(), regionId + ".lcr.", ".tmp");
+            try (DataOutputStream out = new DataOutputStream(
+                    new BufferedOutputStream(new FileOutputStream(tmp.toFile())))) {
+                out.writeInt(MAGIC);
+                out.writeInt(VERSION);
+                out.writeInt(LiveCollisionCapture.CAPTURE_VERSION);
+                out.writeInt(merged.getPlaneCount());
+                writeWords(out, merged.northKnownWords());
+                writeWords(out, merged.northValueWords());
+                writeWords(out, merged.eastKnownWords());
+                writeWords(out, merged.eastValueWords());
+            }
+            try {
+                Files.move(tmp, target.toPath(),
+                        StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            } catch (IOException atomicFailed) {
+                Files.move(tmp, target.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            }
+            return true;
+        } catch (IOException ex) {
+            if (writeFailureLogged.compareAndSet(false, true)) {
+                log.warn("[LiveCollision] failed writing a shared region: {}", ex.toString());
+            }
+            return false;
+        } finally {
+            if (tmp != null) {
+                try {
+                    Files.deleteIfExists(tmp);
+                } catch (IOException ex) {
+                    log.debug("[LiveCollision] could not remove temporary region file {}: {}", tmp, ex.toString());
+                }
             }
         }
     }

@@ -59,6 +59,7 @@ public class BlockingEventManager
         blockingEvents.add(new BankJagexPopupEvent());
         blockingEvents.add(new PluginPauseEvent());
 		blockingEvents.add(new EnjoyRSChatboxEvent());
+		blockingEvents.add(new MembershipPromptEvent());
 		blockingEvents.add(new DisableWorldSwitcherConfirmationEvent());
 		blockingEvents.add(new HideRoofsEvent());
 

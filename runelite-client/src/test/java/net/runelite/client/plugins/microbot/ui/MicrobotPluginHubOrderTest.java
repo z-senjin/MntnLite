@@ -1,0 +1,176 @@
+package net.runelite.client.plugins.microbot.ui;
+
+import com.google.gson.Gson;
+import net.runelite.client.plugins.config.SearchablePlugin;
+import net.runelite.client.plugins.microbot.externalplugins.MicrobotPluginManifest;
+import org.junit.Test;
+
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import java.util.stream.Collectors;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+
+public class MicrobotPluginHubOrderTest
+{
+    private static final class Item implements SearchablePlugin
+    {
+        final MicrobotPluginManifest manifest;
+        final boolean installed;
+        final int users;
+        final List<String> keywords = new ArrayList<>();
+
+        Item(String name, String addedAt, boolean installed, int users)
+        {
+            manifest = new MicrobotPluginManifest();
+            manifest.setInternalName(name);
+            manifest.setDisplayName(name);
+            manifest.setAddedAt(addedAt);
+            this.installed = installed;
+            this.users = users;
+            keywords.add(name);
+            if (manifest.isNewlyAdded())
+            {
+                keywords.add("new");
+                keywords.add("newly added");
+            }
+        }
+
+        @Override
+        public String getSearchableName()
+        {
+            return manifest.getDisplayName();
+        }
+
+        @Override
+        public List<String> getKeywords()
+        {
+            return keywords;
+        }
+    }
+
+    private static String daysAgo(long days)
+    {
+        return Instant.now().minus(days, ChronoUnit.DAYS).truncatedTo(ChronoUnit.SECONDS).toString();
+    }
+
+    private static List<String> order(List<Item> items, String query)
+    {
+        return names(MicrobotPluginHubOrder.order(items, query, i -> i.manifest, i -> i.installed, i -> i.users));
+    }
+
+    private static List<String> names(List<Item> items)
+    {
+        return items.stream().map(i -> i.manifest.getInternalName()).collect(Collectors.toList());
+    }
+
+    @Test
+    public void newModeSortsByAddedDateDescendingIgnoringInstallAndPopularity()
+    {
+        List<Item> items = Arrays.asList(
+            new Item("Oldest", daysAgo(20), true, 5000),
+            new Item("Newest", daysAgo(1), false, 0),
+            new Item("Middle", daysAgo(10), false, 900),
+            new Item("Legacy", null, true, 9000),
+            new Item("Stale", daysAgo(400), true, 8000));
+
+        assertEquals(Arrays.asList("Newest", "Middle", "Oldest"), order(items, "New"));
+    }
+
+    @Test
+    public void newModeAcceptsAliasesCaseAndWhitespace()
+    {
+        List<Item> items = Arrays.asList(
+            new Item("A", daysAgo(5), false, 1),
+            new Item("B", daysAgo(2), false, 100));
+
+        List<String> expected = Arrays.asList("B", "A");
+        assertEquals(expected, order(items, "new"));
+        assertEquals(expected, order(items, "  NEW "));
+        assertEquals(expected, order(items, "Newly Added"));
+        assertEquals(expected, order(items, "newly added"));
+    }
+
+    @Test
+    public void tiesBreakByInternalNameRegardlessOfInputOrder()
+    {
+        String same = daysAgo(3);
+        List<Item> items = new ArrayList<>(Arrays.asList(
+            new Item("Charlie", same, true, 10),
+            new Item("Alpha", same, false, 0),
+            new Item("Bravo", same, false, 999)));
+
+        assertEquals(Arrays.asList("Alpha", "Bravo", "Charlie"), order(items, "New"));
+        Collections.reverse(items);
+        assertEquals(Arrays.asList("Alpha", "Bravo", "Charlie"), order(items, "New"));
+    }
+
+    @Test
+    public void comparatorPutsMissingAndUnparseableDatesLastByName()
+    {
+        List<Item> items = new ArrayList<>(Arrays.asList(
+            new Item("Zed", null, true, 100),
+            new Item("Bad", "not-a-date", true, 100),
+            new Item("Old", "2025-08-01", false, 0),
+            new Item("Recent", "2026-09-01T10:00:00Z", false, 0),
+            new Item("Blank", "", false, 0)));
+
+        items.sort(MicrobotPluginHubOrder.newestFirst(i -> i.manifest));
+
+        assertEquals(Arrays.asList("Recent", "Old", "Bad", "Blank", "Zed"), names(items));
+    }
+
+    @Test
+    public void searchQueryKeepsSearchOrderingAndIsNotNewMode()
+    {
+        List<Item> items = Arrays.asList(
+            new Item("MiningB", daysAgo(1), false, 0),
+            new Item("MiningA", daysAgo(400), true, 100),
+            new Item("Fishing", daysAgo(2), false, 0));
+
+        assertEquals(Arrays.asList("MiningA", "MiningB"), order(items, "mining"));
+        assertEquals(Arrays.asList("Fishing", "MiningB"), order(items, "newly"));
+        assertFalse(MicrobotPluginHubOrder.isNewlyAddedFilterQuery("new mining"));
+        assertTrue(MicrobotPluginHubOrder.isNewlyAddedFilterQuery(" New"));
+    }
+
+    @Test
+    public void ordinarySortIsUnchangedInstalledThenPopularityThenName()
+    {
+        List<Item> items = Arrays.asList(
+            new Item("Delta", daysAgo(1), false, 50),
+            new Item("Alpha", null, false, 50),
+            new Item("Charlie", daysAgo(300), true, 1),
+            new Item("Bravo", daysAgo(2), false, 900),
+            new Item("Echo", null, true, 70));
+
+        List<String> expected = Arrays.asList("Echo", "Charlie", "Bravo", "Alpha", "Delta");
+        assertEquals(expected, order(items, ""));
+        assertEquals(expected, order(items, null));
+        assertEquals(expected, order(items, "   "));
+    }
+
+    @Test
+    public void legacyManifestWithoutAddedAtParsesAndSortsLast()
+    {
+        MicrobotPluginManifest[] parsed = new Gson().fromJson(
+            "[{\"internalName\":\"LegacyPlugin\",\"name\":\"Legacy\",\"version\":\"1.0.0\"},"
+                + "{\"internalName\":\"FreshPlugin\",\"name\":\"Fresh\",\"version\":\"1.0.0\",\"addedAt\":\"" + daysAgo(1) + "\"}]",
+            MicrobotPluginManifest[].class);
+
+        assertFalse(parsed[0].getAddedInstant().isPresent());
+        assertTrue(parsed[1].isNewlyAdded());
+
+        List<MicrobotPluginManifest> manifests = Arrays.asList(parsed);
+        List<MicrobotPluginManifest> sorted = new ArrayList<>(manifests);
+        sorted.sort(MicrobotPluginHubOrder.newestFirst(m -> m));
+        assertEquals("FreshPlugin", sorted.get(0).getInternalName());
+        assertEquals("LegacyPlugin", sorted.get(1).getInternalName());
+    }
+}

@@ -198,6 +198,30 @@ public class Rs2InventorySetup {
 
     ScheduledFuture<?> _mainScheduler;
 
+    /** Required-supply failure behavior; existing callers retain the global pause. */
+    public enum MissingSupplyPolicy { PAUSE_ALL_SCRIPTS, LOGOUT_AND_STOP }
+
+    private MissingSupplyPolicy missingSupplyPolicy = MissingSupplyPolicy.PAUSE_ALL_SCRIPTS;
+    private java.util.function.Consumer<String> missingSupplyHandler;
+
+    /** Retains the owning loop until its terminal logout is observed. */
+    public Rs2InventorySetup withMissingSupplyHandler(java.util.function.Consumer<String> handler) {
+        missingSupplyHandler = Objects.requireNonNull(handler, "handler");
+        return this;
+    }
+
+    /**
+     * Selects behavior for confirmed required-supply shortages on this loader only.
+     * Set this policy before loading; terminal logout must be explicitly requested by the owning script.
+     *
+     * @param policy the required-supply failure policy
+     * @return this loader for chaining after either constructor
+     */
+    public Rs2InventorySetup withMissingSupplyPolicy(MissingSupplyPolicy policy) {
+        missingSupplyPolicy = Objects.requireNonNull(policy, "policy");
+        return this;
+    }
+
     /**
      * Constructor to initialize the Rs2InventorySetup with a specific setup name and scheduler.
      *
@@ -383,7 +407,7 @@ public class Rs2InventorySetup {
 					toleratedShortfallKeys.add(inventoryShortfallKey(item));
 					continue;
 				}
-				Microbot.pauseAllScripts.compareAndSet(false, true);
+				stopForMissingRequiredSupply(item.getName());
 				logSetup(Level.WARN,
 						"bank short: %s | bank=%d | inv=%d | setup_total=%d | withdraw=%d (id=%d fuzzy=%b noted=%b)",
 						item.getName(), bankAvail, invQty, setupTotal, desiredWithdraw,
@@ -414,7 +438,7 @@ public class Rs2InventorySetup {
 					toleratedShortfallKeys.add(inventoryShortfallKey(item));
 					continue;
 				}
-				Microbot.pauseAllScripts.compareAndSet(false, true);
+				stopForMissingRequiredSupply(item.getName());
 				logSetup(Level.WARN,
 						"bank short: %s | bank=%d | inv=%d | setup_total=%d | withdraw=%d (id=%d fuzzy=%b noted=%b)",
 						item.getName(), bankAvail, invQty, setupTotal, withdrawQuantity,
@@ -862,10 +886,13 @@ public class Rs2InventorySetup {
 			if (!inInventory && !inBank) {
 				int bankGear = bankQtyForPresetRow(item, lowerCaseName, isFuzzy);
 				int invGear = isFuzzy ? Rs2Inventory.itemQuantity((String) identifier) : Rs2Inventory.itemQuantity((int) identifier);
+				boolean stopLoad = missingSupplyHandler != null || missingSupplyPolicy == MissingSupplyPolicy.LOGOUT_AND_STOP;
 				logSetup(Level.WARN,
-						"missing gear %s | bank=%d | inv=%d | need=%d — pausing",
-						item.getName(), bankGear, invGear, item.getQuantity());
-				Microbot.pauseAllScripts.compareAndSet(false, true);
+						"missing gear %s | bank=%d | inv=%d | need=%d — %s",
+						item.getName(), bankGear, invGear, item.getQuantity(),
+						stopLoad ? "stopping" : "pausing");
+				stopForMissingRequiredSupply(item.getName());
+				if (stopLoad) return false;
 				continue;
 			}
 
@@ -899,6 +926,21 @@ public class Rs2InventorySetup {
         sleep(800, 1200);
 
         return doesEquipmentMatch();
+    }
+
+    private void stopForMissingRequiredSupply(String itemName) {
+        if (missingSupplyHandler != null) {
+            missingSupplyHandler.accept(itemName);
+            return;
+        }
+        if (missingSupplyPolicy == MissingSupplyPolicy.PAUSE_ALL_SCRIPTS) {
+            Microbot.pauseAllScripts.compareAndSet(false, true);
+            return;
+        }
+        Microbot.status = "Missing required setup supply: " + itemName;
+        Rs2Player.logoutWithoutAutoLogin();
+        // A later script start must not revive this run's failing bank loop.
+        if (_mainScheduler != null) _mainScheduler.cancel(false);
     }
 
     /**

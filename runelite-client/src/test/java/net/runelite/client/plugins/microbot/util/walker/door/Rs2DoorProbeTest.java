@@ -1,6 +1,7 @@
 package net.runelite.client.plugins.microbot.util.walker.door;
 
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.client.plugins.microbot.util.walker.Rs2RouteStep;
 import net.runelite.client.plugins.microbot.util.walker.Rs2TerminalTravelMode;
 import net.runelite.client.plugins.microbot.util.walker.Rs2TransportEdge;
 import net.runelite.client.plugins.microbot.util.walker.Rs2TransportExecutor;
@@ -8,6 +9,7 @@ import net.runelite.client.plugins.microbot.util.walker.Rs2TransportType;
 import org.junit.Test;
 
 import java.util.Collections;
+import java.util.List;
 
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -69,6 +71,16 @@ public class Rs2DoorProbeTest {
     }
 
     @Test
+    public void aTrapdoorTransportIsNotDoorLike() {
+        assertFalse(Rs2DoorProbe.isDoorLikeCatalogTransport(
+                transport(Rs2TransportType.TRANSPORT, "Trapdoor", "Trapdoor", "Climb-down")));
+        assertFalse(Rs2DoorProbe.isDoorLikeCatalogTransport(
+                transport(Rs2TransportType.TRANSPORT, "Trapdoor", "Trapdoor", "Open")));
+        assertFalse(Rs2DoorProbe.isDoorLikeCatalogTransport(
+                transport(Rs2TransportType.TRANSPORT, "trapdoor", null, "Open")));
+    }
+
+    @Test
     public void nonTransportTypeIsNeverDoorLike() {
         // Only TRANSPORT-type rows are considered; an agility shortcut named "Gate" must not qualify.
         assertFalse(Rs2DoorProbe.isDoorLikeCatalogTransport(
@@ -122,5 +134,30 @@ public class Rs2DoorProbeTest {
     @Test
     public void nullIsNotDoorLike() {
         assertFalse(Rs2DoorProbe.isDoorLikeCatalogTransport(null));
+    }
+
+    @Test
+    public void catalogDoorOnWalkingEdgeRemainsAvailableToDoorHandler() {
+        Rs2TransportEdge door = transport(Rs2TransportType.TRANSPORT, "Door", "Door", "Open");
+        assertFalse(Rs2DoorProbe.isOwnedByObjectExecutor(door,
+                List.of(Rs2RouteStep.walk(door.getOrigin(), door.getDestination()))));
+        assertFalse(Rs2DoorProbe.isOwnedByObjectExecutor(door,
+                List.of(Rs2RouteStep.walk(door.getDestination(), door.getOrigin()))));
+    }
+
+    @Test
+    public void selectedDoorTransportRetainsExclusiveOwnership() {
+        Rs2TransportEdge door = transport(Rs2TransportType.TRANSPORT, "Door", "Door", "Open");
+        assertTrue(Rs2DoorProbe.isOwnedByObjectExecutor(door,
+                List.of(Rs2RouteStep.transport(door.getOrigin(), door.getDestination(), door))));
+        assertTrue("retain catalog ownership while a route is unavailable",
+                Rs2DoorProbe.isOwnedByObjectExecutor(door, null));
+    }
+
+    @Test
+    public void unselectedMovesYouTransportIsNotClaimedByDoorHandler() {
+        Rs2TransportEdge stile = transport(Rs2TransportType.TRANSPORT, "Stile", "Stile", "Climb-over");
+        assertTrue(Rs2DoorProbe.isOwnedByObjectExecutor(stile,
+                List.of(Rs2RouteStep.walk(stile.getOrigin(), stile.getDestination()))));
     }
 }

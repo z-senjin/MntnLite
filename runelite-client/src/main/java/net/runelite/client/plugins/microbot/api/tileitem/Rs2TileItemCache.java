@@ -12,6 +12,7 @@ import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.api.tileitem.models.Rs2TileItemModel;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.stream.Stream;
 
@@ -26,8 +27,8 @@ public final class Rs2TileItemCache {
     private final Client client;
     private final ClientThread clientThread;
 
-    private int lastUpdateTick = 0;
-    private List<Rs2TileItemModel> tileItems = new ArrayList<>();
+    private volatile int lastUpdateTick = 0;
+    private volatile List<Rs2TileItemModel> tileItems = new ArrayList<>();
 
     @Inject
     public Rs2TileItemCache(Client client, ClientThread clientThread) {
@@ -47,41 +48,44 @@ public final class Rs2TileItemCache {
      * @return Stream of Rs2TileItemModel
      */
     public Stream<Rs2TileItemModel> getStream() {
-        if (lastUpdateTick >= client.getTickCount()) {
-            return tileItems.stream();
-        }
-
-        Player player = client.getLocalPlayer();
-        if (player == null) return Stream.empty();
-
-        List<Rs2TileItemModel> result = new ArrayList<>();
-
-        for (var id : Microbot.getWorldViewIds()) {
-            WorldView worldView = client.getWorldView(id);
-            if (worldView == null) {
-                continue;
+        return clientThread.runOnClientThreadOptional(() -> {
+            int tick = client.getTickCount();
+            if (lastUpdateTick >= tick) {
+                return tileItems;
             }
 
-            Tile[][] tiles = worldView.getScene().getTiles()[worldView.getPlane()];
-            for (Tile[] tileRow : tiles) {
-                for (Tile tile : tileRow) {
-                    if (tile == null) continue;
+            Player player = client.getLocalPlayer();
+            if (player == null) return Collections.<Rs2TileItemModel>emptyList();
 
-                    List<TileItem> items = tile.getGroundItems();
-                    if (items == null || items.isEmpty()) continue;
+            List<Rs2TileItemModel> result = new ArrayList<>();
 
-                    for (TileItem item : items) {
-                        if (item != null) {
-                            result.add(new Rs2TileItemModel(tile, item));
+            for (var id : Microbot.getWorldViewIds()) {
+                WorldView worldView = client.getWorldView(id);
+                if (worldView == null) {
+                    continue;
+                }
+
+                Tile[][] tiles = worldView.getScene().getTiles()[worldView.getPlane()];
+                for (Tile[] tileRow : tiles) {
+                    for (Tile tile : tileRow) {
+                        if (tile == null) continue;
+
+                        List<TileItem> items = tile.getGroundItems();
+                        if (items == null || items.isEmpty()) continue;
+
+                        for (TileItem item : items) {
+                            if (item != null) {
+                                result.add(new Rs2TileItemModel(tile, item));
+                            }
                         }
                     }
                 }
             }
-        }
 
-        tileItems = result;
-        lastUpdateTick = client.getTickCount();
-        return result.stream();
+            tileItems = result;
+            lastUpdateTick = tick;
+            return result;
+        }).orElse(Collections.emptyList()).stream();
     }
 
     /**

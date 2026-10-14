@@ -52,6 +52,7 @@ import net.runelite.client.events.ProfileChanged;
 import net.runelite.client.externalplugins.ExternalPluginManager;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginManager;
+import net.runelite.client.plugins.microbot.AlwaysOnPlugins;
 import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.DynamicGridLayout;
 import net.runelite.client.ui.FontManager;
@@ -207,6 +208,7 @@ class ConfigPanel extends PluginPanel
 		{
 			pluginToggle.setConflicts(pluginConfig.getConflicts());
 			pluginToggle.setSelected(pluginManager.isPluginActive(pluginConfig.getPlugin()));
+			applyAlwaysOnLock();
 			pluginToggle.addItemListener(i ->
 			{
 				if (pluginToggle.isSelected())
@@ -830,7 +832,19 @@ class ConfigPanel extends PluginPanel
 		if (event.getPlugin() == this.pluginConfig.getPlugin())
 		{
 			SwingUtilities.invokeLater(() ->
-				pluginToggle.setSelected(event.isLoaded()));
+			{
+				pluginToggle.setSelected(event.isLoaded());
+				applyAlwaysOnLock();
+			});
+		}
+	}
+
+	private void applyAlwaysOnLock()
+	{
+		if (pluginManager.isPluginAlwaysOn(pluginConfig.getPlugin()))
+		{
+			pluginToggle.setEnabled(false);
+			pluginToggle.setToolTipText(AlwaysOnPlugins.TOOLTIP);
 		}
 	}
 

@@ -44,7 +44,9 @@ import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.PluginChanged;
 import net.runelite.client.events.ProfileChanged;
+import net.runelite.client.plugins.microbot.AlwaysOnPlugins;
 import net.runelite.client.plugins.microbot.Microbot;
+import net.runelite.client.plugins.microbot.recovery.StartupRecovery;
 import net.runelite.client.task.Schedule;
 import net.runelite.client.task.ScheduledMethod;
 import net.runelite.client.task.Scheduler;
@@ -328,10 +330,13 @@ public class PluginManager {
 			if (safeMode && !pluginDescriptor.loadInSafeMode())
 			{
 				log.debug("Disabling {} due to safe mode", clazz);
-				// also disable the plugin from autostarting later
-				configManager.setConfiguration(RuneLiteConfig.GROUP_NAME,
-					(Strings.isNullOrEmpty(pluginDescriptor.configName()) ? clazz.getSimpleName() : pluginDescriptor.configName()).toLowerCase(),
-					false);
+				if (!StartupRecovery.mode().isTemporary())
+				{
+					// also disable the plugin from autostarting later
+					configManager.setConfiguration(RuneLiteConfig.GROUP_NAME,
+						(Strings.isNullOrEmpty(pluginDescriptor.configName()) ? clazz.getSimpleName() : pluginDescriptor.configName()).toLowerCase(),
+						false);
+				}
 				continue;
 			}
 
@@ -396,6 +401,14 @@ public class PluginManager {
 
         activePlugins.add(plugin);
 
+        PluginDescriptor descriptor = plugin.getClass().getAnnotation(PluginDescriptor.class);
+        boolean external = descriptor != null && descriptor.isExternal();
+        String pluginName = plugin.getClass().getSimpleName();
+        if (external) {
+            StartupRecovery.pluginStarting(pluginName,
+                (Strings.isNullOrEmpty(descriptor.configName()) ? pluginName : descriptor.configName()).toLowerCase());
+        }
+
         try {
             plugin.startUp();
 
@@ -410,9 +423,15 @@ public class PluginManager {
             eventBus.register(plugin);
             schedule(plugin);
             eventBus.post(new PluginChanged(plugin, true));
+            if (external) {
+                StartupRecovery.pluginStarted(pluginName, descriptor.version());
+            }
         } catch (ThreadDeath e) {
             throw e;
         } catch (Throwable ex) {
+            if (external) {
+                StartupRecovery.pluginFailed(pluginName, descriptor.version(), "start", ex);
+            }
             // stop the plugin and fire the change event to update the plugin list panel
             try {
                 stopPlugin(plugin);
@@ -433,6 +452,7 @@ public class PluginManager {
             return false;
         }
 
+        StartupRecovery.pluginStopped(plugin.getClass().getSimpleName());
         unschedule(plugin);
         eventBus.unregister(plugin);
 
@@ -457,6 +477,10 @@ public class PluginManager {
     }
 
     public void setPluginEnabled(Plugin plugin, boolean enabled) {
+        if (!enabled && isPluginAlwaysOn(plugin)) {
+            return;
+        }
+
         final PluginDescriptor pluginDescriptor = plugin.getClass().getAnnotation(PluginDescriptor.class);
         final String keyName = Strings.isNullOrEmpty(pluginDescriptor.configName()) ? plugin.getClass().getSimpleName() : pluginDescriptor.configName();
         configManager.setConfiguration(RuneLiteConfig.GROUP_NAME, keyName.toLowerCase(), String.valueOf(enabled));
@@ -482,10 +506,14 @@ public class PluginManager {
         final String keyName = Strings.isNullOrEmpty(pluginDescriptor.configName()) ? plugin.getClass().getSimpleName() : pluginDescriptor.configName();
         final String value = configManager.getConfiguration(RuneLiteConfig.GROUP_NAME, keyName.toLowerCase());
 
-        if (pluginDescriptor.alwaysOn())
+        if (isPluginAlwaysOn(plugin))
             return true;
 
         return value != null ? Boolean.parseBoolean(value) : pluginDescriptor.enabledByDefault();
+    }
+
+    public boolean isPluginAlwaysOn(Plugin plugin) {
+        return AlwaysOnPlugins.isLocked(plugin.getClass().getAnnotation(PluginDescriptor.class));
     }
 
     /**

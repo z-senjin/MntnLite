@@ -261,40 +261,9 @@ public class GrandExchangeWidget
 	 * @param basePrice the price to compare against
 	 * @return {@code true} if the current offer price differs from the base price; {@code false} otherwise
 	 */
-	static boolean hasOfferPriceChanged(int basePrice)
+	static boolean hasOfferPriceChanged(long basePrice)
 	{
-		return basePrice != getItemPrice();
-	}
-
-	/**
-	 * Retrieves the widget displaying the current item price in the Grand Exchange offer interface.
-	 *
-	 * @return the {@link Widget} representing the item price display, or {@code null} if unavailable
-	 */
-	static Widget getItemPriceWidget()
-	{
-		return getOfferChild(41);
-	}
-
-	/**
-	 * Gets the current price of the item in the Grand Exchange offer interface.
-	 * <p>
-	 * Parses the text of the item price widget to extract the numeric price value.
-	 *
-	 * @return the current item price as an integer
-	 * @throws NumberFormatException if the widget text cannot be parsed as an integer
-	 */
-	static int getItemPrice()
-	{
-		try
-		{
-			return Integer.parseInt(getItemPriceWidget().getText().replace(" coins", ""));
-		}
-		catch (NumberFormatException e)
-		{
-			Microbot.log("Invailid item price format in Grand Exchange: " + getItemPriceWidget().getText());
-			return -1;
-		}
+		return basePrice != Rs2GrandExchange.getOfferPrice();
 	}
 
 	/**

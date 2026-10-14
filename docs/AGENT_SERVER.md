@@ -492,6 +492,8 @@ When the client is on the login screen, the response includes `loginIndex` and `
   "loggedIn": true,
   "gameState": "LOGGED_IN",
   "loginAttemptActive": false,
+  "hopsAvailable": 372,
+  "nextHopInMs": 0,
   "loginDurationMs": 120000,
   "activeProfile": {
     "name": "player@email.com",
@@ -513,6 +515,8 @@ When the client is on the login screen, the response includes `loginIndex` and `
 | 34 | Non-member account cannot login to members world | F2P account on P2P world |
 
 `loginIndex` and `loginError` are only present when `gameState` is `LOGIN_SCREEN`. When logged in, these fields are omitted.
+
+`hopsAvailable` and `nextHopInMs` come from the world hop limiter (`HopBudget`). They are present whenever "Pace world hops" is enabled in the Microbot settings. `nextHopInMs` is how long `Microbot.hopToWorld` would wait right now, and is 0 while the allowance is above the login reserve.
 
 #### POST /login
 
@@ -666,6 +670,8 @@ curl -X POST -H "Content-Type: application/json" \
 - `503` — Profile system not initialized
 
 ### Script Lifecycle
+
+The examples below use the Microbot-Hub `ExamplePlugin` (`net.runelite.client.plugins.microbot.example`); it is no longer bundled with the client.
 
 #### GET /scripts
 

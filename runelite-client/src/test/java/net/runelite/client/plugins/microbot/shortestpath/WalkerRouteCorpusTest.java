@@ -1,5 +1,8 @@
 package net.runelite.client.plugins.microbot.shortestpath;
 
+import net.runelite.api.Client;
+import net.runelite.api.Quest;
+import net.runelite.api.WorldType;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.gameval.ItemID;
 import net.runelite.client.plugins.microbot.shortestpath.pathfinder.Pathfinder;
@@ -10,8 +13,10 @@ import org.junit.BeforeClass;
 import org.junit.Test;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -23,6 +28,8 @@ import java.util.stream.Collectors;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * Route-regression corpus: real end-to-end routes computed with the real pathfinder, collision map and
@@ -804,6 +811,85 @@ public class WalkerRouteCorpusTest {
                 arrives(ascending, DRAYNOR_SEWER_EAST_SURFACE, 1));
         assertTrue("ascent route must approach the mapped east underground ladder",
                 visits(ascending, DRAYNOR_SEWER_EAST_UNDER, 2));
+    }
+
+    @Test
+    public void draynorRoadPassesTheClosedSewerTrapdoorWithoutUsingIt() {
+        WorldPoint trapdoor = new WorldPoint(3084, 3272, 0);
+        WorldPoint goal = new WorldPoint(3080, 3252, 0);
+        Pathfinder pathfinder = runPathfinder(configWith(WalkerRouteCorpusTest::unrestricted),
+                new WorldPoint(3086, 3284, 0), goal);
+        List<WorldPoint> path = pathfinder.getPath();
+
+        assertTrue(arrives(path, goal, 1));
+        assertTrue(visits(path, trapdoor, 1));
+        assertFalse(selectsTransportObject(pathfinder, 6435));
+        assertFalse(path.stream().anyMatch(point -> point.getY() > 9000));
+    }
+
+    private static final WorldPoint PORT_SARIM_MANHOLE = new WorldPoint(3018, 3231, 0);
+    private static final WorldPoint DRAYNOR_BANK = new WorldPoint(3092, 3245, 0);
+
+    private static List<Transport> portSarimRatPitTransports() {
+        return allTransports.values().stream()
+                .flatMap(Set::stream)
+                .filter(t -> t.getObjectId() == 10321 || t.getObjectId() == 10309)
+                .filter(t -> t.getOrigin() != null && t.getDestination() != null)
+                .filter(t -> t.getOrigin().equals(PORT_SARIM_MANHOLE)
+                        || t.getOrigin().equals(new WorldPoint(2962, 9650, 0)))
+                .collect(Collectors.toList());
+    }
+
+    @Test
+    public void portSarimRatPitManholeAndLadderAreMembersOnly() {
+        List<Transport> rows = portSarimRatPitTransports();
+        assertEquals("both Port Sarim rat-pit rows must stay in the catalog", 2, rows.size());
+        for (Transport row : rows) {
+            assertTrue("rat-pit transport must be members-only: " + row, row.isMembers());
+        }
+    }
+
+    @Test
+    public void portSarimRatPitManholeIsNotAdmittedOnFreeWorld() throws Exception {
+        Client client = mock(Client.class);
+        when(client.getWorldType()).thenReturn(EnumSet.noneOf(WorldType.class));
+        PathfinderConfig config = new PathfinderConfig(
+                collisionMap, new HashMap<>(), Collections.emptyList(), client, null);
+        Method useTransport = PathfinderConfig.class.getDeclaredMethod(
+                "useTransport", Transport.class, boolean.class);
+        useTransport.setAccessible(true);
+
+        List<Transport> rows = portSarimRatPitTransports();
+        assertFalse(rows.isEmpty());
+        for (Transport row : rows) {
+            assertFalse("free world must not admit " + row, (Boolean) useTransport.invoke(config, row, false));
+        }
+    }
+
+    @Test
+    public void portSarimToDraynorBankOnFreeWorldStaysOnTheSurface() {
+        Pathfinder pathfinder = runPathfinder(configWith(t -> unrestricted(t) && !t.isMembers()),
+                new WorldPoint(3018, 3229, 0), DRAYNOR_BANK);
+        List<WorldPoint> path = pathfinder.getPath();
+
+        assertTrue(arrives(path, DRAYNOR_BANK, 2));
+        assertFalse(selectsTransportObject(pathfinder, 10321));
+        assertFalse(path.stream().anyMatch(point -> point.getY() > 9000));
+    }
+
+    @Test
+    public void zanarisShedDoorRequiresLostCity() {
+        Transport shed = allTransports.getOrDefault(new WorldPoint(3202, 3169, 0), Collections.emptySet()).stream()
+                .filter(transport -> transport.getObjectId() == 2406)
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("Zanaris shed door row is missing"));
+
+        assertTrue(shed.getQuests().containsKey(Quest.LOST_CITY));
+        assertTrue(shed.isMembers());
+        assertEquals(1, shed.getItemRequirements().size());
+        assertTrue(shed.getItemRequirements().get(0).getAlternatives().containsKey(ItemID.DRAMEN_STAFF));
+        assertTrue(shed.getItemRequirements().get(0).getAlternatives().containsKey(ItemID.LUNAR_MOONCLAN_LIMINAL_STAFF));
+        assertFalse(unrestricted(shed));
     }
 
     // ---- Barrows mounds, individual crypts and randomized tunnel boundary -------------------------

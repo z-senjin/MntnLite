@@ -8,18 +8,26 @@ import net.runelite.client.plugins.microbot.shortestpath.pathfinder.live.LiveCol
 import net.runelite.client.plugins.microbot.shortestpath.pathfinder.live.LiveCollisionDoorMask;
 import net.runelite.client.plugins.microbot.shortestpath.pathfinder.live.LiveCollisionOverlay;
 import net.runelite.client.plugins.microbot.shortestpath.pathfinder.live.LiveCollisionPersistence;
+import net.runelite.client.plugins.microbot.shortestpath.pathfinder.live.LiveCollisionRegion;
 import net.runelite.client.plugins.microbot.shortestpath.pathfinder.live.LiveCollisionSnapshot;
 import net.runelite.client.plugins.microbot.shortestpath.pathfinder.live.LiveCollisionView;
 import net.runelite.client.plugins.microbot.shortestpath.pathfinder.live.LiveRouteValidator;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 
 import static net.runelite.api.Constants.SCENE_SIZE;
 import static net.runelite.client.plugins.microbot.shortestpath.pathfinder.live.LiveCollisionSnapshot.FLAG_EAST;
 import static net.runelite.client.plugins.microbot.shortestpath.pathfinder.live.LiveCollisionSnapshot.FLAG_NORTH;
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -469,6 +477,31 @@ public class LiveCollisionTest {
         assertNotNull(view);
         assertEquals(Boolean.FALSE, view.edge(3252, 3252, 0, FLAG_NORTH));
         assertEquals(Boolean.TRUE, view.edge(3252, 3252, 0, FLAG_EAST));
+    }
+
+    @Test
+    public void persistenceDoesNotReuseAnotherWritersLockedTempFile() throws Exception {
+        Path dir = Files.createTempDirectory("lcr-locked-temp");
+        LiveCollisionOverlay overlay = new LiveCollisionOverlay();
+        overlay.setEnabled(true);
+        overlay.set(LiveCollisionCapture.build(BASE_X, BASE_Y, 1, openScene()));
+        Map<Integer, LiveCollisionRegion> dirty = overlay.drainDirty();
+        assertFalse(dirty.isEmpty());
+        int regionId = dirty.keySet().iterator().next();
+        Path occupiedTemp = dir.resolve(regionId + ".lcr.tmp");
+        byte[] marker = new byte[]{1, 2, 3, 4};
+        Files.write(occupiedTemp, marker);
+
+        try (FileChannel channel = FileChannel.open(occupiedTemp, StandardOpenOption.WRITE);
+             FileLock ignored = channel.lock()) {
+            LiveCollisionPersistence writer = new LiveCollisionPersistence(dir.toFile());
+            writer.persist(Map.of(regionId, dirty.get(regionId)));
+            writer.shutdown();
+            assertTrue("region should persist while another writer owns its temp file",
+                    Files.isRegularFile(dir.resolve(regionId + ".lcr")));
+        }
+        assertArrayEquals("another writer's temp file must remain untouched",
+                marker, Files.readAllBytes(occupiedTemp));
     }
 
     @Test
